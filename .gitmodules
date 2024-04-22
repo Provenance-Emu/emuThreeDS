@@ -1,4 +1,0 @@
-[submodule "emuThreeDS/externals"]
-	path = emuThreeDS/externals
-	url = https://github.com/emuplace/emuthreeds-externals
-	branch = main
