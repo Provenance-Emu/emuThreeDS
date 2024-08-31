@@ -8,7 +8,9 @@
 import AVFoundation
 import AVFAudio
 import Foundation
+#if canImport(GameController)
 import GameController
+#endif
 import MetalKit
 import SwiftUI
 import UIKit
