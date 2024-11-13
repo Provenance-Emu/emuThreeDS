@@ -532,13 +532,13 @@ void System::Shutdown(bool is_deserializing) {
     // Log last frame performance stats
     const auto perf_results = GetAndResetPerfStats();
     constexpr auto performance = Common::Telemetry::FieldType::Performance;
-
-    telemetry_session->AddField(performance, "Shutdown_EmulationSpeed",
-                                perf_results.emulation_speed * 100.0);
-    telemetry_session->AddField(performance, "Shutdown_Framerate", perf_results.game_fps);
-    telemetry_session->AddField(performance, "Shutdown_Frametime", perf_results.frametime * 1000.0);
-    telemetry_session->AddField(performance, "Mean_Frametime_MS",
-                                perf_stats ? perf_stats->GetMeanFrametime() : 0);
+//
+//    telemetry_session->AddField(performance, "Shutdown_EmulationSpeed",
+//                                perf_results.emulation_speed * 100.0);
+//    telemetry_session->AddField(performance, "Shutdown_Framerate", perf_results.game_fps);
+//    telemetry_session->AddField(performance, "Shutdown_Frametime", perf_results.frametime * 1000.0);
+//    telemetry_session->AddField(performance, "Mean_Frametime_MS",
+//                                perf_stats ? perf_stats->GetMeanFrametime() : 0);
 
     // Shutdown emulation session
     is_powered_on = false;
