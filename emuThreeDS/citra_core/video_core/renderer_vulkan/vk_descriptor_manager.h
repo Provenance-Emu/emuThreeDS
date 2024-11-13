@@ -10,9 +10,9 @@
 
 namespace Vulkan {
 
-constexpr u32 MAX_DESCRIPTORS = 7;
-constexpr u32 MAX_DESCRIPTOR_SETS = 3;
-constexpr u32 MAX_BATCH_SIZE = 8;
+constexpr u32 MAX_DESCRIPTORS = 32;
+constexpr u32 MAX_DESCRIPTOR_SETS = 16;
+constexpr u32 MAX_BATCH_SIZE = 32;
 
 union DescriptorData {
     vk::DescriptorImageInfo image_info;
