@@ -6,6 +6,10 @@
 #include "video_core/rasterizer_cache/texture_codec.h"
 #include "video_core/rasterizer_cache/utils.h"
 
+#if defined(__ARM_NEON)
+#include <arm_neon.h>
+#endif
+
 namespace VideoCore {
 
 u32 MipLevels(u32 width, u32 height, u32 max_level) {
@@ -24,19 +28,38 @@ void EncodeTexture(const SurfaceParams& surface_info, PAddr start_addr, PAddr en
     const PixelFormat format = surface_info.pixel_format;
     const u32 func_index = static_cast<u32>(format);
 
-    if (surface_info.is_tiled) {
+    /// Fast path for non-tiled textures using NEON
+    if (!surface_info.is_tiled) {
+        const LinearFunc LinearEncodeImpl =
+            (convert ? LINEAR_ENCODE_TABLE_CONVERTED : LINEAR_ENCODE_TABLE)[func_index];
+        if (LinearEncodeImpl) {
+            /// Check if we have enough data to use SIMD
+            const size_t size = dest.size();
+            if (size >= 16) {  // At least one NEON vector
+                const size_t vector_size = 16;
+                const size_t aligned_size = size & ~(vector_size - 1);
+
+                /// Process 16 bytes at a time using NEON
+                for (size_t i = 0; i < aligned_size; i += vector_size) {
+                    uint8x16_t pixels = vld1q_u8(source.data() + i);
+                    vst1q_u8(dest.data() + i, pixels);
+                }
+
+                /// Handle remaining bytes with original implementation
+                if (aligned_size < size) {
+                    LinearEncodeImpl(source.subspan(aligned_size), dest.subspan(aligned_size));
+                }
+                return;
+            }
+            LinearEncodeImpl(source, dest);
+            return;
+        }
+    } else {
         const MortonFunc SwizzleImpl =
             (convert ? SWIZZLE_TABLE_CONVERTED : SWIZZLE_TABLE)[func_index];
         if (SwizzleImpl) {
             SwizzleImpl(surface_info.width, surface_info.height, start_addr - surface_info.addr,
                         end_addr - surface_info.addr, source, dest);
-            return;
-        }
-    } else {
-        const LinearFunc LinearEncodeImpl =
-            (convert ? LINEAR_ENCODE_TABLE_CONVERTED : LINEAR_ENCODE_TABLE)[func_index];
-        if (LinearEncodeImpl) {
-            LinearEncodeImpl(source, dest);
             return;
         }
     }
