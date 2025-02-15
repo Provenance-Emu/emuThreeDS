@@ -10,8 +10,12 @@
 #include "file_handle.h"
 
 float ResolutionHandle::StatusBarHeight() {
+#if TARGET_OS_TV
+    return 0;
+#else
     UIWindowScene *windowScene = (UIWindowScene *)[[[[UIApplication sharedApplication] connectedScenes] allObjects] firstObject];
     return [[windowScene statusBarManager] statusBarFrame].size.height;
+#endif
 }
 
 float ResolutionHandle::GetScreenWidth() {
@@ -30,12 +34,16 @@ float ResolutionHandle::CombinedInsets() {
 
 
 bool ResolutionHandle::IsPortrait() {
+#if TARGET_OS_TV
+    return true;
+#else
     __block UIWindowScene *scene;
     dispatch_async(dispatch_get_main_queue(), ^{
         scene = (UIWindowScene *)[[UIApplication sharedApplication] connectedScenes].allObjects.lastObject;
     });
     
     return scene.interfaceOrientation == UIInterfaceOrientationPortrait;
+#endif
 }
 
 

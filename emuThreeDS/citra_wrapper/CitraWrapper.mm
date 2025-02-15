@@ -188,7 +188,7 @@ static void InitializeLogging() {
     emu_window->OnTouchReleased();
 }
 
-
+#if !TARGET_OS_TV
 -(void) orientationChanged:(UIDeviceOrientation)orientation with:(CAMetalLayer *)surface {
     if (_isRunning && !_isPaused) {
         if (orientation == UIDeviceOrientationPortrait) {
@@ -202,4 +202,5 @@ static void InitializeLogging() {
         emu_window->OrientationChanged(orientation == UIDeviceOrientationPortrait, (__bridge CA::MetalLayer*)surface);
     }
 }
+#endif
 @end

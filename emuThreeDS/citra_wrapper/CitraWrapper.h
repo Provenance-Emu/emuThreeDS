@@ -40,7 +40,8 @@ NS_ASSUME_NONNULL_BEGIN
 -(void) touchesMoved:(CGPoint)point;
 -(void) touchesEnded;
 
-
+#if !TARGET_OS_TV
 -(void) orientationChanged:(UIDeviceOrientation)orientation with:(CAMetalLayer *)surface;
+#endif
 @end
 NS_ASSUME_NONNULL_END
