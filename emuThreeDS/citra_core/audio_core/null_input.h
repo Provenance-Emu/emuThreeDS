@@ -23,7 +23,7 @@ public:
         is_sampling = false;
     }
 
-    bool IsSampling() { //override {
+    bool IsSampling() override {
         return is_sampling;
     }
 
