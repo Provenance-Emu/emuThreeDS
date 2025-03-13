@@ -67,8 +67,7 @@ static void InitializeLogging() {
         // Camera
         Settings::values.camera_name[Service::CAM::InnerCamera] = "av_front";
         Settings::values.camera_name[Service::CAM::OuterLeftCamera] = "av_rear";
-        Settings::values.camera_name[Service::CAM::OuterLeftCamera] = "av_rear";
-        
+        Settings::values.camera_name[Service::CAM::OuterRightCamera] = "av_rear_alt";
 
     } return self;
 }
