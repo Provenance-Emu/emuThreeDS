@@ -212,6 +212,9 @@ private:
 
 private:
     PicaFSConfig config;
+    
+//    bool use_fragment_shader_barycentric{};
+
     Id void_id{};
     Id bool_id{};
     Id f32_id{};
@@ -241,6 +244,7 @@ private:
 
     Id gl_frag_coord_id{};
     Id gl_frag_depth_id{};
+    Id gl_bary_coord_id{};
     Id depth{};
 
     Id tex0_id{};

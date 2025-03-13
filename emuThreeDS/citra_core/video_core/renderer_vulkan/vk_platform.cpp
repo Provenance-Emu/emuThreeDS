@@ -23,7 +23,20 @@
 namespace Vulkan {
 
 vk::DynamicLoader& GetVulkanLoader() {
+#if defined(__APPLE__) && defined(__aarch64__)
+    // On iOS ARM64, try to load MoltenVK with better error handling
     static vk::DynamicLoader dl("@executable_path/Frameworks/MoltenVK.framework/MoltenVK");
+    
+    // Check if loader is valid by testing a critical function
+    if (!dl.getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr")) {
+        LOG_CRITICAL(Render_Vulkan, "Failed to load MoltenVK framework. Ensure MoltenVK.framework is properly installed.");
+        // We'll continue and let the application handle the failure gracefully
+    } else {
+        LOG_INFO(Render_Vulkan, "Successfully loaded MoltenVK framework");
+    }
+#else
+    static vk::DynamicLoader dl("@executable_path/Frameworks/MoltenVK.framework/MoltenVK");
+#endif
     return dl;
 }
 
@@ -31,13 +44,34 @@ vk::SurfaceKHR CreateSurface(vk::Instance instance, const Frontend::EmuWindow& e
     const auto& window_info = emu_window.GetWindowInfo();
     vk::SurfaceKHR surface{};
 
+#if defined(__APPLE__) && defined(__aarch64__)
+    // On iOS, we need to ensure the CAMetalLayer is properly configured
+    LOG_INFO(Render_Vulkan, "Creating Metal surface for iOS ARM64 device");
+    
+    // Verify we have a valid render surface
+    if (!window_info.render_surface) {
+        LOG_CRITICAL(Render_Vulkan, "Invalid render surface for Metal");
+        UNREACHABLE();
+    }
+    
+    const vk::MetalSurfaceCreateInfoEXT ios_ci = {
+        .pLayer = static_cast<const CAMetalLayer*>(window_info.render_surface)
+    };
+    
+    if (instance.createMetalSurfaceEXT(&ios_ci, nullptr, &surface) != vk::Result::eSuccess) {
+        LOG_CRITICAL(Render_Vulkan, "Failed to initialize iOS Metal surface");
+        UNREACHABLE();
+    }
+#else
     const vk::MetalSurfaceCreateInfoEXT macos_ci = {
-        .pLayer = static_cast<const CAMetalLayer*>(window_info.render_surface)};
+        .pLayer = static_cast<const CAMetalLayer*>(window_info.render_surface)
+    };
 
     if (instance.createMetalSurfaceEXT(&macos_ci, nullptr, &surface) != vk::Result::eSuccess) {
         LOG_CRITICAL(Render_Vulkan, "Failed to initialize MacOS surface");
         UNREACHABLE();
     }
+#endif
 
     if (!surface) {
         LOG_CRITICAL(Render_Vulkan, "Presentation not supported on this platform");

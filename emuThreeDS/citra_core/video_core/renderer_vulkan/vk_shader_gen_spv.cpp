@@ -273,6 +273,45 @@ void FragmentModule::WriteLighting() {
                                           ConstF32(2.f))};
         return OpFAdd(vec_ids.Get(3), v, val2);
     };
+    
+    // Perform quaternion correction in the fragment shader if fragment_shader_barycentric is
+    // supported.
+    Id normquat{};
+//    if (use_fragment_shader_barycentric) {
+//        const auto are_quaternions_opposite = [&](Id qa, Id qb) {
+//            const Id dot_q{OpDot(f32_id, qa, qb)};
+//            const Id dot_le_zero{OpFOrdLessThan(bool_id, dot_q, ConstF32(0.f))};
+//            return OpCompositeConstruct(bvec_ids.Get(4), dot_le_zero, dot_le_zero, dot_le_zero,
+//                                        dot_le_zero);
+//        };
+//
+//        const Id input_pointer_id{TypePointer(spv::StorageClass::Input, vec_ids.Get(4))};
+//        const Id normquat_0{
+//            OpLoad(vec_ids.Get(4), OpAccessChain(input_pointer_id, normquat_id, ConstS32(0)))};
+//        const Id normquat_1{
+//            OpLoad(vec_ids.Get(4), OpAccessChain(input_pointer_id, normquat_id, ConstS32(1)))};
+//        const Id normquat_1_correct{OpSelect(vec_ids.Get(4),
+//                                             are_quaternions_opposite(normquat_0, normquat_1),
+//                                             OpFNegate(vec_ids.Get(4), normquat_1), normquat_1)};
+//        const Id normquat_2{
+//            OpLoad(vec_ids.Get(4), OpAccessChain(input_pointer_id, normquat_id, ConstS32(2)))};
+//        const Id normquat_2_correct{OpSelect(vec_ids.Get(4),
+//                                             are_quaternions_opposite(normquat_0, normquat_2),
+//                                             OpFNegate(vec_ids.Get(4), normquat_2), normquat_2)};
+//        const Id bary_coord{OpLoad(vec_ids.Get(3), gl_bary_coord_id)};
+//        const Id bary_coord_x{OpCompositeExtract(f32_id, bary_coord, 0)};
+//        const Id bary_coord_y{OpCompositeExtract(f32_id, bary_coord, 1)};
+//        const Id bary_coord_z{OpCompositeExtract(f32_id, bary_coord, 2)};
+//        const Id normquat_0_final{OpVectorTimesScalar(vec_ids.Get(4), normquat_0, bary_coord_x)};
+//        const Id normquat_1_final{
+//            OpVectorTimesScalar(vec_ids.Get(4), normquat_1_correct, bary_coord_y)};
+//        const Id normquat_2_final{
+//            OpVectorTimesScalar(vec_ids.Get(4), normquat_2_correct, bary_coord_z)};
+//        normquat = OpFAdd(vec_ids.Get(4), normquat_0_final,
+//                          OpFAdd(vec_ids.Get(4), normquat_1_final, normquat_2_final));
+//    } else {
+//        normquat = OpLoad(vec_ids.Get(4), normquat_id);
+//    }
 
     // Rotate the surface-local normal by the interpolated normal quaternion to convert it to
     // eyespace.

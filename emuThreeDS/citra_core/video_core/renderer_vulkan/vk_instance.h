@@ -160,7 +160,16 @@ public:
     bool IsShaderStencilExportSupported() const {
         return shader_stencil_export;
     }
+    
+    /// Returns true when VK_EXT_external_memory_host is supported
+    bool IsExternalMemoryHostSupported() const {
+        return external_memory_host;
+    }
 
+    /// Returns true when VK_KHR_fragment_shader_barycentric is supported
+    bool IsFragmentShaderBarycentricSupported() const {
+        return fragment_shader_barycentric;
+    }
     /// Returns true if VK_EXT_debug_utils is supported
     bool IsExtDebugUtilsSupported() const {
         return debug_messenger_supported;
@@ -299,6 +308,8 @@ private:
     bool pipeline_creation_cache_control{};
     bool pipeline_creation_feedback{};
     bool shader_stencil_export{};
+    bool external_memory_host{};
+    bool fragment_shader_barycentric{};
     bool enable_validation{};
     bool dump_command_buffers{};
     bool debug_messenger_supported{};
