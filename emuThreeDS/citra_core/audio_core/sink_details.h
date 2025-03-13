@@ -15,7 +15,11 @@ namespace AudioCore {
 class Sink;
 
 enum class SinkType : u32 {
-    CoreAudio = 0,
+    Auto = 0,
+    Null = 1,
+    CoreAudio = 2,
+    OpenAL = 3,
+    SDL2 = 4,
     NumSinkTypes
 };
 

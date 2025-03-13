@@ -19,6 +19,7 @@
 #elif HAVE_FDK
 #include "audio_core/hle/fdk_decoder.h"
 #endif
+//#include "audio_core/hle/aac_decoder.h"
 #include "audio_core/hle/common.h"
 #include "audio_core/hle/decoder.h"
 #include "audio_core/hle/hle.h"
@@ -145,7 +146,12 @@ DspHle::Impl::Impl(DspHle& parent_, Memory::MemorySystem& memory) : parent(paren
     LOG_WARNING(Audio_DSP, "No decoder found, this could lead to missing audio");
     decoder = std::make_unique<HLE::NullDecoder>();
 #endif // HAVE_MF
-
+//    if (!decoder->IsValid()) {
+//        LOG_WARNING(Audio_DSP,
+//                    "Unable to load any decoders, this could cause missing audio in some games");
+//        decoder = std::make_unique<HLE::AACDecoder>(memory);
+//
+//    }
     if (!decoder->IsValid()) {
         LOG_WARNING(Audio_DSP,
                     "Unable to load any decoders, this could cause missing audio in some games");

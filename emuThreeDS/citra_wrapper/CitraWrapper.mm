@@ -63,6 +63,13 @@ static void InitializeLogging() {
         [_thread setName:@"emuThreeDS"];
         [_thread setQualityOfService:NSQualityOfServiceUserInteractive];
         [_thread setThreadPriority:1.0];
+
+        // Camera
+        Settings::values.camera_name[Service::CAM::InnerCamera] = "av_front";
+        Settings::values.camera_name[Service::CAM::OuterLeftCamera] = "av_rear";
+        Settings::values.camera_name[Service::CAM::OuterLeftCamera] = "av_rear";
+        
+
     } return self;
 }
 
@@ -139,6 +146,9 @@ static void InitializeLogging() {
     
     Input::RegisterFactory<Input::ButtonDevice>("ios_gamepad", std::make_shared<ButtonFactory>());
     Input::RegisterFactory<Input::AnalogDevice>("ios_gamepad", std::make_shared<AnalogFactory>());
+    Settings::values.current_input_profile.motion_device="engine:motion_device";
+    Input::RegisterFactory<Input::MotionDevice>("motion_emu", std::make_shared<MotionFactory>());
+
     Settings::Apply();
     
     

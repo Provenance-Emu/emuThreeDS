@@ -37,6 +37,9 @@ public:
     /// Stops the microphone. Called by Core
     virtual void StopSampling() = 0;
 
+    /// Checks whether the microphone is currently sampling.
+    virtual bool IsSampling() = 0;
+    
     /**
      * Called from the actual event timing at a constant period under a given sample rate.
      * When sampling is enabled this function is expected to return a buffer of 16 samples in ideal

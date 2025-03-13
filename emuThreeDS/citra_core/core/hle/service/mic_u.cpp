@@ -124,7 +124,7 @@ private:
 };
 
 struct MIC_U::Impl {
-    explicit Impl(Core::System& system) : timing(system.CoreTiming()) {
+    explicit Impl(Core::System& system) : system(system), timing(system.CoreTiming()) {
         buffer_full_event =
             system.Kernel().CreateEvent(Kernel::ResetType::OneShot, "MIC_U::buffer_full_event");
         buffer_write_event = timing.RegisterEvent(
@@ -350,7 +350,7 @@ struct MIC_U::Impl {
     }
 
     void CreateMic() {
-        std::unique_ptr<AudioCore::Input> new_mic = AudioCore::CreateInputFromID(
+        std::unique_ptr<AudioCore::Input> new_mic = AudioCore::CreateInputFromID( system,
             Settings::values.input_type.GetValue(), Settings::values.input_device.GetValue());
 
         // If theres already a mic, copy over any data to the new mic impl
@@ -376,6 +376,7 @@ struct MIC_U::Impl {
     bool allow_shell_closed = false;
     bool clamp = false;
     std::unique_ptr<AudioCore::Input> mic;
+    Core::System& system;
     Core::Timing& timing;
     State state{};
     Encoding encoding{};

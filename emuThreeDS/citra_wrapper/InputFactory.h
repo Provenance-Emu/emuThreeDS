@@ -21,4 +21,16 @@ class AnalogFactory : public Input::Factory<Input::AnalogDevice> {
 class ButtonFactory : public Input::Factory<Input::ButtonDevice> {
     std::unique_ptr<Input::InputDevice<bool>> Create(const Common::ParamPackage &) override;
 };
+
+inline std::atomic<int> screen_rotation;
+class MotionFactory final : public Input::Factory<Input::MotionDevice> {
+public:
+    std::unique_ptr<Input::MotionDevice> Create(const Common::ParamPackage& params) override;
+
+    void EnableSensors();
+    void DisableSensors();
+    
+private:
+    Motion* _motion;
+};
 #endif

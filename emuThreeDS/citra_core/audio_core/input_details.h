@@ -9,6 +9,11 @@
 #include <string_view>
 #include <vector>
 #include "common/common_types.h"
+#include "core/core.h"
+
+namespace Core {
+class System;
+}
 
 namespace AudioCore {
 
@@ -20,6 +25,7 @@ enum class InputType : u32 {
     Static = 2,
     Cubeb = 3,
     OpenAL = 4,
+    CoreAudio = 5,
 
     NumInputTypes,
 };
@@ -31,6 +37,6 @@ std::string_view GetInputName(InputType input_type);
 std::vector<std::string> GetDeviceListForInput(InputType input_type);
 
 /// Creates an audio input identified by the given device ID.
-std::unique_ptr<Input> CreateInputFromID(InputType input_type, std::string_view device_id);
+std::unique_ptr<Input> CreateInputFromID(Core::System& system, InputType input_type, std::string_view device_id);
 
 } // namespace AudioCore
