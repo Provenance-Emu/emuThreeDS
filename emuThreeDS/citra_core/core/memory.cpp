@@ -26,12 +26,184 @@
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
+// Include ARM NEON headers for ARM64 optimizations
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 SERIALIZE_EXPORT_IMPL(Memory::MemorySystem::BackingMemImpl<Memory::Region::FCRAM>)
 SERIALIZE_EXPORT_IMPL(Memory::MemorySystem::BackingMemImpl<Memory::Region::VRAM>)
 SERIALIZE_EXPORT_IMPL(Memory::MemorySystem::BackingMemImpl<Memory::Region::DSP>)
 SERIALIZE_EXPORT_IMPL(Memory::MemorySystem::BackingMemImpl<Memory::Region::N3DS>)
 
 namespace Memory {
+
+// ARM NEON optimized memory operations for ARM64 devices
+#if defined(__ARM_NEON) || defined(__aarch64__)
+// Optimized memcpy using NEON instructions
+// Most efficient for medium to large copies (>32 bytes)
+inline void* neon_memcpy(void* dest, const void* src, size_t n) {
+    uint8_t* d = reinterpret_cast<uint8_t*>(dest);
+    const uint8_t* s = reinterpret_cast<const uint8_t*>(src);
+    
+    // For small copies, use standard memcpy as it's more efficient
+    if (n < 32) {
+        return std::memcpy(dest, src, n);
+    }
+    
+    // Handle unaligned start until we reach 16-byte alignment for dest
+    while (reinterpret_cast<uintptr_t>(d) & 0xF && n > 0) {
+        *d++ = *s++;
+        n--;
+    }
+    
+    // Main copy loop using NEON 128-bit registers
+    if (n >= 16) {
+        size_t blocks = n / 16;
+        for (size_t i = 0; i < blocks; i++) {
+            uint8x16_t data = vld1q_u8(s);
+            vst1q_u8(d, data);
+            s += 16;
+            d += 16;
+        }
+        n &= 15; // Remaining bytes
+    }
+    
+    // Copy any remaining bytes
+    for (size_t i = 0; i < n; i++) {
+        *d++ = *s++;
+    }
+    
+    return dest;
+}
+
+// Optimized memset using NEON instructions
+inline void* neon_memset(void* dest, int val, size_t n) {
+    uint8_t* d = reinterpret_cast<uint8_t*>(dest);
+    uint8_t v = static_cast<uint8_t>(val);
+    
+    // For small sets, use standard memset as it's more efficient
+    if (n < 32) {
+        return std::memset(dest, val, n);
+    }
+    
+    // Handle unaligned start until we reach 16-byte alignment
+    while (reinterpret_cast<uintptr_t>(d) & 0xF && n > 0) {
+        *d++ = v;
+        n--;
+    }
+    
+    // Create a vector filled with the value
+    uint8x16_t value = vdupq_n_u8(v);
+    
+    // Main set loop using NEON 128-bit registers
+    if (n >= 16) {
+        size_t blocks = n / 16;
+        for (size_t i = 0; i < blocks; i++) {
+            vst1q_u8(d, value);
+            d += 16;
+        }
+        n &= 15; // Remaining bytes
+    }
+    
+    // Set any remaining bytes
+    for (size_t i = 0; i < n; i++) {
+        *d++ = v;
+    }
+    
+    return dest;
+}
+
+// Optimized zero memory function using NEON instructions
+// This is more efficient than memset for zeroing memory
+inline void* neon_zeromem(void* dest, size_t n) {
+    uint8_t* d = reinterpret_cast<uint8_t*>(dest);
+    
+    // For small sets, use standard memset as it's more efficient
+    if (n < 32) {
+        return std::memset(dest, 0, n);
+    }
+    
+    // Handle unaligned start until we reach 16-byte alignment
+    while (reinterpret_cast<uintptr_t>(d) & 0xF && n > 0) {
+        *d++ = 0;
+        n--;
+    }
+    
+    // Create a zero vector
+    uint8x16_t zero = vdupq_n_u8(0);
+    
+    // Main set loop using NEON 128-bit registers
+    if (n >= 16) {
+        size_t blocks = n / 16;
+        for (size_t i = 0; i < blocks; i++) {
+            vst1q_u8(d, zero);
+            d += 16;
+        }
+        n &= 15; // Remaining bytes
+    }
+    
+    // Zero any remaining bytes
+    for (size_t i = 0; i < n; i++) {
+        *d++ = 0;
+    }
+    
+    return dest;
+}
+
+// Optimized memory comparison using NEON
+inline int neon_memcmp(const void* s1, const void* s2, size_t n) {
+    const uint8_t* a = reinterpret_cast<const uint8_t*>(s1);
+    const uint8_t* b = reinterpret_cast<const uint8_t*>(s2);
+    
+    // For small comparisons, use standard memcmp
+    if (n < 32) {
+        return std::memcmp(s1, s2, n);
+    }
+    
+    // Handle unaligned start until we reach 16-byte alignment
+    while ((reinterpret_cast<uintptr_t>(a) & 0xF) && n > 0) {
+        if (*a != *b) {
+            return (*a < *b) ? -1 : 1;
+        }
+        a++;
+        b++;
+        n--;
+    }
+    
+    // Main comparison loop using NEON 128-bit registers
+    if (n >= 16) {
+        size_t blocks = n / 16;
+        for (size_t i = 0; i < blocks; i++) {
+            uint8x16_t va = vld1q_u8(a);
+            uint8x16_t vb = vld1q_u8(b);
+            uint8x16_t vresult = vceqq_u8(va, vb);
+            
+            // If any byte is not equal, find which one and return the difference
+            if (vmaxvq_u8(vresult) != 0xFF) {
+                for (int j = 0; j < 16; j++) {
+                    if (a[j] != b[j]) {
+                        return (a[j] < b[j]) ? -1 : 1;
+                    }
+                }
+            }
+            
+            a += 16;
+            b += 16;
+        }
+        n &= 15; // Remaining bytes
+    }
+    
+    // Compare any remaining bytes
+    for (size_t i = 0; i < n; i++) {
+        if (a[i] != b[i]) {
+            return (a[i] < b[i]) ? -1 : 1;
+        }
+    }
+    
+    return 0; // Equal
+}
+#endif
 
 void PageTable::Clear() {
     pointers.raw.fill(nullptr);
@@ -195,7 +367,11 @@ public:
                 DEBUG_ASSERT(page_table.pointers[page_index]);
 
                 const u8* src_ptr = page_table.pointers[page_index] + page_offset;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                neon_memcpy(dest_buffer, src_ptr, copy_amount);
+#else
                 std::memcpy(dest_buffer, src_ptr, copy_amount);
+#endif
                 break;
             }
             case PageType::Special: {
@@ -209,7 +385,11 @@ public:
                     RasterizerFlushVirtualRegion(current_vaddr, static_cast<u32>(copy_amount),
                                                  FlushMode::Flush);
                 }
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                neon_memcpy(dest_buffer, GetPointerForRasterizerCache(current_vaddr), copy_amount);
+#else
                 std::memcpy(dest_buffer, GetPointerForRasterizerCache(current_vaddr), copy_amount);
+#endif
                 break;
             }
             default:
@@ -249,7 +429,11 @@ public:
                 DEBUG_ASSERT(page_table.pointers[page_index]);
 
                 u8* dest_ptr = page_table.pointers[page_index] + page_offset;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                neon_memcpy(dest_ptr, src_buffer, copy_amount);
+#else
                 std::memcpy(dest_ptr, src_buffer, copy_amount);
+#endif
                 break;
             }
             case PageType::Special: {
@@ -263,7 +447,11 @@ public:
                     RasterizerFlushVirtualRegion(current_vaddr, static_cast<u32>(copy_amount),
                                                  FlushMode::Invalidate);
                 }
+#if defined(__ARM_NEON) || defined(__aarch64__)
+                neon_memcpy(GetPointerForRasterizerCache(current_vaddr), src_buffer, copy_amount);
+#else
                 std::memcpy(GetPointerForRasterizerCache(current_vaddr), src_buffer, copy_amount);
+#endif
                 break;
             }
             default:
@@ -941,7 +1129,11 @@ void MemorySystem::ZeroBlock(const Kernel::Process& process, const VAddr dest_ad
             DEBUG_ASSERT(page_table.pointers[page_index]);
 
             u8* dest_ptr = page_table.pointers[page_index] + page_offset;
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            neon_zeromem(dest_ptr, copy_amount);
+#else
             std::memset(dest_ptr, 0, copy_amount);
+#endif
             break;
         }
         case PageType::Special: {
@@ -953,7 +1145,11 @@ void MemorySystem::ZeroBlock(const Kernel::Process& process, const VAddr dest_ad
         case PageType::RasterizerCachedMemory: {
             RasterizerFlushVirtualRegion(current_vaddr, static_cast<u32>(copy_amount),
                                          FlushMode::Invalidate);
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            neon_zeromem(GetPointerForRasterizerCache(current_vaddr), copy_amount);
+#else
             std::memset(GetPointerForRasterizerCache(current_vaddr), 0, copy_amount);
+#endif
             break;
         }
         default:
