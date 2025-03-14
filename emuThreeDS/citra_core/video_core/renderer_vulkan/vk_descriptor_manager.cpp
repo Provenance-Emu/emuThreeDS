@@ -194,18 +194,35 @@ std::vector<vk::DescriptorSet> DescriptorManager::AllocateSets(vk::DescriptorSet
         .pSetLayouts = layouts.data(),
     };
 
-    try {
-        return instance.GetDevice().allocateDescriptorSets(alloc_info);
-    } catch (vk::OutOfPoolMemoryError) {
-        pool_provider.RefreshTick();
-        current_pool = pool_provider.Commit();
-        for (auto& cache : set_cache) {
-            cache.clear();
+    // Try to allocate descriptor sets, with improved error handling for MoltenVK 1.2.11
+    for (int retry = 0; retry < 3; retry++) { // Allow up to 3 retries
+        try {
+            return instance.GetDevice().allocateDescriptorSets(alloc_info);
+        } catch (vk::OutOfPoolMemoryError) {
+            LOG_WARNING(Render_Vulkan, "VK_ERROR_OUT_OF_POOL_MEMORY: Refreshing descriptor pool");
+            pool_provider.RefreshTick();
+            current_pool = pool_provider.Commit();
+            for (auto& cache : set_cache) {
+                cache.clear();
+            }
+            descriptor_set_dirty.set();
+            alloc_info.descriptorPool = current_pool;
+        } catch (vk::FragmentedPoolError) {
+            LOG_WARNING(Render_Vulkan, "VK_ERROR_FRAGMENTED_POOL: Refreshing descriptor pool");
+            pool_provider.RefreshTick();
+            current_pool = pool_provider.Commit();
+            for (auto& cache : set_cache) {
+                cache.clear();
+            }
+            descriptor_set_dirty.set();
+            alloc_info.descriptorPool = current_pool;
+        } catch (std::exception& e) {
+            LOG_ERROR(Render_Vulkan, "Unexpected error allocating descriptor sets: {}", e.what());
+            break; // Exit retry loop for unexpected errors
         }
-        descriptor_set_dirty.set();
     }
 
-    alloc_info.descriptorPool = current_pool;
+    // Final attempt after retries
     return instance.GetDevice().allocateDescriptorSets(alloc_info);
 }
 
