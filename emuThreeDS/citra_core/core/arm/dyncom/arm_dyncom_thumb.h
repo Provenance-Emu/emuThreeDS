@@ -38,6 +38,25 @@ enum class ThumbDecodeStatus {
 // Translates a Thumb mode instruction into its ARM equivalent.
 ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u32* inst_size);
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+// Optimized version using ARM NEON intrinsics
+inline u32 GetThumbInstruction(u32 instr, u32 address) {
+    // Normally you would need to handle instruction endianness,
+    // however, it is fixed to little-endian on the MPCore, so
+    // there's no need to check for this beforehand.
+    
+    // Use NEON to perform a conditional select based on address alignment
+    uint32x2_t value = vdup_n_u32(instr);
+    uint32x2_t shifted = vshr_n_u32(value, 16);  // instr >> 16
+    uint32x2_t masked = vand_u32(value, vdup_n_u32(0xFFFF));  // instr & 0xFFFF
+    
+    // Check if address is aligned
+    bool is_unaligned = (address & 0x3) != 0;
+    
+    // Select the appropriate result based on alignment
+    return is_unaligned ? vget_lane_u32(shifted, 0) : vget_lane_u32(masked, 0);
+}
+#else
 inline u32 GetThumbInstruction(u32 instr, u32 address) {
     // Normally you would need to handle instruction endianness,
     // however, it is fixed to little-endian on the MPCore, so
@@ -47,3 +66,4 @@ inline u32 GetThumbInstruction(u32 instr, u32 address) {
 
     return instr & 0xFFFF;
 }
+#endif

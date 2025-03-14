@@ -10,9 +10,32 @@
 #include "core/arm/dyncom/arm_dyncom_thumb.h"
 #include "core/arm/skyeye_common/armsupp.h"
 
+// Include ARM NEON headers for ARM64 optimizations
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 // Decode a 16bit Thumb instruction.  The instruction is in the low 16-bits of the tinstr field,
 // with the following Thumb instruction held in the high 16-bits.  Passing in two Thumb instructions
 // allows easier simulation of the special dual BL instruction.
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+// Optimized helper function for extracting bit fields using NEON
+inline u32 ExtractBits_NEON(u32 value, int start, int end) {
+    // Create a mask with 1s in the bit positions we want to extract
+    uint32_t mask = ((1U << (end - start + 1)) - 1) << start;
+    
+    // Use NEON to extract the bits
+    uint32x2_t val = vdup_n_u32(value);
+    uint32x2_t mask_vec = vdup_n_u32(mask);
+    
+    // Apply the mask and shift right
+    uint32x2_t masked = vand_u32(val, mask_vec);
+    uint32x2_t result = vshr_n_u32(masked, start);
+    
+    return vget_lane_u32(result, 0);
+}
+#endif
 
 ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u32* inst_size) {
     ThumbDecodeStatus valid = ThumbDecodeStatus::UNINITIALIZED;
@@ -24,15 +47,84 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
     case 0:                                         // LSL
     case 1:                                         // LSR
     case 2:                                         // ASR
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Optimized version using ARM NEON intrinsics
+        {
+            // Extract the different fields using NEON
+            uint32x4_t tinstr_vec = vdupq_n_u32(tinstr);
+            
+            // Create masks for each field
+            uint32x4_t shift_type_mask = vdupq_n_u32(0x1800);
+            uint32x4_t imm5_mask = vdupq_n_u32(0x07C0);
+            uint32x4_t rs_mask = vdupq_n_u32(0x0038);
+            uint32x4_t rd_mask = vdupq_n_u32(0x0007);
+            
+            // Extract and shift each field
+            uint32x4_t shift_type = vshrq_n_u32(vandq_u32(tinstr_vec, shift_type_mask), 11 - 5);
+            uint32x4_t imm5 = vshlq_n_u32(vandq_u32(tinstr_vec, imm5_mask), 7 - 6);
+            uint32x4_t rs = vshrq_n_u32(vandq_u32(tinstr_vec, rs_mask), 3);
+            uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec, rd_mask), 12);
+            
+            // Combine all fields with the base opcode
+            uint32x4_t base = vdupq_n_u32(0xE1B00000);
+            uint32x4_t result = vorrq_u32(base, shift_type);
+            result = vorrq_u32(result, imm5);
+            result = vorrq_u32(result, rs);
+            result = vorrq_u32(result, rd);
+            
+            *ainstr = vgetq_lane_u32(result, 0);
+        }
+#else
         *ainstr = 0xE1B00000                        // base opcode
                   | ((tinstr & 0x1800) >> (11 - 5)) // shift type
                   | ((tinstr & 0x07C0) << (7 - 6))  // imm5
                   | ((tinstr & 0x0038) >> 3)        // Rs
                   | ((tinstr & 0x0007) << 12);      // Rd
+#endif
         break;
 
     case 3: // ADD/SUB
     {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Optimized version using ARM NEON intrinsics
+        {
+            static const u32 subset[4] = {
+                0xE0900000, // ADDS Rd,Rs,Rn
+                0xE0500000, // SUBS Rd,Rs,Rn
+                0xE2900000, // ADDS Rd,Rs,#imm3
+                0xE2500000  // SUBS Rd,Rs,#imm3
+            };
+            
+            // Extract the opcode index using NEON
+            uint32x2_t tinstr_vec = vdup_n_u32(tinstr);
+            uint32x2_t opcode_mask = vdup_n_u32(0x0600);
+            uint32x2_t opcode_idx = vshr_n_u32(vand_u32(tinstr_vec, opcode_mask), 9);
+            u32 idx = vget_lane_u32(opcode_idx, 0);
+            
+            // Get the base opcode from the subset array
+            uint32x4_t base = vdupq_n_u32(subset[idx]);
+            
+            // Extract and shift each field using NEON
+            uint32x4_t tinstr_vec4 = vdupq_n_u32(tinstr);
+            
+            // Create masks for each field
+            uint32x4_t rn_imm3_mask = vdupq_n_u32(0x01C0);
+            uint32x4_t rs_mask = vdupq_n_u32(0x0038);
+            uint32x4_t rd_mask = vdupq_n_u32(0x0007);
+            
+            // Extract and shift each field
+            uint32x4_t rn_imm3 = vshrq_n_u32(vandq_u32(tinstr_vec4, rn_imm3_mask), 6);
+            uint32x4_t rs = vshlq_n_u32(vandq_u32(tinstr_vec4, rs_mask), 16 - 3);
+            uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_mask), 12 - 0);
+            
+            // Combine all fields with the base opcode
+            uint32x4_t result = vorrq_u32(base, rn_imm3);
+            result = vorrq_u32(result, rs);
+            result = vorrq_u32(result, rd);
+            
+            *ainstr = vgetq_lane_u32(result, 0);
+        }
+#else
         static const u32 subset[4] = {
             0xE0900000, // ADDS Rd,Rs,Rn
             0xE0500000, // SUBS Rd,Rs,Rn
@@ -44,6 +136,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
                   | ((tinstr & 0x01C0) >> 6)         // Rn or imm3
                   | ((tinstr & 0x0038) << (16 - 3))  // Rs
                   | ((tinstr & 0x0007) << (12 - 0)); // Rd
+#endif
     } break;
 
     case 4: // MOV
@@ -51,6 +144,45 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
     case 6: // ADD
     case 7: // SUB
     {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Optimized version using ARM NEON intrinsics
+        {
+            static const u32 subset[4] = {
+                0xE3B00000, // MOVS Rd,#imm8
+                0xE3500000, // CMP  Rd,#imm8
+                0xE2900000, // ADDS Rd,Rd,#imm8
+                0xE2500000, // SUBS Rd,Rd,#imm8
+            };
+            
+            // Extract the opcode index using NEON
+            uint32x2_t tinstr_vec = vdup_n_u32(tinstr);
+            uint32x2_t opcode_mask = vdup_n_u32(0x1800);
+            uint32x2_t opcode_idx = vshr_n_u32(vand_u32(tinstr_vec, opcode_mask), 11);
+            u32 idx = vget_lane_u32(opcode_idx, 0);
+            
+            // Get the base opcode from the subset array
+            uint32x4_t base = vdupq_n_u32(subset[idx]);
+            
+            // Extract and shift fields using NEON
+            uint32x4_t tinstr_vec4 = vdupq_n_u32(tinstr);
+            
+            // Create masks for each field
+            uint32x4_t imm8_mask = vdupq_n_u32(0x00FF);
+            uint32x4_t rn_rd_mask = vdupq_n_u32(0x0700);
+            
+            // Extract and shift each field
+            uint32x4_t imm8 = vandq_u32(tinstr_vec4, imm8_mask);
+            uint32x4_t rn = vshlq_n_u32(vandq_u32(tinstr_vec4, rn_rd_mask), 16 - 8);
+            uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rn_rd_mask), 12 - 8);
+            
+            // Combine all fields with the base opcode
+            uint32x4_t result = vorrq_u32(base, imm8);
+            result = vorrq_u32(result, rn);
+            result = vorrq_u32(result, rd);
+            
+            *ainstr = vgetq_lane_u32(result, 0);
+        }
+#else
         static const u32 subset[4] = {
             0xE3B00000, // MOVS Rd,#imm8
             0xE3500000, // CMP  Rd,#imm8
@@ -62,6 +194,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
                   | ((tinstr & 0x00FF) >> 0)         // imm8
                   | ((tinstr & 0x0700) << (16 - 8))  // Rn
                   | ((tinstr & 0x0700) << (12 - 8)); // Rd
+#endif
     } break;
 
     case 8: // Arithmetic and high register transfers
@@ -95,6 +228,89 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
                 {0xE1F00000, t_norm}   // MVNS Rd,Rs
             };
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            // Optimized version using ARM NEON intrinsics
+            {
+                // Extract the opcode index using NEON
+                uint32x2_t tinstr_vec = vdup_n_u32(tinstr);
+                uint32x2_t opcode_mask = vdup_n_u32(0x03C0);
+                uint32x2_t opcode_idx = vshr_n_u32(vand_u32(tinstr_vec, opcode_mask), 6);
+                u32 idx = vget_lane_u32(opcode_idx, 0);
+                
+                // Get the base opcode and type from the subset array
+                u32 base_opcode = subset[idx].opcode;
+                otype type = subset[idx].type;
+                
+                // Create vectors for the base opcode and instruction
+                uint32x4_t base = vdupq_n_u32(base_opcode);
+                uint32x4_t tinstr_vec4 = vdupq_n_u32(tinstr);
+                
+                // Create masks for each field
+                uint32x4_t rd_rm_mask = vdupq_n_u32(0x0007);
+                uint32x4_t rs_mask = vdupq_n_u32(0x0038);
+                
+                // Process based on instruction type
+                uint32x4_t result = base;
+                
+                switch (type) {
+                case t_norm:
+                    {
+                        // Extract and shift fields
+                        uint32x4_t rn = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 16);
+                        uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 12);
+                        uint32x4_t rs = vshrq_n_u32(vandq_u32(tinstr_vec4, rs_mask), 3);
+                        
+                        // Combine fields with base opcode
+                        result = vorrq_u32(result, rn);
+                        result = vorrq_u32(result, rd);
+                        result = vorrq_u32(result, rs);
+                    }
+                    break;
+                    
+                case t_shift:
+                    {
+                        // Extract and shift fields
+                        uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 12);
+                        uint32x4_t rm = vandq_u32(tinstr_vec4, rd_rm_mask);
+                        uint32x4_t rs = vshlq_n_u32(vandq_u32(tinstr_vec4, rs_mask), 8 - 3);
+                        
+                        // Combine fields with base opcode
+                        result = vorrq_u32(result, rd);
+                        result = vorrq_u32(result, rm);
+                        result = vorrq_u32(result, rs);
+                    }
+                    break;
+                    
+                case t_neg:
+                    {
+                        // Extract and shift fields
+                        uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 12);
+                        uint32x4_t rn = vshlq_n_u32(vandq_u32(tinstr_vec4, rs_mask), 16 - 3);
+                        
+                        // Combine fields with base opcode
+                        result = vorrq_u32(result, rd);
+                        result = vorrq_u32(result, rn);
+                    }
+                    break;
+                    
+                case t_mul:
+                    {
+                        // Extract and shift fields
+                        uint32x4_t rd = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 16);
+                        uint32x4_t rs = vshlq_n_u32(vandq_u32(tinstr_vec4, rd_rm_mask), 8);
+                        uint32x4_t rm = vshrq_n_u32(vandq_u32(tinstr_vec4, rs_mask), 3);
+                        
+                        // Combine fields with base opcode
+                        result = vorrq_u32(result, rd);
+                        result = vorrq_u32(result, rs);
+                        result = vorrq_u32(result, rm);
+                    }
+                    break;
+                }
+                
+                *ainstr = vgetq_lane_u32(result, 0);
+            }
+#else
             *ainstr = subset[(tinstr & 0x03C0) >> 6].opcode; // base
 
             switch (subset[(tinstr & 0x03C0) >> 6].type) {
@@ -118,6 +334,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
                            | ((tinstr & 0x0038) >> 3); // Rm
                 break;
             }
+#endif
         } else {
             u32 Rd = ((tinstr & 0x0007) >> 0);
             u32 Rs = ((tinstr & 0x0078) >> 3);
