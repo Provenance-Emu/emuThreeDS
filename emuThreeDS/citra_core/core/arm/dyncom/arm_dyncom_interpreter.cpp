@@ -409,6 +409,33 @@ static unsigned int DPO(RotateRightByRegister)(ARMul_State* cpu, unsigned int sh
 #define OFFSET_12 BITS(inst, 0, 11)
 
 static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    // Extract Rn field using NEON operations
+    uint32x2_t inst_vec = vdup_n_u32(inst);
+    uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
+    uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
+    unsigned int Rn = vget_lane_u32(rn_field, 0);
+    
+    // Extract U bit and offset
+    uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
+    uint32x2_t offset_mask = vdup_n_u32(0x00000FFF);
+    uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
+    uint32x2_t offset = vand_u32(inst_vec, offset_mask);
+    
+    // Get the base address
+    uint32x2_t base_addr = vdup_n_u32(CHECK_READ_REG15_WA(cpu, Rn));
+    
+    // Calculate the final address based on U bit
+    uint32x2_t addr;
+    if (vget_lane_u32(u_bit, 0))
+        addr = vadd_u32(base_addr, offset);
+    else
+        addr = vsub_u32(base_addr, offset);
+    
+    virt_addr = vget_lane_u32(addr, 0);
+#else
+    // Original implementation for non-ARM platforms
     unsigned int Rn = BITS(inst, 16, 19);
     unsigned int addr;
 
@@ -418,9 +445,47 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
         addr = CHECK_READ_REG15_WA(cpu, Rn) - OFFSET_12;
 
     virt_addr = addr;
+#endif
 }
 
 static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    // Extract Rn and Rm fields using NEON operations
+    uint32x2_t inst_vec = vdup_n_u32(inst);
+    
+    // Extract Rn (bits 16-19)
+    uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
+    uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
+    unsigned int Rn = vget_lane_u32(rn_field, 0);
+    
+    // Extract Rm (bits 0-3)
+    uint32x2_t rm_mask = vdup_n_u32(0x0000000F);
+    uint32x2_t rm_field = vand_u32(inst_vec, rm_mask);
+    unsigned int Rm = vget_lane_u32(rm_field, 0);
+    
+    // Get register values
+    unsigned int rn = CHECK_READ_REG15_WA(cpu, Rn);
+    unsigned int rm = CHECK_READ_REG15_WA(cpu, Rm);
+    
+    // Extract U bit
+    uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
+    uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
+    
+    // Create vectors for register values
+    uint32x2_t rn_vec = vdup_n_u32(rn);
+    uint32x2_t rm_vec = vdup_n_u32(rm);
+    
+    // Calculate the final address based on U bit
+    uint32x2_t addr;
+    if (vget_lane_u32(u_bit, 0))
+        addr = vadd_u32(rn_vec, rm_vec);
+    else
+        addr = vsub_u32(rn_vec, rm_vec);
+    
+    virt_addr = vget_lane_u32(addr, 0);
+#else
+    // Original implementation for non-ARM platforms
     unsigned int Rn = BITS(inst, 16, 19);
     unsigned int Rm = BITS(inst, 0, 3);
     unsigned int rn = CHECK_READ_REG15_WA(cpu, Rn);
@@ -433,6 +498,7 @@ static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigne
         addr = rn - rm;
 
     virt_addr = addr;
+#endif
 }
 
 static void LnSWoUB(ImmediatePostIndexed)(ARMul_State* cpu, unsigned int inst,
@@ -853,6 +919,75 @@ shtop_fp_t GetShifterOp(unsigned int inst) {
 }
 
 get_addr_fp_t GetAddressingOp(unsigned int inst) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    // Create a vector with the instruction value
+    uint32x2_t inst_vec = vdup_n_u32(inst);
+    
+    // Extract bit fields using NEON operations
+    uint32x2_t bits24_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F000000)), 24);
+    uint32x2_t bit21 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00200000)), 21);
+    uint32x2_t bits4_11 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000FF0)), 4);
+    uint32x2_t bit4 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000010)), 4);
+    uint32x2_t bits21_22 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00600000)), 21);
+    uint32x2_t bit7 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000080)), 7);
+    uint32x2_t bits23_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F800000)), 23);
+    
+    // Extract scalar values for comparison
+    u32 bits24_27_val = vget_lane_u32(bits24_27, 0);
+    u32 bit21_val = vget_lane_u32(bit21, 0);
+    u32 bits4_11_val = vget_lane_u32(bits4_11, 0);
+    u32 bit4_val = vget_lane_u32(bit4, 0);
+    u32 bits21_22_val = vget_lane_u32(bits21_22, 0);
+    u32 bit7_val = vget_lane_u32(bit7, 0);
+    u32 bits23_27_val = vget_lane_u32(bits23_27, 0);
+    
+    // LnSWoUB addressing modes
+    if (bits24_27_val == 5 && bit21_val == 0) {
+        return LnSWoUB(ImmediateOffset);
+    } else if (bits24_27_val == 7 && bit21_val == 0 && bits4_11_val == 0) {
+        return LnSWoUB(RegisterOffset);
+    } else if (bits24_27_val == 7 && bit21_val == 0 && bit4_val == 0) {
+        return LnSWoUB(ScaledRegisterOffset);
+    } else if (bits24_27_val == 5 && bit21_val == 1) {
+        return LnSWoUB(ImmediatePreIndexed);
+    } else if (bits24_27_val == 7 && bit21_val == 1 && bits4_11_val == 0) {
+        return LnSWoUB(RegisterPreIndexed);
+    } else if (bits24_27_val == 7 && bit21_val == 1 && bit4_val == 0) {
+        return LnSWoUB(ScaledRegisterPreIndexed);
+    } else if (bits24_27_val == 4 && bit21_val == 0) {
+        return LnSWoUB(ImmediatePostIndexed);
+    } else if (bits24_27_val == 6 && bit21_val == 0 && bits4_11_val == 0) {
+        return LnSWoUB(RegisterPostIndexed);
+    } else if (bits24_27_val == 6 && bit21_val == 0 && bit4_val == 0) {
+        return LnSWoUB(ScaledRegisterPostIndexed);
+    } 
+    // MLnS addressing modes
+    else if (bits24_27_val == 1 && bits21_22_val == 2 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(ImmediateOffset);
+    } else if (bits24_27_val == 1 && bits21_22_val == 0 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(RegisterOffset);
+    } else if (bits24_27_val == 1 && bits21_22_val == 3 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(ImmediatePreIndexed);
+    } else if (bits24_27_val == 1 && bits21_22_val == 1 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(RegisterPreIndexed);
+    } else if (bits24_27_val == 0 && bits21_22_val == 2 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(ImmediatePostIndexed);
+    } else if (bits24_27_val == 0 && bits21_22_val == 0 && bit7_val == 1 && bit4_val == 1) {
+        return MLnS(RegisterPostIndexed);
+    } 
+    // LdnStM addressing modes
+    else if (bits23_27_val == 0x11) {
+        return LdnStM(IncrementAfter);
+    } else if (bits23_27_val == 0x13) {
+        return LdnStM(IncrementBefore);
+    } else if (bits23_27_val == 0x10) {
+        return LdnStM(DecrementAfter);
+    } else if (bits23_27_val == 0x12) {
+        return LdnStM(DecrementBefore);
+    }
+#else
+    // Original implementation for non-ARM platforms
     if (BITS(inst, 24, 27) == 5 && BIT(inst, 21) == 0) {
         return LnSWoUB(ImmediateOffset);
     } else if (BITS(inst, 24, 27) == 7 && BIT(inst, 21) == 0 && BITS(inst, 4, 11) == 0) {
@@ -898,6 +1033,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     } else if (BITS(inst, 23, 27) == 0x12) {
         return LdnStM(DecrementBefore);
     }
+#endif
     return nullptr;
 }
 
