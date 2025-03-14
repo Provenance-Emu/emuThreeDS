@@ -128,18 +128,19 @@ void DescriptorPool::Allocate(std::size_t begin, std::size_t end) {
     LOG_INFO(Render_Vulkan, "Allocating new descriptor pool");
     vk::DescriptorPool& pool = pools.emplace_back();
 
-    // Choose a sane pool size good for most games
+    // Choose a pool size large enough to handle modern MoltenVK requirements
     static constexpr std::array<vk::DescriptorPoolSize, 6> pool_sizes = {{
-        {vk::DescriptorType::eUniformBufferDynamic, 32},
-        {vk::DescriptorType::eUniformTexelBuffer, 32},
-        {vk::DescriptorType::eCombinedImageSampler, 8192},
-        {vk::DescriptorType::eSampledImage, 1024},
-        {vk::DescriptorType::eStorageImage, 1024},
-        {vk::DescriptorType::eStorageBuffer, 512},
+        {vk::DescriptorType::eUniformBufferDynamic, 128},
+        {vk::DescriptorType::eUniformTexelBuffer, 128},
+        {vk::DescriptorType::eCombinedImageSampler, 16384}, // Doubled from 8192
+        {vk::DescriptorType::eSampledImage, 2048},
+        {vk::DescriptorType::eStorageImage, 2048},
+        {vk::DescriptorType::eStorageBuffer, 1024},
     }};
 
     const vk::DescriptorPoolCreateInfo descriptor_pool_info = {
-        .maxSets = 8192,
+        .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, // Allow freeing individual descriptors
+        .maxSets = 16384, // Doubled from 8192
         .poolSizeCount = static_cast<u32>(pool_sizes.size()),
         .pPoolSizes = pool_sizes.data(),
     };
