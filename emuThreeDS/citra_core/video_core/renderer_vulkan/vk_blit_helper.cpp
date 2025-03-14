@@ -109,10 +109,18 @@ constexpr vk::PipelineVertexInputStateCreateInfo PIPELINE_VERTEX_INPUT_STATE_CRE
     .vertexAttributeDescriptionCount = 0,
     .pVertexAttributeDescriptions = nullptr,
 };
+// Metal doesn't support disabling primitive restart, so we use different settings for Apple platforms
+#if defined(__APPLE__)
+constexpr vk::PipelineInputAssemblyStateCreateInfo PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO{
+    .topology = vk::PrimitiveTopology::eTriangleList,
+    .primitiveRestartEnable = VK_TRUE,
+};
+#else
 constexpr vk::PipelineInputAssemblyStateCreateInfo PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO{
     .topology = vk::PrimitiveTopology::eTriangleList,
     .primitiveRestartEnable = VK_FALSE,
 };
+#endif
 constexpr vk::PipelineViewportStateCreateInfo PIPELINE_VIEWPORT_STATE_CREATE_INFO{
     .viewportCount = 1,
     .pViewports = nullptr,
@@ -356,12 +364,12 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
         vk::DescriptorImageInfo{
             .sampler = nearest_sampler,
             .imageView = source.DepthView(),
-            .imageLayout = vk::ImageLayout::eGeneral,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         },
         vk::DescriptorImageInfo{
             .sampler = nearest_sampler,
             .imageView = source.StencilView(),
-            .imageLayout = vk::ImageLayout::eGeneral,
+            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
         },
     };
 
@@ -409,7 +417,12 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
             vk::ImageMemoryBarrier{
                 .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+#if defined(__APPLE__)
+                // MoltenVK has issues with certain layout transitions
+                .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+#else
                 .oldLayout = vk::ImageLayout::eGeneral,
+#endif
                 .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -446,7 +459,12 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                 .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite |
                                  vk::AccessFlagBits::eDepthStencilAttachmentRead,
                 .oldLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+#if defined(__APPLE__)
+                // MoltenVK has issues with certain layout transitions
+                .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+#else
                 .newLayout = vk::ImageLayout::eGeneral,
+#endif
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = src_image,
@@ -463,7 +481,12 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                 .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                 .dstAccessMask = vk::AccessFlagBits::eTransferRead,
                 .oldLayout = vk::ImageLayout::eGeneral,
+#if defined(__APPLE__)
+                // MoltenVK has issues with identical source and destination layouts
+                .newLayout = vk::ImageLayout::eTransferSrcOptimal,
+#else
                 .newLayout = vk::ImageLayout::eGeneral,
+#endif
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = dst_image,
@@ -527,7 +550,12 @@ bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
         const vk::ImageMemoryBarrier pre_barrier = {
             .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
             .dstAccessMask = vk::AccessFlagBits::eShaderRead,
+#if defined(__APPLE__)
+            // MoltenVK has issues with certain layout transitions
+            .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+#else
             .oldLayout = vk::ImageLayout::eGeneral,
+#endif
             .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -545,7 +573,12 @@ bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
             .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite |
                              vk::AccessFlagBits::eDepthStencilAttachmentRead,
             .oldLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
+#if defined(__APPLE__)
+            // MoltenVK has issues with certain layout transitions
+            .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
+#else
             .newLayout = vk::ImageLayout::eGeneral,
+#endif
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = src_image,
@@ -609,11 +642,23 @@ vk::Pipeline BlitHelper::MakeDepthStencilBlitPipeline() {
     const std::array stages = MakeStages(full_screen_vert, blit_depth_stencil_frag);
     const VideoCore::PixelFormat depth_stencil = VideoCore::PixelFormat::D24S8;
     const vk::Format depth_stencil_format = instance.GetTraits(depth_stencil).native;
+    // Create a custom input assembly state to ensure primitive restart is enabled on Apple platforms
+#if defined(__APPLE__)
+    const vk::PipelineInputAssemblyStateCreateInfo apple_input_assembly = {
+        .topology = vk::PrimitiveTopology::eTriangleList,
+        .primitiveRestartEnable = VK_TRUE,
+    };
+#endif
+
     vk::GraphicsPipelineCreateInfo depth_stencil_info = {
         .stageCount = static_cast<u32>(stages.size()),
         .pStages = stages.data(),
         .pVertexInputState = &PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+#if defined(__APPLE__)
+        .pInputAssemblyState = &apple_input_assembly,
+#else
         .pInputAssemblyState = &PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+#endif
         .pTessellationState = nullptr,
         .pViewportState = &PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         .pRasterizationState = &PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
