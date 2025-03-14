@@ -39,6 +39,7 @@ enum class ThumbDecodeStatus {
 ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u32* inst_size);
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
 // Optimized version using ARM NEON intrinsics
 inline u32 GetThumbInstruction(u32 instr, u32 address) {
     // Normally you would need to handle instruction endianness,

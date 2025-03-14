@@ -29,11 +29,13 @@ inline u32 ExtractBits_NEON(u32 value, int start, int end) {
     uint32x2_t val = vdup_n_u32(value);
     uint32x2_t mask_vec = vdup_n_u32(mask);
     
-    // Apply the mask and shift right
+    // Apply the mask
     uint32x2_t masked = vand_u32(val, mask_vec);
-    uint32x2_t result = vshr_n_u32(masked, start);
     
-    return vget_lane_u32(result, 0);
+    // Since we can't use variable shift with NEON intrinsics,
+    // extract the value and shift it in scalar code
+    u32 masked_val = vget_lane_u32(masked, 0);
+    return masked_val >> start;
 }
 #endif
 
