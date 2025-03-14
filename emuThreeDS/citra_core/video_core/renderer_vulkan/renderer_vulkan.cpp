@@ -370,10 +370,18 @@ void RendererVulkan::BuildPipelines() {
         .pVertexAttributeDescriptions = attributes.data(),
     };
 
+    // Metal doesn't support disabling primitive restart, so we enable it on Apple platforms
+#if defined(__APPLE__)
+    const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
+        .topology = vk::PrimitiveTopology::eTriangleStrip,
+        .primitiveRestartEnable = true,
+    };
+#else
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
         .topology = vk::PrimitiveTopology::eTriangleStrip,
         .primitiveRestartEnable = false,
     };
+#endif
 
     const vk::PipelineRasterizationStateCreateInfo raster_state = {
         .depthClampEnable = false,
