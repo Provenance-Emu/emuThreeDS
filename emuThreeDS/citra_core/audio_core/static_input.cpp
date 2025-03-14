@@ -3,20 +3,44 @@
 // Refer to the license.txt file included.
 
 #include <array>
+#include <random>
+#include <ctime>
 #include "audio_core/input.h"
 #include "audio_core/static_input.h"
+#include "common/logging/log.h"
 
 namespace AudioCore {
 
-constexpr std::array<u8, 16> NOISE_SAMPLE_8_BIT = {0xFC, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
-                                                   0xFF, 0xF5, 0xFF, 0xFF, 0xFF, 0xFF, 0x8E, 0xFF};
-
-constexpr std::array<u8, 32> NOISE_SAMPLE_16_BIT = {
-    0x64, 0x61, 0x74, 0x61, 0x56, 0xD7, 0x00, 0x00, 0x48, 0xF7, 0x86, 0x05, 0x77, 0x1A, 0xF4, 0x1F,
-    0x28, 0x0F, 0x6B, 0xEB, 0x1C, 0xC0, 0xCB, 0x9D, 0x46, 0x90, 0xDF, 0x98, 0xEA, 0xAE, 0xB5, 0xC4};
-
-StaticInput::StaticInput()
-    : CACHE_8_BIT{NOISE_SAMPLE_8_BIT.begin(), NOISE_SAMPLE_8_BIT.end()},
-      CACHE_16_BIT{NOISE_SAMPLE_16_BIT.begin(), NOISE_SAMPLE_16_BIT.end()} {}
+StaticInput::StaticInput() {
+    // Initialize the random number generator
+    std::mt19937 rng(static_cast<unsigned int>(std::time(nullptr)));
+    
+    // For 8-bit unsigned static noise (centered around 128)
+    std::uniform_int_distribution<> dist_8bit(80, 176); // Reduced range for less harsh noise
+    
+    // For 16-bit signed static noise (centered around 0)
+    std::uniform_int_distribution<> dist_16bit(-8192, 8191); // Reduced range for less harsh noise
+    
+    // Generate 8-bit static (1/4 second at 48000Hz mono)
+    const size_t sample_count_8bit = 12000;
+    CACHE_8_BIT.resize(sample_count_8bit);
+    for (size_t i = 0; i < sample_count_8bit; i++) {
+        CACHE_8_BIT[i] = static_cast<u8>(dist_8bit(rng));
+    }
+    
+    // Generate 16-bit static (1/4 second at 48000Hz mono)
+    const size_t sample_count_16bit = 12000;
+    CACHE_16_BIT.resize(sample_count_16bit * 2); // 2 bytes per sample
+    
+    for (size_t i = 0; i < sample_count_16bit; i++) {
+        s16 sample = static_cast<s16>(dist_16bit(rng));
+        // Store in little-endian format
+        CACHE_16_BIT[i*2] = sample & 0xFF;
+        CACHE_16_BIT[i*2+1] = (sample >> 8) & 0xFF;
+    }
+    
+    LOG_INFO(Audio, "Generated static noise: {} bytes for 8-bit, {} bytes for 16-bit",
+             CACHE_8_BIT.size(), CACHE_16_BIT.size());
+}
 
 } // namespace AudioCore
