@@ -13,6 +13,10 @@
 #include <vector>
 #include <array>
 #include <atomic>
+#include <cmath>
+
+// Define TEST_SIN to use sine wave generation instead of microphone input
+// #define TEST_SIN
 #include "audio_core/input.h"
 #include "audio_core/coreaudio_input.h"
 #include "common/logging/log.h"
@@ -43,6 +47,12 @@ struct CoreAudioInput::Impl {
 
     // Signedness of the audio format
     Signedness sign = Signedness::Signed;
+
+#ifdef TEST_SIN
+    // Sine wave generator state
+    double phase = 0.0;
+    const double frequency = 440.0; // A4 note (440 Hz)
+#endif
 };
 
 // Simple linear interpolation for sample rate conversion
@@ -115,6 +125,15 @@ void CoreAudioInput::StartSampling(const InputParameters& params) {
     while (impl->sample_queue.Pop(dummy)) {
         // Just drain the queue
     }
+
+#ifdef TEST_SIN
+    // Reset sine wave phase
+    impl->phase = 0.0;
+    // Store the target sample rate for sine wave generation
+    impl->target_sample_rate = params.sample_rate;
+    LOG_INFO(Audio, "Using TEST_SIN mode: Will generate 440Hz sine wave instead of using microphone");
+    return;
+#endif
 
     OSStatus err;
     AudioComponentDescription acdesc = {
@@ -363,6 +382,64 @@ Samples CoreAudioInput::Read() {
             return {};
         }
 
+#ifdef TEST_SIN
+        // Generate sine wave data instead of reading from the queue
+        const size_t expected_sample_count = impl->target_sample_rate / 100; // ~10ms of audio
+        const size_t buffer_size = expected_sample_count * impl->sample_size_in_bytes;
+
+        Samples sine_buffer;
+        sine_buffer.resize(buffer_size);
+
+        // Generate sine wave samples
+        const double amplitude = impl->sample_size_in_bytes == 1 ? 127.0 : 32767.0;
+        const double frequency = impl->frequency;
+        const double sample_rate = static_cast<double>(impl->target_sample_rate);
+
+        if (impl->sample_size_in_bytes == 1) {
+            // 8-bit samples
+            for (size_t i = 0; i < expected_sample_count; i++) {
+                double sample_value = amplitude * sin(2.0 * M_PI * frequency * impl->phase);
+
+                // Convert to appropriate format (signed or unsigned 8-bit)
+                if (impl->sign == Signedness::Unsigned) {
+                    // Unsigned 8-bit: range 0-255
+                    sine_buffer[i] = static_cast<u8>(sample_value + 128.0);
+                } else {
+                    // Signed 8-bit: range -128 to 127
+                    sine_buffer[i] = static_cast<u8>(static_cast<s8>(sample_value));
+                }
+
+                // Increment phase
+                impl->phase += 1.0 / sample_rate;
+                if (impl->phase >= 1.0) impl->phase -= 1.0;
+            }
+        } else {
+            // 16-bit samples
+            for (size_t i = 0; i < expected_sample_count; i++) {
+                double sample_value = amplitude * sin(2.0 * M_PI * frequency * impl->phase);
+
+                // Convert to appropriate format (signed or unsigned 16-bit)
+                if (impl->sign == Signedness::Unsigned) {
+                    // Unsigned 16-bit: range 0-65535
+                    u16 sample = static_cast<u16>(sample_value + 32768.0);
+                    sine_buffer[i*2] = sample & 0xFF;         // Low byte
+                    sine_buffer[i*2+1] = (sample >> 8) & 0xFF; // High byte
+                } else {
+                    // Signed 16-bit: range -32768 to 32767
+                    s16 sample = static_cast<s16>(sample_value);
+                    sine_buffer[i*2] = sample & 0xFF;         // Low byte
+                    sine_buffer[i*2+1] = (sample >> 8) & 0xFF; // High byte
+                }
+
+                // Increment phase
+                impl->phase += 1.0 / sample_rate;
+                if (impl->phase >= 1.0) impl->phase -= 1.0;
+            }
+        }
+
+        LOG_INFO(Audio, "Read: Generated {} bytes of sine wave audio data", sine_buffer.size());
+        return sine_buffer;
+#else
         // Collect all available samples from the queue
         Samples all_samples;
         Samples queue_chunk;
@@ -387,6 +464,7 @@ Samples CoreAudioInput::Read() {
 
         Samples silence_buffer(silence_size, 0); // Create a zero-filled buffer
         return silence_buffer;
+#endif
     } catch (const std::exception& e) {
         LOG_ERROR(Audio, "Exception in Read: {}", e.what());
         return {};
@@ -430,7 +508,7 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
     // Make sure the buffer stays in scope until after AudioUnitRender completes
     std::vector<u8> temp_buffer(requested_size, 0); // Initialize with zeros
     buffer_list.mBuffers[0].mData = temp_buffer.data();
-    
+
     // Ensure the buffer is properly aligned
     if (buffer_list.mBuffers[0].mData == nullptr) {
         LOG_ERROR(Audio, "Failed to allocate audio buffer");
@@ -481,26 +559,26 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
 
     // Process the captured data
     Samples output_samples;
-    
+
     if (has_data) {
         // Reset warning counter on successful capture
         input->impl->warning_count.store(0);
-        
+
         // Get the raw audio data (always 16-bit signed PCM from capture)
         const u8* src_data = static_cast<const u8*>(buffer_list.mBuffers[0].mData);
         const size_t data_size = buffer_list.mBuffers[0].mDataByteSize;
-        
+
         // Convert to the target format if needed
         if (input->parameters.sample_size == 8) {
             // Convert 16-bit to 8-bit
             const size_t num_samples = data_size / 2;
             output_samples.resize(num_samples);
-            
+
             // Process each 16-bit sample
             for (size_t i = 0; i < num_samples; i++) {
                 // Get the 16-bit sample (little-endian)
                 s16 sample_16bit = static_cast<s16>((src_data[i*2+1] << 8) | src_data[i*2]);
-                
+
                 // Convert to 8-bit based on signedness
                 if (input->impl->sign == Signedness::Signed) {
                     // Convert to signed 8-bit (scale down and keep sign)
@@ -513,7 +591,7 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
         } else {
             // Keep as 16-bit but handle signedness conversion if needed
             output_samples.resize(data_size);
-            
+
             if (input->impl->sign == Signedness::Signed) {
                 // Keep as signed 16-bit
                 std::memcpy(output_samples.data(), src_data, data_size);
@@ -523,34 +601,34 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
                 for (size_t i = 0; i < num_samples; i++) {
                     // Get the signed 16-bit sample
                     s16 sample_16bit = static_cast<s16>((src_data[i*2+1] << 8) | src_data[i*2]);
-                    
+
                     // Convert to unsigned 16-bit
                     u16 unsigned_sample = static_cast<u16>(sample_16bit + 32768);
-                    
+
                     // Store in little-endian format
                     output_samples[i*2] = unsigned_sample & 0xFF;
                     output_samples[i*2+1] = (unsigned_sample >> 8) & 0xFF;
                 }
             }
         }
-        
-        LOG_INFO(Audio, "Callback: Processed {} bytes of audio data to {} bytes in target format", 
+
+        LOG_INFO(Audio, "Callback: Processed {} bytes of audio data to {} bytes in target format",
                  data_size, output_samples.size());
     } else {
         // For silence, create a buffer of zeros with the appropriate size
         const size_t silence_size = input->impl->sample_size_in_bytes * inNumberFrames;
         output_samples.resize(silence_size, 0);
-        
+
         if (input->impl->warning_count.fetch_add(1) % 100 == 0) {
             LOG_WARNING(Audio, "Callback: No valid audio data captured, using silence buffer of {} bytes (permission: {})",
                        silence_size, permission_granted ? "granted" : "denied");
         }
     }
-    
+
     // Resample if needed
     if (input->impl->actual_sample_rate != input->impl->target_sample_rate) {
         Samples resampled_output;
-        
+
         if (input->parameters.sample_size == 8) {
             // Resample 8-bit data
             resampled_output = ResampleAudio<u8>(
@@ -561,7 +639,7 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
             // For 16-bit, we need to convert to s16 for resampling
             const size_t num_samples = output_samples.size() / 2;
             std::vector<s16> samples_16bit(num_samples);
-            
+
             // Convert byte array to s16 array
             for (size_t i = 0; i < num_samples; i++) {
                 if (input->impl->sign == Signedness::Signed) {
@@ -573,13 +651,13 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
                     samples_16bit[i] = static_cast<s16>(unsigned_sample - 32768);
                 }
             }
-            
+
             // Resample the s16 data
             auto resampled_16bit = ResampleAudio<s16>(
-                samples_16bit, 
-                input->impl->actual_sample_rate, 
+                samples_16bit,
+                input->impl->actual_sample_rate,
                 input->impl->target_sample_rate);
-            
+
             // Convert back to byte array
             resampled_output.resize(resampled_16bit.size() * 2);
             for (size_t i = 0; i < resampled_16bit.size(); i++) {
@@ -595,15 +673,15 @@ OSStatus CoreAudioInput::AudioInputCallback(void* inRefCon,
                 }
             }
         }
-        
+
         LOG_INFO(Audio, "Callback: Resampled from {} Hz to {} Hz, size changed from {} to {} bytes",
                  input->impl->actual_sample_rate, input->impl->target_sample_rate,
                  output_samples.size(), resampled_output.size());
-        
+
         // Use the resampled data
         output_samples = std::move(resampled_output);
     }
-    
+
     // Push the processed samples to the queue
     input->impl->sample_queue.Push(output_samples);
 
@@ -616,7 +694,7 @@ std::vector<std::string> ListCoreAudioInputDevices() {
 
     // On iOS, we only have the default microphone
     device_list.push_back("auto");
-    device_list.push_back("Built-in Microphone");
+    // device_list.push_back("Built-in Microphone");
 
     LOG_INFO(Audio, "Found {} CoreAudio input devices", device_list.size());
     return device_list;
