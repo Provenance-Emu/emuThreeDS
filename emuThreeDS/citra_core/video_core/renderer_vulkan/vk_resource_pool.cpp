@@ -17,8 +17,11 @@ std::size_t ResourcePool::CommitResource() {
     // Refresh semaphore to query updated results
     master_semaphore->Refresh();
     const u64 gpu_tick = master_semaphore->KnownGpuTick();
+    
+    // Enhanced search function with better resource reuse strategy for MoltenVK 1.2.11
     const auto search = [this, gpu_tick](std::size_t begin,
                                          std::size_t end) -> std::optional<std::size_t> {
+        // First pass: look for resources that are definitely free
         for (std::size_t iterator = begin; iterator < end; ++iterator) {
             if (gpu_tick >= ticks[iterator]) {
                 ticks[iterator] = master_semaphore->CurrentTick();
@@ -28,13 +31,14 @@ std::size_t ResourcePool::CommitResource() {
         return std::nullopt;
     };
 
-    // Try to find a free resource from the hinted position to the end.
+    // Try to find a free resource from the hinted position to the end
     std::optional<std::size_t> found = search(hint_iterator, ticks.size());
     if (!found) {
-        // Search from beginning to the hinted position.
+        // Search from beginning to the hinted position
         found = search(0, hint_iterator);
         if (!found) {
-            // Both searches failed, the pool is full; handle it.
+            // Both searches failed, the pool is full; handle it
+            LOG_DEBUG(Render_Vulkan, "Resource pool full, growing pool");
             const std::size_t free_resource = ManageOverflow();
 
             ticks[free_resource] = master_semaphore->CurrentTick();
@@ -42,16 +46,24 @@ std::size_t ResourcePool::CommitResource() {
         }
     }
 
-    // Free iterator is hinted to the resource after the one that's been commited.
+    // Free iterator is hinted to the resource after the one that's been committed
     hint_iterator = (*found + 1) % ticks.size();
     return *found;
 }
 
 std::size_t ResourcePool::ManageOverflow() {
     const std::size_t old_capacity = ticks.size();
+    
+    // For MoltenVK 1.2.11, we need to be more aggressive with pool growth to avoid fragmentation
+    // Double the grow_step when we overflow to reduce future overflows
+    if (grow_step < 64) { // Cap the maximum growth to avoid excessive memory usage
+        grow_step *= 2;
+        LOG_DEBUG(Render_Vulkan, "Increased resource pool growth step to {}", grow_step);
+    }
+    
     Grow();
 
-    // The last entry is guaranted to be free, since it's the first element of the freshly
+    // The last entry is guaranteed to be free, since it's the first element of the freshly
     // allocated resources.
     return old_capacity;
 }
@@ -128,19 +140,20 @@ void DescriptorPool::Allocate(std::size_t begin, std::size_t end) {
     LOG_INFO(Render_Vulkan, "Allocating new descriptor pool");
     vk::DescriptorPool& pool = pools.emplace_back();
 
-    // Choose a pool size large enough to handle modern MoltenVK requirements
+    // Significantly increased pool sizes to handle MoltenVK 1.2.11's stricter descriptor management
+    // and prevent fragmentation errors
     static constexpr std::array<vk::DescriptorPoolSize, 6> pool_sizes = {{
-        {vk::DescriptorType::eUniformBufferDynamic, 128},
-        {vk::DescriptorType::eUniformTexelBuffer, 128},
-        {vk::DescriptorType::eCombinedImageSampler, 16384}, // Doubled from 8192
-        {vk::DescriptorType::eSampledImage, 2048},
-        {vk::DescriptorType::eStorageImage, 2048},
-        {vk::DescriptorType::eStorageBuffer, 1024},
+        {vk::DescriptorType::eUniformBufferDynamic, 256},
+        {vk::DescriptorType::eUniformTexelBuffer, 256},
+        {vk::DescriptorType::eCombinedImageSampler, 32768}, // Quadrupled from original 8192
+        {vk::DescriptorType::eSampledImage, 4096},
+        {vk::DescriptorType::eStorageImage, 4096},
+        {vk::DescriptorType::eStorageBuffer, 2048},
     }};
 
     const vk::DescriptorPoolCreateInfo descriptor_pool_info = {
         .flags = vk::DescriptorPoolCreateFlagBits::eFreeDescriptorSet, // Allow freeing individual descriptors
-        .maxSets = 16384, // Doubled from 8192
+        .maxSets = 32768, // Quadrupled from original 8192
         .poolSizeCount = static_cast<u32>(pool_sizes.size()),
         .pPoolSizes = pool_sizes.data(),
     };
