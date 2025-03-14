@@ -23,15 +23,68 @@
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
 
+// Include ARM NEON headers for ARM64 optimizations
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+#endif
+
 #define RM BITS(sht_oper, 0, 3)
 #define RS BITS(sht_oper, 8, 11)
 
 #define glue(x, y) x##y
 #define DPO(s) glue(DataProcessingOperands, s)
+// Optimized rotation operations for ARM64
+#if defined(__ARM_NEON) || defined(__aarch64__)
+// Optimized 32-bit right rotation using NEON intrinsics
+inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
+    // For small rotations, use the standard C implementation as it's more efficient
+    if (i == 0) {
+        return n;
+    }
+    
+    // Use NEON intrinsics for rotation with variable shift amounts
+    uint32x2_t value = vdup_n_u32(n);
+    int32x2_t right_shift = vdup_n_s32(-(int32_t)i);
+    int32x2_t left_shift = vdup_n_s32(32 - (int32_t)i);
+    
+    uint32x2_t right_part = vshl_u32(value, right_shift);
+    uint32x2_t left_part = vshl_u32(value, left_shift);
+    uint32x2_t result = vorr_u32(right_part, left_part);
+    
+    return vget_lane_u32(result, 0);
+}
+
+// Optimized 32-bit left rotation using NEON intrinsics
+inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
+    // For small rotations, use the standard C implementation as it's more efficient
+    if (i == 0) {
+        return n;
+    }
+    
+    // Use NEON intrinsics for rotation with variable shift amounts
+    uint32x2_t value = vdup_n_u32(n);
+    int32x2_t left_shift = vdup_n_s32((int32_t)i);
+    int32x2_t right_shift = vdup_n_s32(-((int32_t)(32 - i)));
+    
+    uint32x2_t left_part = vshl_u32(value, left_shift);
+    uint32x2_t right_part = vshl_u32(value, right_shift);
+    uint32x2_t result = vorr_u32(left_part, right_part);
+    
+    return vget_lane_u32(result, 0);
+}
+#endif
+
 #define ROTATE_RIGHT(n, i, l) ((n << (l - i)) | (n >> i))
 #define ROTATE_LEFT(n, i, l) ((n >> (l - i)) | (n << i))
+
+// Use optimized NEON implementations when available
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#define ROTATE_RIGHT_32(n, i) ROTATE_RIGHT_32_NEON(n, i)
+#define ROTATE_LEFT_32(n, i) ROTATE_LEFT_32_NEON(n, i)
+#else
 #define ROTATE_RIGHT_32(n, i) ROTATE_RIGHT(n, i, 32)
 #define ROTATE_LEFT_32(n, i) ROTATE_LEFT(n, i, 32)
+#endif
 
 static bool CondPassed(const ARMul_State* cpu, unsigned int cond) {
     const bool n_flag = cpu->NFlag != 0;
@@ -98,6 +151,28 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     int shift_imm = BITS(sht_oper, 7, 11);
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
+    
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    if (shift_imm == 0) {
+        shifter_operand = rm;
+        cpu->shifter_carry_out = cpu->CFlag;
+    } else {
+        // Use NEON intrinsics for shift operations
+        uint32x2_t value = vdup_n_u32(rm);
+        
+        // Extract the carry bit
+        uint32x2_t carry_mask = vdup_n_u32(1U << (32 - shift_imm));
+        uint32x2_t carry_result = vand_u32(value, carry_mask);
+        cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
+        
+        // Perform the shift using vshl_u32 which accepts variable shift amounts
+        int32x2_t shift_amount = vdup_n_s32(shift_imm);
+        uint32x2_t shifted = vshl_u32(value, shift_amount);
+        shifter_operand = vget_lane_u32(shifted, 0);
+    }
+#else
+    // Original implementation for non-ARM platforms
     if (shift_imm == 0) {
         shifter_operand = rm;
         cpu->shifter_carry_out = cpu->CFlag;
@@ -105,6 +180,8 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
         shifter_operand = rm << shift_imm;
         cpu->shifter_carry_out = BIT(rm, 32 - shift_imm);
     }
+#endif
+    
     return shifter_operand;
 }
 
@@ -132,6 +209,28 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
+    
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    if (shift_imm == 0) {
+        shifter_operand = 0;
+        cpu->shifter_carry_out = BIT(rm, 31);
+    } else {
+        // Use NEON intrinsics for shift operations
+        uint32x2_t value = vdup_n_u32(rm);
+        
+        // Extract the carry bit
+        uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
+        uint32x2_t carry_result = vand_u32(value, carry_mask);
+        cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
+        
+        // Perform the right shift
+        int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
+        uint32x2_t shifted = vshl_u32(value, shift_amount);
+        shifter_operand = vget_lane_u32(shifted, 0);
+    }
+#else
+    // Original implementation for non-ARM platforms
     if (shift_imm == 0) {
         shifter_operand = 0;
         cpu->shifter_carry_out = BIT(rm, 31);
@@ -139,6 +238,8 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
         shifter_operand = rm >> shift_imm;
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
+#endif
+    
     return shifter_operand;
 }
 
@@ -166,6 +267,31 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
+    
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    if (shift_imm == 0) {
+        if (BIT(rm, 31) == 0)
+            shifter_operand = 0;
+        else
+            shifter_operand = 0xFFFFFFFF;
+        cpu->shifter_carry_out = BIT(rm, 31);
+    } else {
+        // Use NEON intrinsics for arithmetic shift right
+        int32x2_t value = vdup_n_s32((int32_t)rm);
+        
+        // Extract the carry bit
+        uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
+        uint32x2_t carry_result = vand_u32(vreinterpret_u32_s32(value), carry_mask);
+        cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
+        
+        // Perform the arithmetic right shift
+        int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
+        int32x2_t shifted = vshl_s32(value, shift_amount); // Use signed shift for arithmetic shift
+        shifter_operand = (unsigned int)vget_lane_s32(shifted, 0);
+    }
+#else
+    // Original implementation for non-ARM platforms
     if (shift_imm == 0) {
         if (BIT(rm, 31) == 0)
             shifter_operand = 0;
@@ -176,6 +302,8 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
         shifter_operand = static_cast<int>(rm) >> shift_imm;
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
+#endif
+    
     return shifter_operand;
 }
 
@@ -203,6 +331,40 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int shifter_operand;
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
+    
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized version using ARM NEON intrinsics
+    if (shift_imm == 0) {
+        // special case represent RRX
+        // Use NEON intrinsics for RRX operation
+        uint32x2_t value = vdup_n_u32(rm);
+        uint32x2_t carry = vdup_n_u32(cpu->CFlag);
+        
+        // Extract the carry out bit
+        uint32x2_t carry_out_mask = vdup_n_u32(1);
+        uint32x2_t carry_out = vand_u32(value, carry_out_mask);
+        cpu->shifter_carry_out = vget_lane_u32(carry_out, 0) != 0;
+        
+        // Shift right by 1
+        uint32x2_t shifted = vshr_n_u32(value, 1);
+        
+        // Insert carry flag into bit 31
+        uint32x2_t carry_shifted = vshl_n_u32(carry, 31);
+        uint32x2_t result = vorr_u32(shifted, carry_shifted);
+        
+        shifter_operand = vget_lane_u32(result, 0);
+    } else {
+        // Use our optimized ROTATE_RIGHT_32 function which already uses NEON
+        shifter_operand = ROTATE_RIGHT_32(rm, shift_imm);
+        
+        // Extract the carry bit
+        uint32x2_t value = vdup_n_u32(rm);
+        uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
+        uint32x2_t carry_result = vand_u32(value, carry_mask);
+        cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
+    }
+#else
+    // Original implementation for non-ARM platforms
     if (shift_imm == 0) {
         shifter_operand = (cpu->CFlag << 31) | (rm >> 1);
         cpu->shifter_carry_out = BIT(rm, 0);
@@ -210,6 +372,8 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         shifter_operand = ROTATE_RIGHT_32(rm, shift_imm);
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
+#endif
+    
     return shifter_operand;
 }
 
