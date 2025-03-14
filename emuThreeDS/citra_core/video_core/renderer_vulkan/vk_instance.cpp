@@ -885,7 +885,7 @@ void Instance::CreateAllocator() {
     allocator_info.flags |= VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
     
     // Prefer smaller memory block sizes on iOS to reduce memory pressure
-    allocator_info.preferredLargeHeapBlockSize = 64 * 1024 * 1024; // 64MB instead of default 256MB
+    allocator_info.preferredLargeHeapBlockSize = 128 * 1024 * 1024; // 128MB instead of default 256MB
 #endif
 
     if (VkResult result = vmaCreateAllocator(&allocator_info, &allocator); result != VK_SUCCESS) {
