@@ -275,12 +275,46 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
             case OpCode::Id::FLR:
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert float24 to float32 for NEON processing
+                float32x4_t src1_f32 = {
+                    src1[0].ToFloat32(),
+                    src1[1].ToFloat32(),
+                    src1[2].ToFloat32(),
+                    src1[3].ToFloat32()
+                };
+                
+                // NEON doesn't have a direct floor instruction, so we need to implement it
+                // First convert to int (truncate) then back to float
+                int32x4_t truncated = vcvtq_s32_f32(src1_f32);
+                float32x4_t truncated_f32 = vcvtq_f32_s32(truncated);
+                
+                // Create a mask for values that need adjustment (negative values that were truncated)
+                uint32x4_t needs_adjust = vcltq_f32(src1_f32, truncated_f32);
+                
+                // Create adjustment value (-1.0f for values that need it, 0.0f for others)
+                float32x4_t minus_one = vdupq_n_f32(-1.0f);
+                float32x4_t adjustment = vbslq_f32(needs_adjust, minus_one, vdupq_n_f32(0.0f));
+                
+                // Apply adjustment to get floor
+                float32x4_t result_f32 = vaddq_f32(truncated_f32, adjustment);
+                
+                // Store results back, respecting component enablement
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+                        
+                    dest[i] = float24::FromFloat32(vgetq_lane_f32(result_f32, i));
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
                         continue;
 
                     dest[i] = float24::FromFloat32(std::floor(src1[i].ToFloat32()));
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
 
@@ -487,6 +521,31 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
             case OpCode::Id::RSQ: {
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert input to float32
+                float32_t src_val = src1[0].ToFloat32();
+                
+                // Use NEON's reciprocal square root estimate followed by refinement
+                float32x2_t src_vec = vdup_n_f32(src_val);
+                float32x2_t rsqrt_estimate = vrsqrte_f32(src_vec);
+                
+                // Refine the estimate (2 iterations for good accuracy)
+                rsqrt_estimate = vmul_f32(vrsqrts_f32(vmul_f32(src_vec, rsqrt_estimate), rsqrt_estimate), rsqrt_estimate);
+                rsqrt_estimate = vmul_f32(vrsqrts_f32(vmul_f32(src_vec, rsqrt_estimate), rsqrt_estimate), rsqrt_estimate);
+                
+                // Extract the result
+                float32_t rsqrt_val = vget_lane_f32(rsqrt_estimate, 0);
+                float24 rsq_res = float24::FromFloat32(rsqrt_val);
+                
+                // Broadcast to all enabled components
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+
+                    dest[i] = rsq_res;
+                }
+#else
                 float24 rsq_res = float24::FromFloat32(1.0f / std::sqrt(src1[0].ToFloat32()));
                 for (int i = 0; i < 4; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
@@ -494,12 +553,32 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
 
                     dest[i] = rsq_res;
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
             }
 
             case OpCode::Id::MOVA: {
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert the first two components to float32
+                float32x2_t src_f32 = {
+                    src1[0].ToFloat32(),
+                    src1[1].ToFloat32()
+                };
+                
+                // Convert to integers using NEON
+                int32x2_t result_s32 = vcvt_s32_f32(src_f32);
+                
+                // Store results back, respecting component enablement
+                for (int i = 0; i < 2; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+
+                    state.address_registers[i] = vget_lane_s32(result_s32, i);
+                }
+#else
                 for (int i = 0; i < 2; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
                         continue;
@@ -507,6 +586,7 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                     // TODO: Figure out how the rounding is done on hardware
                     state.address_registers[i] = static_cast<s32>(src1[i].ToFloat32());
                 }
+#endif
                 Record<DebugDataRecord::ADDR_REG_OUT>(debug_data, iteration,
                                                       state.address_registers);
                 break;
@@ -515,12 +595,36 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
             case OpCode::Id::MOV: {
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // For MOV, we can use NEON to copy multiple values at once
+                // when all components are enabled
+                bool all_enabled = swizzle.DestComponentEnabled(0) && 
+                                  swizzle.DestComponentEnabled(1) && 
+                                  swizzle.DestComponentEnabled(2) && 
+                                  swizzle.DestComponentEnabled(3);
+                                  
+                if (all_enabled) {
+                    // Use NEON to copy all 4 components at once
+                    // We need to work with raw memory since float24 is a class
+                    memcpy(dest, src1, 4 * sizeof(float24));
+                } else {
+                    // Component-wise copy for partial writes
+                    for (int i = 0; i < 4; ++i) {
+                        if (!swizzle.DestComponentEnabled(i))
+                            continue;
+
+                        dest[i] = src1[i];
+                    }
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
                         continue;
 
                     dest[i] = src1[i];
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
             }
@@ -530,6 +634,39 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::SRC2>(debug_data, iteration, src2);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert float24 to float32 for NEON processing
+                float32x4_t src1_f32 = {
+                    src1[0].ToFloat32(),
+                    src1[1].ToFloat32(),
+                    src1[2].ToFloat32(),
+                    src1[3].ToFloat32()
+                };
+                
+                float32x4_t src2_f32 = {
+                    src2[0].ToFloat32(),
+                    src2[1].ToFloat32(),
+                    src2[2].ToFloat32(),
+                    src2[3].ToFloat32()
+                };
+                
+                // Compare src1 >= src2
+                uint32x4_t cmp_result = vcgeq_f32(src1_f32, src2_f32);
+                
+                // Convert comparison result (all bits set = true, no bits set = false) to 1.0f/0.0f
+                float32x4_t one = vdupq_n_f32(1.0f);
+                float32x4_t zero = vdupq_n_f32(0.0f);
+                float32x4_t result_f32 = vbslq_f32(cmp_result, one, zero);
+                
+                // Store results back, respecting component enablement
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+                        
+                    dest[i] = float24::FromFloat32(vgetq_lane_f32(result_f32, i));
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
                         continue;
@@ -537,6 +674,7 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                     dest[i] = (src1[i] >= src2[i]) ? float24::FromFloat32(1.0f)
                                                    : float24::FromFloat32(0.0f);
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
 
@@ -545,6 +683,39 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::SRC2>(debug_data, iteration, src2);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert float24 to float32 for NEON processing
+                float32x4_t src1_f32 = {
+                    src1[0].ToFloat32(),
+                    src1[1].ToFloat32(),
+                    src1[2].ToFloat32(),
+                    src1[3].ToFloat32()
+                };
+                
+                float32x4_t src2_f32 = {
+                    src2[0].ToFloat32(),
+                    src2[1].ToFloat32(),
+                    src2[2].ToFloat32(),
+                    src2[3].ToFloat32()
+                };
+                
+                // Compare src1 < src2
+                uint32x4_t cmp_result = vcltq_f32(src1_f32, src2_f32);
+                
+                // Convert comparison result (all bits set = true, no bits set = false) to 1.0f/0.0f
+                float32x4_t one = vdupq_n_f32(1.0f);
+                float32x4_t zero = vdupq_n_f32(0.0f);
+                float32x4_t result_f32 = vbslq_f32(cmp_result, one, zero);
+                
+                // Store results back, respecting component enablement
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+                        
+                    dest[i] = float24::FromFloat32(vgetq_lane_f32(result_f32, i));
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     if (!swizzle.DestComponentEnabled(i))
                         continue;
@@ -552,6 +723,7 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                     dest[i] = (src1[i] < src2[i]) ? float24::FromFloat32(1.0f)
                                                   : float24::FromFloat32(0.0f);
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
 
@@ -601,6 +773,50 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
 
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // EX2 only takes first component exp2 and writes it to all dest components
+                // For exp2, we'll use the exp approximation and multiply by log2(e)
+                float32_t src_val = src1[0].ToFloat32();
+                
+                // exp2(x) = exp(x * ln(2))
+                float32_t ln2 = 0.693147180559945f;
+                float32_t exp_input = src_val * ln2;
+                
+                // Use NEON's exp approximation (vexpq_f32 is not available in all NEON implementations)
+                // We'll use a polynomial approximation for better precision
+                float32x2_t x = vdup_n_f32(exp_input);
+                
+                // Calculate exp using a series approximation
+                // exp(x) ≈ 1 + x + x²/2! + x³/3! + x⁴/4!
+                float32x2_t result = vdup_n_f32(1.0f);
+                float32x2_t term = x;
+                result = vadd_f32(result, term);
+                
+                // x²/2!
+                term = vmul_f32(term, x);
+                term = vmul_f32(term, vdup_n_f32(0.5f));
+                result = vadd_f32(result, term);
+                
+                // x³/3!
+                term = vmul_f32(term, x);
+                term = vmul_f32(term, vdup_n_f32(1.0f/6.0f));
+                result = vadd_f32(result, term);
+                
+                // x⁴/4!
+                term = vmul_f32(term, x);
+                term = vmul_f32(term, vdup_n_f32(1.0f/24.0f));
+                result = vadd_f32(result, term);
+                
+                float24 ex2_res = float24::FromFloat32(vget_lane_f32(result, 0));
+                
+                // Broadcast to all enabled components
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+
+                    dest[i] = ex2_res;
+                }
+#else
                 // EX2 only takes first component exp2 and writes it to all dest components
                 float24 ex2_res = float24::FromFloat32(std::exp2(src1[0].ToFloat32()));
                 for (int i = 0; i < 4; ++i) {
@@ -609,7 +825,7 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
 
                     dest[i] = ex2_res;
                 }
-
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
             }
@@ -618,6 +834,59 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                 Record<DebugDataRecord::SRC1>(debug_data, iteration, src1);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
 
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // LG2 only takes the first component log2 and writes it to all dest components
+                float32_t src_val = src1[0].ToFloat32();
+                
+                // For log2, we'll use log(x)/log(2)
+                float32x2_t x = vdup_n_f32(src_val);
+                
+                // Use NEON's log approximation with Newton-Raphson refinement
+                // First get a rough estimate using the log2 of the exponent
+                int32_t bits;
+                memcpy(&bits, &src_val, sizeof(bits));
+                
+                // Extract exponent (bits 23-30) and subtract bias (127)
+                float32_t exponent = ((bits >> 23) & 0xFF) - 127;
+                
+                // Normalize mantissa to [1,2)
+                float32_t mantissa = src_val / std::pow(2.0f, exponent);
+                
+                // Use polynomial approximation for log(mantissa)
+                // log2(x) = log2(mantissa) + exponent
+                // log2(mantissa) = log(mantissa)/log(2)
+                float32x2_t m = vdup_n_f32(mantissa - 1.0f); // center around 0
+                
+                // Polynomial approximation for log(1+x)
+                // log(1+x) ≈ x - x²/2 + x³/3 - x⁴/4 for small x
+                float32x2_t result = m;
+                
+                // -x²/2
+                float32x2_t term = vmul_f32(m, m);
+                term = vmul_f32(term, vdup_n_f32(-0.5f));
+                result = vadd_f32(result, term);
+                
+                // +x³/3
+                term = vmul_f32(term, m);
+                term = vmul_f32(term, vdup_n_f32(-2.0f/3.0f));
+                result = vadd_f32(result, term);
+                
+                // Convert to log2 by dividing by ln(2)
+                result = vmul_f32(result, vdup_n_f32(1.442695040888963f)); // 1/ln(2)
+                
+                // Add exponent to get final log2 value
+                result = vadd_f32(result, vdup_n_f32(exponent));
+                
+                float24 lg2_res = float24::FromFloat32(vget_lane_f32(result, 0));
+                
+                // Broadcast to all enabled components
+                for (int i = 0; i < 4; ++i) {
+                    if (!swizzle.DestComponentEnabled(i))
+                        continue;
+
+                    dest[i] = lg2_res;
+                }
+#else
                 // LG2 only takes the first component log2 and writes it to all dest components
                 float24 lg2_res = float24::FromFloat32(std::log2(src1[0].ToFloat32()));
                 for (int i = 0; i < 4; ++i) {
@@ -626,7 +895,7 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
 
                     dest[i] = lg2_res;
                 }
-
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
                 break;
             }
@@ -713,12 +982,49 @@ static void RunInterpreter(const ShaderSetup& setup, UnitState& state, DebugData
                 Record<DebugDataRecord::SRC2>(debug_data, iteration, src2);
                 Record<DebugDataRecord::SRC3>(debug_data, iteration, src3);
                 Record<DebugDataRecord::DEST_IN>(debug_data, iteration, dest);
+                
+#if defined(__ARM_NEON) && defined(__aarch64__)
+                // Convert float24 to float32 for NEON processing
+                float32x4_t src1_f32 = {
+                    src1[0].ToFloat32(),
+                    src1[1].ToFloat32(),
+                    src1[2].ToFloat32(),
+                    src1[3].ToFloat32()
+                };
+                
+                float32x4_t src2_f32 = {
+                    src2[0].ToFloat32(),
+                    src2[1].ToFloat32(),
+                    src2[2].ToFloat32(),
+                    src2[3].ToFloat32()
+                };
+                
+                float32x4_t src3_f32 = {
+                    src3[0].ToFloat32(),
+                    src3[1].ToFloat32(),
+                    src3[2].ToFloat32(),
+                    src3[3].ToFloat32()
+                };
+                
+                // Perform MAD operation using NEON: src1 * src2 + src3
+                float32x4_t mul_result = vmulq_f32(src1_f32, src2_f32);
+                float32x4_t result_f32 = vaddq_f32(mul_result, src3_f32);
+                
+                // Store results back, respecting component enablement
+                for (int i = 0; i < 4; ++i) {
+                    if (!mad_swizzle.DestComponentEnabled(i))
+                        continue;
+                        
+                    dest[i] = float24::FromFloat32(vgetq_lane_f32(result_f32, i));
+                }
+#else
                 for (int i = 0; i < 4; ++i) {
                     if (!mad_swizzle.DestComponentEnabled(i))
                         continue;
 
                     dest[i] = src1[i] * src2[i] + src3[i];
                 }
+#endif
                 Record<DebugDataRecord::DEST_OUT>(debug_data, iteration, dest);
             } else {
                 LOG_ERROR(HW_GPU, "Unhandled multiply-add instruction: 0x{:02x} ({}): 0x{:08x}",
