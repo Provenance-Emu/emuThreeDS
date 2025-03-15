@@ -5,8 +5,10 @@
 #pragma once
 
 #include "common/vector_math.h"
+#include "video_core/geometry_culling.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/regs_texturing.h"
+#include "video_core/regs_rasterizer.h"
 #include "video_core/shader/shader_uniforms.h"
 
 namespace Memory {
@@ -30,6 +32,22 @@ public:
     void SyncEntireState() override;
 
 protected:
+    /// Structure to hold culling state information
+    struct CullingState {
+        Pica::CullingFrustumPlanes frustum;  // Frustum planes for culling
+        bool dirty{true};                    // Flag to indicate if culling state needs update
+        Pica::RasterizerRegs::CullMode cull_mode{Pica::RasterizerRegs::CullMode::KeepAll}; // Current culling mode
+        
+        // Statistics for culling
+        struct {
+            u32 triangles_drawn{0};      // Total triangles drawn
+            u32 triangles_culled{0};     // Triangles culled by frustum culling
+            u32 triangles_backface{0};   // Triangles culled by backface culling
+        } stats;
+    };
+    
+    CullingState culling_state;
+    
     /// Sync fixed-function pipeline state
     virtual void SyncFixedState() = 0;
 
@@ -140,6 +158,25 @@ protected:
     VertexArrayInfo AnalyzeVertexArray(bool is_indexed, u32 stride_alignment = 1);
 
 protected:
+    // Frustum culling state
+    Pica::CullingFrustumPlanes current_frustum;
+    bool frustum_dirty = true;
+    
+    // View matrix for backface culling
+    Common::Vec3<float> camera_position{0.0f, 0.0f, 0.0f};
+    bool camera_dirty = true;
+    
+    // Culling statistics for performance monitoring
+    struct CullingStats {
+        u32 triangles_submitted = 0;
+        u32 triangles_rejected = 0;
+        
+        void Reset() {
+            triangles_submitted = 0;
+            triangles_rejected = 0;
+        }
+    } culling_stats;
+    
     Memory::MemorySystem& memory;
     Pica::Regs& regs;
 
