@@ -18,11 +18,6 @@
     Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-// Use ARM NEON intrinsics for ARM64 platforms
-#if defined(__ARM_NEON) || defined(__aarch64__)
-#include <arm_neon.h>
-#endif
-
 /*
  * This code is derived in part from :
  * - Android kernel
@@ -845,30 +840,6 @@ static u32 vfp_single_add(struct vfp_single* vsd, struct vfp_single* vsn, struct
     /*
      * If the signs are different, we are really subtracting.
      */
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON for faster addition/subtraction
-    if (vsn->sign ^ vsm->sign) {
-        // Subtraction case
-        uint32x2_t v_vsn_sig = vdup_n_u32(vsn->significand);
-        uint32x2_t v_m_sig = vdup_n_u32(m_sig);
-        uint32x2_t v_result = vsub_u32(v_vsn_sig, v_m_sig);
-        m_sig = vget_lane_u32(v_result, 0);
-        
-        if ((s32)m_sig < 0) {
-            vsd->sign = vfp_sign_negate(vsd->sign);
-            m_sig = (~m_sig + 1);
-        } else if (m_sig == 0) {
-            vsd->sign = (fpscr & FPSCR_RMODE_MASK) == FPSCR_ROUND_MINUSINF ? 0x8000 : 0;
-        }
-    } else {
-        // Addition case
-        uint32x2_t v_vsn_sig = vdup_n_u32(vsn->significand);
-        uint32x2_t v_m_sig = vdup_n_u32(m_sig);
-        uint32x2_t v_result = vadd_u32(v_vsn_sig, v_m_sig);
-        m_sig = vget_lane_u32(v_result, 0);
-    }
-#else
-    // Original implementation for non-ARM platforms
     if (vsn->sign ^ vsm->sign) {
         m_sig = vsn->significand - m_sig;
         if ((s32)m_sig < 0) {
@@ -880,7 +851,6 @@ static u32 vfp_single_add(struct vfp_single* vsd, struct vfp_single* vsn, struct
     } else {
         m_sig = vsn->significand + m_sig;
     }
-#endif
     vsd->significand = m_sig;
 
     return 0;
@@ -934,23 +904,7 @@ static u32 vfp_single_multiply(struct vfp_single* vsd, struct vfp_single* vsn,
      * input operand.
      */
     vsd->exponent = vsn->exponent + vsm->exponent - 127 + 2;
-    
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON for faster multiplication
-    // Convert to 64-bit values for multiplication
-    uint32x2_t v_vsn_sig = vdup_n_u32(vsn->significand);
-    uint32x2_t v_vsm_sig = vdup_n_u32(vsm->significand);
-    
-    // Use NEON's 32x32->64 multiplication
-    uint64x2_t v_result = vmull_u32(v_vsn_sig, v_vsm_sig);
-    
-    // Extract the high 32 bits with jamming (OR of low bits into LSB)
-    uint64_t result = vgetq_lane_u64(v_result, 0);
-    vsd->significand = (u32)(result >> 32) | ((result & 0xFFFFFFFF) ? 1 : 0);
-#else
-    // Original implementation for non-ARM platforms
     vsd->significand = vfp_hi64to32jamming((u64)vsn->significand * vsm->significand);
-#endif
 
     vfp_single_dump("VSD", vsd);
     return 0;
@@ -1149,60 +1103,39 @@ static u32 vfp_single_fdiv(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
     /*
      * Is n a NAN?
      */
-    if (tn & VFP_NAN) {
-        exceptions |= vfp_propagate_nan(&vsd, &vsn, &vsm, fpscr);
-        vfp_put_float(state, vfp_single_pack(&vsd), sd);
-        return exceptions;
-    }
+    if (tn & VFP_NAN)
+        goto vsn_nan;
 
     /*
      * Is m a NAN?
      */
-    if (tm & VFP_NAN) {
-        exceptions |= vfp_propagate_nan(&vsd, &vsm, &vsn, fpscr);
-        vfp_put_float(state, vfp_single_pack(&vsd), sd);
-        return exceptions;
-    }
+    if (tm & VFP_NAN)
+        goto vsm_nan;
 
     /*
      * If n and m are infinity, the result is invalid
      * If n and m are zero, the result is invalid
      */
-    if (tm & tn & (VFP_INFINITY | VFP_ZERO)) {
-        vfp_put_float(state, vfp_single_pack(&vfp_single_default_qnan), sd);
-        return FPSCR_IOC;
-    }
+    if (tm & tn & (VFP_INFINITY | VFP_ZERO))
+        goto invalid;
 
     /*
      * If n is infinity, the result is infinity
      */
-    if (tn & VFP_INFINITY) {
-        vsd.exponent = 255;
-        vsd.significand = 0;
-        vfp_put_float(state, vfp_single_pack(&vsd), sd);
-        return exceptions;
-    }
+    if (tn & VFP_INFINITY)
+        goto infinity;
 
     /*
      * If m is zero, raise div0 exception
      */
-    if (tm & VFP_ZERO) {
-        exceptions |= FPSCR_DZC;
-        vsd.exponent = 255;
-        vsd.significand = 0;
-        vfp_put_float(state, vfp_single_pack(&vsd), sd);
-        return exceptions;
-    }
+    if (tm & VFP_ZERO)
+        goto divzero;
 
     /*
      * If m is infinity, or n is zero, the result is zero
      */
-    if (tm & VFP_INFINITY || tn & VFP_ZERO) {
-        vsd.exponent = 0;
-        vsd.significand = 0;
-        vfp_put_float(state, vfp_single_pack(&vsd), sd);
-        return exceptions;
-    }
+    if (tm & VFP_INFINITY || tn & VFP_ZERO)
+        goto zero;
 
     if (tn & VFP_DENORMAL)
         vfp_single_normalise_denormal(&vsn);
@@ -1218,54 +1151,41 @@ static u32 vfp_single_fdiv(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
         vsn.significand >>= 1;
         vsd.exponent++;
     }
-    
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON for faster division approximation
-    // Note: ARM NEON doesn't have direct division instructions, but we can use
-    // reciprocal approximation and multiplication for better performance
-    
-    // First, convert to float for reciprocal approximation
-    float32x2_t v_vsm_sig_f = vcvt_f32_u32(vdup_n_u32(vsm.significand));
-    
-    // Compute reciprocal approximation
-    float32x2_t v_recip = vrecpe_f32(v_vsm_sig_f);
-    
-    // Refine the approximation (Newton-Raphson iteration)
-    v_recip = vmul_f32(v_recip, vrecps_f32(v_vsm_sig_f, v_recip));
-    v_recip = vmul_f32(v_recip, vrecps_f32(v_vsm_sig_f, v_recip));
-    
-    // Convert numerator to float and multiply by reciprocal
-    float32x2_t v_vsn_sig_f = vcvt_f32_u32(vdup_n_u32((u64)vsn.significand << 32 >> 32));
-    float32x2_t v_result_f = vmul_f32(v_vsn_sig_f, v_recip);
-    
-    // Convert back to fixed-point representation
-    uint32x2_t v_result = vcvt_u32_f32(v_result_f);
-    vsd.significand = vget_lane_u32(v_result, 0);
-    
-    // Check for precision issues and correct if needed
-    u64 check_product = (u64)vsm.significand * vsd.significand;
-    u64 expected = (u64)vsn.significand << 32;
-    if (check_product != expected) {
-        // Make small adjustment to ensure correct rounding
-        if (check_product < expected) {
-            vsd.significand += 1;
-        } else if (check_product > expected) {
-            vsd.significand -= 1;
-        }
-    }
-#else
-    // Original implementation for non-ARM platforms
     {
         u64 significand = (u64)vsn.significand << 32;
         do_div(significand, vsm.significand);
         vsd.significand = (u32)significand;
     }
-#endif
-
     if ((vsd.significand & 0x3f) == 0)
         vsd.significand |= ((u64)vsm.significand * vsd.significand != (u64)vsn.significand << 32);
 
     return vfp_single_normaliseround(state, sd, &vsd, fpscr, 0, "fdiv");
+
+vsn_nan:
+    exceptions |= vfp_propagate_nan(&vsd, &vsn, &vsm, fpscr);
+pack:
+    vfp_put_float(state, vfp_single_pack(&vsd), sd);
+    return exceptions;
+
+vsm_nan:
+    exceptions |= vfp_propagate_nan(&vsd, &vsm, &vsn, fpscr);
+    goto pack;
+
+zero:
+    vsd.exponent = 0;
+    vsd.significand = 0;
+    goto pack;
+
+divzero:
+    exceptions |= FPSCR_DZC;
+infinity:
+    vsd.exponent = 255;
+    vsd.significand = 0;
+    goto pack;
+
+invalid:
+    vfp_put_float(state, vfp_single_pack(&vfp_single_default_qnan), sd);
+    return FPSCR_IOC;
 }
 
 static struct op fops[] = {
