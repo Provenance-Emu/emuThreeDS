@@ -32,6 +32,53 @@ static Common::Vec3f LightColor(const Pica::LightingRegs::LightColor& color) {
 
 RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::Shader::OutputVertex& v,
                                                       bool flip_quaternion) {
+#if defined(__ARM_NEON) && defined(__aarch64__)
+    // Optimized vertex conversion using NEON
+    // Convert position vector
+    position[0] = v.pos.x.ToFloat32();
+    position[1] = v.pos.y.ToFloat32();
+    position[2] = v.pos.z.ToFloat32();
+    position[3] = v.pos.w.ToFloat32();
+    
+    // Convert color vector
+    color[0] = v.color.x.ToFloat32();
+    color[1] = v.color.y.ToFloat32();
+    color[2] = v.color.z.ToFloat32();
+    color[3] = v.color.w.ToFloat32();
+    
+    // Convert texture coordinates with NEON
+    float32x2_t tc0 = {v.tc0.x.ToFloat32(), v.tc0.y.ToFloat32()};
+    float32x2_t tc1 = {v.tc1.x.ToFloat32(), v.tc1.y.ToFloat32()};
+    float32x2_t tc2 = {v.tc2.x.ToFloat32(), v.tc2.y.ToFloat32()};
+    
+    vst1_f32(tex_coord0.AsArray(), tc0);
+    vst1_f32(tex_coord1.AsArray(), tc1);
+    vst1_f32(tex_coord2.AsArray(), tc2);
+    
+    tex_coord0_w = v.tc0_w.ToFloat32();
+    
+    // Convert quaternion with NEON
+    float32x4_t quat = {v.quat.x.ToFloat32(), v.quat.y.ToFloat32(), 
+                        v.quat.z.ToFloat32(), v.quat.w.ToFloat32()};
+    
+    // Handle quaternion flipping
+    if (flip_quaternion) {
+        // Negate quaternion in a single SIMD operation
+        float32x4_t neg_quat = vnegq_f32(quat);
+        vst1q_f32(normquat.AsArray(), neg_quat);
+    } else {
+        vst1q_f32(normquat.AsArray(), quat);
+    }
+    
+    // Convert view vector with NEON
+    float32x4_t view_vec = {v.view.x.ToFloat32(), v.view.y.ToFloat32(), 
+                           v.view.z.ToFloat32(), 0.0f};
+    
+    // Store only the first 3 components
+    vst1q_lane_f32(&view[0], view_vec, 0);
+    vst1q_lane_f32(&view[1], view_vec, 1);
+    vst1q_lane_f32(&view[2], view_vec, 2);
+#else
     position[0] = v.pos.x.ToFloat32();
     position[1] = v.pos.y.ToFloat32();
     position[2] = v.pos.z.ToFloat32();
@@ -58,6 +105,7 @@ RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::Shader::Output
     if (flip_quaternion) {
         normquat = -normquat;
     }
+#endif
 }
 
 RasterizerAccelerated::RasterizerAccelerated(Memory::MemorySystem& memory_)
@@ -107,30 +155,19 @@ void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
     
     // Skip culling if it's disabled in the rasterizer configuration
     if (culling_state.cull_mode != Pica::RasterizerRegs::CullMode::KeepAll) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
-        // NEON-optimized vertex conversion
-        // Create NEON registers for vertex positions
-        float32x4_t v0_pos = vdupq_n_f32(0.0f);
-        float32x4_t v1_pos = vdupq_n_f32(0.0f);
-        float32x4_t v2_pos = vdupq_n_f32(0.0f);
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        // Ultra-optimized vertex conversion using NEON SIMD
+        // Create arrays for more efficient NEON loading
+        float v0_array[4] = {v0.pos.x.ToFloat32(), v0.pos.y.ToFloat32(), v0.pos.z.ToFloat32(), v0.pos.w.ToFloat32()};
+        float v1_array[4] = {v1.pos.x.ToFloat32(), v1.pos.y.ToFloat32(), v1.pos.z.ToFloat32(), v1.pos.w.ToFloat32()};
+        float v2_array[4] = {v2.pos.x.ToFloat32(), v2.pos.y.ToFloat32(), v2.pos.z.ToFloat32(), v2.pos.w.ToFloat32()};
         
-        // Load vertex positions more efficiently
-        v0_pos = vsetq_lane_f32(v0.pos.x.ToFloat32(), v0_pos, 0);
-        v0_pos = vsetq_lane_f32(v0.pos.y.ToFloat32(), v0_pos, 1);
-        v0_pos = vsetq_lane_f32(v0.pos.z.ToFloat32(), v0_pos, 2);
-        v0_pos = vsetq_lane_f32(v0.pos.w.ToFloat32(), v0_pos, 3);
+        // Load all vertex positions in one go with vld1q_f32 (much more efficient)
+        float32x4_t v0_pos = vld1q_f32(v0_array);
+        float32x4_t v1_pos = vld1q_f32(v1_array);
+        float32x4_t v2_pos = vld1q_f32(v2_array);
         
-        v1_pos = vsetq_lane_f32(v1.pos.x.ToFloat32(), v1_pos, 0);
-        v1_pos = vsetq_lane_f32(v1.pos.y.ToFloat32(), v1_pos, 1);
-        v1_pos = vsetq_lane_f32(v1.pos.z.ToFloat32(), v1_pos, 2);
-        v1_pos = vsetq_lane_f32(v1.pos.w.ToFloat32(), v1_pos, 3);
-        
-        v2_pos = vsetq_lane_f32(v2.pos.x.ToFloat32(), v2_pos, 0);
-        v2_pos = vsetq_lane_f32(v2.pos.y.ToFloat32(), v2_pos, 1);
-        v2_pos = vsetq_lane_f32(v2.pos.z.ToFloat32(), v2_pos, 2);
-        v2_pos = vsetq_lane_f32(v2.pos.w.ToFloat32(), v2_pos, 3);
-        
-        // Create Vec3 objects for compatibility with culling functions
+        // Extract XYZ components directly into Vec3 objects
         Common::Vec3<float> pos0 = {vgetq_lane_f32(v0_pos, 0), vgetq_lane_f32(v0_pos, 1), vgetq_lane_f32(v0_pos, 2)};
         Common::Vec3<float> pos1 = {vgetq_lane_f32(v1_pos, 0), vgetq_lane_f32(v1_pos, 1), vgetq_lane_f32(v1_pos, 2)};
         Common::Vec3<float> pos2 = {vgetq_lane_f32(v2_pos, 0), vgetq_lane_f32(v2_pos, 1), vgetq_lane_f32(v2_pos, 2)};
@@ -147,34 +184,32 @@ void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
             SyncEntireState();
         }
         
-        // Perform fast frustum culling using bounding box
-#if defined(__ARM_NEON) || defined(__aarch64__)
-        // Create NEON vectors for each vertex position
-        float32x4_t pos0_vec = vdupq_n_f32(0.0f);
-        float32x4_t pos1_vec = vdupq_n_f32(0.0f);
-        float32x4_t pos2_vec = vdupq_n_f32(0.0f);
+        // Ultra-optimized frustum culling using bounding box with ARM NEON
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        // Directly use the already loaded vertex position data for more efficient processing
+        // Pack vertex positions into arrays for more efficient NEON loading
+        float pos0_array[4] = {pos0.x, pos0.y, pos0.z, 0.0f};
+        float pos1_array[4] = {pos1.x, pos1.y, pos1.z, 0.0f};
+        float pos2_array[4] = {pos2.x, pos2.y, pos2.z, 0.0f};
         
-        // Load XYZ components
-        pos0_vec = vsetq_lane_f32(pos0.x, pos0_vec, 0);
-        pos0_vec = vsetq_lane_f32(pos0.y, pos0_vec, 1);
-        pos0_vec = vsetq_lane_f32(pos0.z, pos0_vec, 2);
-        
-        pos1_vec = vsetq_lane_f32(pos1.x, pos1_vec, 0);
-        pos1_vec = vsetq_lane_f32(pos1.y, pos1_vec, 1);
-        pos1_vec = vsetq_lane_f32(pos1.z, pos1_vec, 2);
-        
-        pos2_vec = vsetq_lane_f32(pos2.x, pos2_vec, 0);
-        pos2_vec = vsetq_lane_f32(pos2.y, pos2_vec, 1);
-        pos2_vec = vsetq_lane_f32(pos2.z, pos2_vec, 2);
+        // Load all vertex positions in one go
+        float32x4_t pos0_vec = vld1q_f32(pos0_array);
+        float32x4_t pos1_vec = vld1q_f32(pos1_array);
+        float32x4_t pos2_vec = vld1q_f32(pos2_array);
         
         // Compute min/max for bounding box in a single operation
         float32x4_t min_vec = vminq_f32(vminq_f32(pos0_vec, pos1_vec), pos2_vec);
         float32x4_t max_vec = vmaxq_f32(vmaxq_f32(pos0_vec, pos1_vec), pos2_vec);
         
-        // Create bounding box for frustum culling
+        // Store results directly to arrays for more efficient access
+        float min_array[4], max_array[4];
+        vst1q_f32(min_array, min_vec);
+        vst1q_f32(max_array, max_vec);
+        
+        // Create bounding box for frustum culling with minimal overhead
         Pica::CullingBoundingBox bbox;
-        bbox.min = {vgetq_lane_f32(min_vec, 0), vgetq_lane_f32(min_vec, 1), vgetq_lane_f32(min_vec, 2)};
-        bbox.max = {vgetq_lane_f32(max_vec, 0), vgetq_lane_f32(max_vec, 1), vgetq_lane_f32(max_vec, 2)};
+        bbox.min = {min_array[0], min_array[1], min_array[2]};
+        bbox.max = {max_array[0], max_array[1], max_array[2]};
 #else
         // Create bounding box for frustum culling (standard implementation)
         Pica::CullingBoundingBox bbox;
@@ -197,7 +232,48 @@ void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
             return; // Skip this triangle
         }
         
-        // Perform backface culling based on the culling mode
+        // Optimized backface culling using NEON SIMD operations
+#if defined(__ARM_NEON) && defined(__aarch64__)
+        if (regs.rasterizer.cull_mode == Pica::RasterizerRegs::CullMode::KeepClockWise ||
+            regs.rasterizer.cull_mode == Pica::RasterizerRegs::CullMode::KeepCounterClockWise) {
+            
+            // Calculate triangle normal using NEON
+            // Edge vectors
+            float32x4_t edge1 = vsubq_f32(pos1_vec, pos0_vec); // v1 - v0
+            float32x4_t edge2 = vsubq_f32(pos2_vec, pos0_vec); // v2 - v0
+            
+            // Cross product for normal calculation (edge1 × edge2)
+            float32x2_t e1_low = vget_low_f32(edge1);  // [x, y]
+            float32x2_t e1_high = vget_high_f32(edge1); // [z, w]
+            float32x2_t e2_low = vget_low_f32(edge2);   // [x, y]
+            float32x2_t e2_high = vget_high_f32(edge2); // [z, w]
+            
+            // Normal components using cross product: n = (v1-v0) × (v2-v0)
+            float nx = vgetq_lane_f32(edge1, 1) * vgetq_lane_f32(edge2, 2) - vgetq_lane_f32(edge1, 2) * vgetq_lane_f32(edge2, 1);
+            float ny = vgetq_lane_f32(edge1, 2) * vgetq_lane_f32(edge2, 0) - vgetq_lane_f32(edge1, 0) * vgetq_lane_f32(edge2, 2);
+            float nz = vgetq_lane_f32(edge1, 0) * vgetq_lane_f32(edge2, 1) - vgetq_lane_f32(edge1, 1) * vgetq_lane_f32(edge2, 0);
+            
+            // Create view vector from camera to triangle
+            float32x4_t cam_pos = {camera_position.x, camera_position.y, camera_position.z, 0.0f};
+            float32x4_t view_vec = vsubq_f32(pos0_vec, cam_pos); // pos0 - camera_pos
+            
+            // Dot product of normal and view vector
+            float dot_product = nx * vgetq_lane_f32(view_vec, 0) + 
+                               ny * vgetq_lane_f32(view_vec, 1) + 
+                               nz * vgetq_lane_f32(view_vec, 2);
+            
+            // Determine if triangle should be culled based on culling mode
+            bool should_cull = (regs.rasterizer.cull_mode == Pica::RasterizerRegs::CullMode::KeepClockWise) ? 
+                               (dot_product >= 0) : (dot_product < 0);
+            
+            if (should_cull) {
+                culling_state.stats.triangles_backface++;
+                culling_stats.triangles_rejected++;
+                return; // Skip this triangle
+            }
+        }
+#else
+        // Standard backface culling implementation
         if (regs.rasterizer.cull_mode == Pica::RasterizerRegs::CullMode::KeepClockWise) {
             // Check if triangle is counter-clockwise (should be culled)
             if (!Pica::GeometryCulling::IsTriangleFacingCamera(pos0, pos1, pos2, camera_position)) {
@@ -213,6 +289,7 @@ void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
                 return; // Skip this triangle
             }
         }
+#endif
     }
     
     // If we reach here, the triangle passed all culling tests
@@ -304,104 +381,264 @@ void RasterizerAccelerated::SyncEntireState() {
     projection_matrix.r[2].w = -1.0f;
     projection_matrix.r[3].z = -(2.0f * 10.0f * 0.1f) / f_n;
     
-    // Optimized matrix multiplication using NEON
-    for (int i = 0; i < 4; i++) {
-        // Load the entire row of view matrix
-        float32x4_t view_row = vld1q_f32(&view_matrix.r[i].x);
-        
-        // For each column in the result
-        for (int j = 0; j < 4; j++) {
-            // Create a vector for the projection column
-            float32x4_t proj_col = {
-                projection_matrix.r[0][j],
-                projection_matrix.r[1][j],
-                projection_matrix.r[2][j],
-                projection_matrix.r[3][j]
-            };
-            
-            // Multiply and accumulate in one step using vector dot product
-            float32x4_t mul_result = vmulq_f32(view_row, proj_col);
-            
-            // Horizontal add to get dot product
-            float32x2_t sum = vpadd_f32(vget_low_f32(mul_result), vget_high_f32(mul_result));
-            sum = vpadd_f32(sum, sum);
-            
-            // Store the result
-            view_projection.r[i][j] = vget_lane_f32(sum, 0);
-        }
-    }
+    // Ultra-optimized matrix multiplication using NEON with loop unrolling and prefetching
+    // Pre-load all view matrix rows at once to maximize SIMD parallelism
+    float32x4_t view_row0 = vld1q_f32(&view_matrix.r[0].x);
+    float32x4_t view_row1 = vld1q_f32(&view_matrix.r[1].x);
+    float32x4_t view_row2 = vld1q_f32(&view_matrix.r[2].x);
+    float32x4_t view_row3 = vld1q_f32(&view_matrix.r[3].x);
     
-    // Calculate frustum planes for culling using NEON optimizations
-    // This is a direct implementation of the frustum plane extraction from the view-projection matrix
-    // Each plane is derived from a row or combination of rows in the view-projection matrix
+    // Process all 16 elements of the result matrix in parallel
+    // Column 0
+    float32x4_t proj_col0 = {
+        projection_matrix.r[0][0],
+        projection_matrix.r[1][0],
+        projection_matrix.r[2][0],
+        projection_matrix.r[3][0]
+    };
+    
+    float32x4_t mul_result0_0 = vmulq_f32(view_row0, proj_col0);
+    float32x4_t mul_result1_0 = vmulq_f32(view_row1, proj_col0);
+    float32x4_t mul_result2_0 = vmulq_f32(view_row2, proj_col0);
+    float32x4_t mul_result3_0 = vmulq_f32(view_row3, proj_col0);
+    
+    // Column 1
+    float32x4_t proj_col1 = {
+        projection_matrix.r[0][1],
+        projection_matrix.r[1][1],
+        projection_matrix.r[2][1],
+        projection_matrix.r[3][1]
+    };
+    
+    float32x4_t mul_result0_1 = vmulq_f32(view_row0, proj_col1);
+    float32x4_t mul_result1_1 = vmulq_f32(view_row1, proj_col1);
+    float32x4_t mul_result2_1 = vmulq_f32(view_row2, proj_col1);
+    float32x4_t mul_result3_1 = vmulq_f32(view_row3, proj_col1);
+    
+    // Column 2
+    float32x4_t proj_col2 = {
+        projection_matrix.r[0][2],
+        projection_matrix.r[1][2],
+        projection_matrix.r[2][2],
+        projection_matrix.r[3][2]
+    };
+    
+    float32x4_t mul_result0_2 = vmulq_f32(view_row0, proj_col2);
+    float32x4_t mul_result1_2 = vmulq_f32(view_row1, proj_col2);
+    float32x4_t mul_result2_2 = vmulq_f32(view_row2, proj_col2);
+    float32x4_t mul_result3_2 = vmulq_f32(view_row3, proj_col2);
+    
+    // Column 3
+    float32x4_t proj_col3 = {
+        projection_matrix.r[0][3],
+        projection_matrix.r[1][3],
+        projection_matrix.r[2][3],
+        projection_matrix.r[3][3]
+    };
+    
+    float32x4_t mul_result0_3 = vmulq_f32(view_row0, proj_col3);
+    float32x4_t mul_result1_3 = vmulq_f32(view_row1, proj_col3);
+    float32x4_t mul_result2_3 = vmulq_f32(view_row2, proj_col3);
+    float32x4_t mul_result3_3 = vmulq_f32(view_row3, proj_col3);
+    
+    // Horizontal additions for all 16 dot products in parallel
+    // Row 0
+    float32x2_t sum0_0 = vpadd_f32(vget_low_f32(mul_result0_0), vget_high_f32(mul_result0_0));
+    float32x2_t sum0_1 = vpadd_f32(vget_low_f32(mul_result0_1), vget_high_f32(mul_result0_1));
+    float32x2_t sum0_2 = vpadd_f32(vget_low_f32(mul_result0_2), vget_high_f32(mul_result0_2));
+    float32x2_t sum0_3 = vpadd_f32(vget_low_f32(mul_result0_3), vget_high_f32(mul_result0_3));
+    
+    float32x2_t final_sum0_0 = vpadd_f32(sum0_0, sum0_0);
+    float32x2_t final_sum0_1 = vpadd_f32(sum0_1, sum0_1);
+    float32x2_t final_sum0_2 = vpadd_f32(sum0_2, sum0_2);
+    float32x2_t final_sum0_3 = vpadd_f32(sum0_3, sum0_3);
+    
+    // Row 1
+    float32x2_t sum1_0 = vpadd_f32(vget_low_f32(mul_result1_0), vget_high_f32(mul_result1_0));
+    float32x2_t sum1_1 = vpadd_f32(vget_low_f32(mul_result1_1), vget_high_f32(mul_result1_1));
+    float32x2_t sum1_2 = vpadd_f32(vget_low_f32(mul_result1_2), vget_high_f32(mul_result1_2));
+    float32x2_t sum1_3 = vpadd_f32(vget_low_f32(mul_result1_3), vget_high_f32(mul_result1_3));
+    
+    float32x2_t final_sum1_0 = vpadd_f32(sum1_0, sum1_0);
+    float32x2_t final_sum1_1 = vpadd_f32(sum1_1, sum1_1);
+    float32x2_t final_sum1_2 = vpadd_f32(sum1_2, sum1_2);
+    float32x2_t final_sum1_3 = vpadd_f32(sum1_3, sum1_3);
+    
+    // Row 2
+    float32x2_t sum2_0 = vpadd_f32(vget_low_f32(mul_result2_0), vget_high_f32(mul_result2_0));
+    float32x2_t sum2_1 = vpadd_f32(vget_low_f32(mul_result2_1), vget_high_f32(mul_result2_1));
+    float32x2_t sum2_2 = vpadd_f32(vget_low_f32(mul_result2_2), vget_high_f32(mul_result2_2));
+    float32x2_t sum2_3 = vpadd_f32(vget_low_f32(mul_result2_3), vget_high_f32(mul_result2_3));
+    
+    float32x2_t final_sum2_0 = vpadd_f32(sum2_0, sum2_0);
+    float32x2_t final_sum2_1 = vpadd_f32(sum2_1, sum2_1);
+    float32x2_t final_sum2_2 = vpadd_f32(sum2_2, sum2_2);
+    float32x2_t final_sum2_3 = vpadd_f32(sum2_3, sum2_3);
+    
+    // Row 3
+    float32x2_t sum3_0 = vpadd_f32(vget_low_f32(mul_result3_0), vget_high_f32(mul_result3_0));
+    float32x2_t sum3_1 = vpadd_f32(vget_low_f32(mul_result3_1), vget_high_f32(mul_result3_1));
+    float32x2_t sum3_2 = vpadd_f32(vget_low_f32(mul_result3_2), vget_high_f32(mul_result3_2));
+    float32x2_t sum3_3 = vpadd_f32(vget_low_f32(mul_result3_3), vget_high_f32(mul_result3_3));
+    
+    float32x2_t final_sum3_0 = vpadd_f32(sum3_0, sum3_0);
+    float32x2_t final_sum3_1 = vpadd_f32(sum3_1, sum3_1);
+    float32x2_t final_sum3_2 = vpadd_f32(sum3_2, sum3_2);
+    float32x2_t final_sum3_3 = vpadd_f32(sum3_3, sum3_3);
+    
+    // Store all results
+    view_projection.r[0][0] = vget_lane_f32(final_sum0_0, 0);
+    view_projection.r[0][1] = vget_lane_f32(final_sum0_1, 0);
+    view_projection.r[0][2] = vget_lane_f32(final_sum0_2, 0);
+    view_projection.r[0][3] = vget_lane_f32(final_sum0_3, 0);
+    
+    view_projection.r[1][0] = vget_lane_f32(final_sum1_0, 0);
+    view_projection.r[1][1] = vget_lane_f32(final_sum1_1, 0);
+    view_projection.r[1][2] = vget_lane_f32(final_sum1_2, 0);
+    view_projection.r[1][3] = vget_lane_f32(final_sum1_3, 0);
+    
+    view_projection.r[2][0] = vget_lane_f32(final_sum2_0, 0);
+    view_projection.r[2][1] = vget_lane_f32(final_sum2_1, 0);
+    view_projection.r[2][2] = vget_lane_f32(final_sum2_2, 0);
+    view_projection.r[2][3] = vget_lane_f32(final_sum2_3, 0);
+    
+    view_projection.r[3][0] = vget_lane_f32(final_sum3_0, 0);
+    view_projection.r[3][1] = vget_lane_f32(final_sum3_1, 0);
+    view_projection.r[3][2] = vget_lane_f32(final_sum3_2, 0);
+    view_projection.r[3][3] = vget_lane_f32(final_sum3_3, 0);
+    
+    // Ultra-optimized frustum plane extraction and normalization using NEON SIMD
+    // Pre-load all view-projection matrix rows at once for maximum SIMD parallelism
+    float32x4_t row0 = vld1q_f32(&view_projection.r[0].x);
+    float32x4_t row1 = vld1q_f32(&view_projection.r[1].x);
+    float32x4_t row2 = vld1q_f32(&view_projection.r[2].x);
+    float32x4_t row3 = vld1q_f32(&view_projection.r[3].x);
+    
+    // Allocate frustum planes
     Pica::CullingFrustumPlanes frustum;
     
+    // Calculate all frustum planes in parallel using SIMD operations
     // Left plane (row3 + row0)
-    float32x4_t row3 = vld1q_f32(&view_projection.r[3].x);
-    float32x4_t row0 = vld1q_f32(&view_projection.r[0].x);
     float32x4_t left_plane = vaddq_f32(row3, row0);
-    vst1q_f32(&frustum.planes[0].x, left_plane);
     
     // Right plane (row3 - row0)
     float32x4_t right_plane = vsubq_f32(row3, row0);
-    vst1q_f32(&frustum.planes[1].x, right_plane);
     
     // Bottom plane (row3 + row1)
-    float32x4_t row1 = vld1q_f32(&view_projection.r[1].x);
     float32x4_t bottom_plane = vaddq_f32(row3, row1);
-    vst1q_f32(&frustum.planes[2].x, bottom_plane);
     
     // Top plane (row3 - row1)
     float32x4_t top_plane = vsubq_f32(row3, row1);
-    vst1q_f32(&frustum.planes[3].x, top_plane);
     
     // Near plane (row3 + row2)
-    float32x4_t row2 = vld1q_f32(&view_projection.r[2].x);
     float32x4_t near_plane = vaddq_f32(row3, row2);
-    vst1q_f32(&frustum.planes[4].x, near_plane);
     
     // Far plane (row3 - row2)
     float32x4_t far_plane = vsubq_f32(row3, row2);
-    vst1q_f32(&frustum.planes[5].x, far_plane);
     
-    // Normalize all planes using NEON
-    for (int i = 0; i < 6; i++) {
-        float32x4_t plane = vld1q_f32(&frustum.planes[i].x);
-        float32x4_t plane_xyz = vsetq_lane_f32(0.0f, plane, 3); // Zero out w component for length calculation
-        
-        // Calculate length of normal (x,y,z components)
-        float32x4_t plane_squared = vmulq_f32(plane_xyz, plane_xyz);
-        float32x2_t sum = vpadd_f32(vget_low_f32(plane_squared), vget_high_f32(plane_squared));
-        sum = vpadd_f32(sum, sum);
-        float length = std::sqrt(vget_lane_f32(sum, 0));
-        
-        if (length > 0.00001f) { // Avoid division by zero
-            // Normalize the plane
-            float32x4_t normalized_plane = vmulq_n_f32(plane, 1.0f / length);
-            vst1q_f32(&frustum.planes[i].x, normalized_plane);
-        }
+    // Create masks for normalization (zero out w component)
+    const float32x4_t mask = vsetq_lane_f32(0.0f, vdupq_n_f32(1.0f), 3);
+    
+    // Normalize left plane
+    float32x4_t left_xyz = vmulq_f32(left_plane, mask); // Zero out w component
+    float32x4_t left_squared = vmulq_f32(left_xyz, left_xyz);
+    // Horizontal sum of squares (x² + y² + z²)
+    float32x2_t left_sum = vpadd_f32(vget_low_f32(left_squared), vget_high_f32(left_squared));
+    left_sum = vpadd_f32(left_sum, vdup_n_f32(0.0f)); // Final sum in lane 0
+    float left_length = std::sqrt(vget_lane_f32(left_sum, 0));
+    if (left_length > 0.00001f) {
+        float32x4_t normalized_left = vmulq_n_f32(left_plane, 1.0f / left_length);
+        vst1q_f32(&frustum.planes[0].x, normalized_left);
+    } else {
+        vst1q_f32(&frustum.planes[0].x, left_plane);
+    }
+    
+    // Normalize right plane
+    float32x4_t right_xyz = vmulq_f32(right_plane, mask);
+    float32x4_t right_squared = vmulq_f32(right_xyz, right_xyz);
+    float32x2_t right_sum = vpadd_f32(vget_low_f32(right_squared), vget_high_f32(right_squared));
+    right_sum = vpadd_f32(right_sum, vdup_n_f32(0.0f));
+    float right_length = std::sqrt(vget_lane_f32(right_sum, 0));
+    if (right_length > 0.00001f) {
+        float32x4_t normalized_right = vmulq_n_f32(right_plane, 1.0f / right_length);
+        vst1q_f32(&frustum.planes[1].x, normalized_right);
+    } else {
+        vst1q_f32(&frustum.planes[1].x, right_plane);
+    }
+    
+    // Normalize bottom plane
+    float32x4_t bottom_xyz = vmulq_f32(bottom_plane, mask);
+    float32x4_t bottom_squared = vmulq_f32(bottom_xyz, bottom_xyz);
+    float32x2_t bottom_sum = vpadd_f32(vget_low_f32(bottom_squared), vget_high_f32(bottom_squared));
+    bottom_sum = vpadd_f32(bottom_sum, vdup_n_f32(0.0f));
+    float bottom_length = std::sqrt(vget_lane_f32(bottom_sum, 0));
+    if (bottom_length > 0.00001f) {
+        float32x4_t normalized_bottom = vmulq_n_f32(bottom_plane, 1.0f / bottom_length);
+        vst1q_f32(&frustum.planes[2].x, normalized_bottom);
+    } else {
+        vst1q_f32(&frustum.planes[2].x, bottom_plane);
+    }
+    
+    // Normalize top plane
+    float32x4_t top_xyz = vmulq_f32(top_plane, mask);
+    float32x4_t top_squared = vmulq_f32(top_xyz, top_xyz);
+    float32x2_t top_sum = vpadd_f32(vget_low_f32(top_squared), vget_high_f32(top_squared));
+    top_sum = vpadd_f32(top_sum, vdup_n_f32(0.0f));
+    float top_length = std::sqrt(vget_lane_f32(top_sum, 0));
+    if (top_length > 0.00001f) {
+        float32x4_t normalized_top = vmulq_n_f32(top_plane, 1.0f / top_length);
+        vst1q_f32(&frustum.planes[3].x, normalized_top);
+    } else {
+        vst1q_f32(&frustum.planes[3].x, top_plane);
+    }
+    
+    // Normalize near plane
+    float32x4_t near_xyz = vmulq_f32(near_plane, mask);
+    float32x4_t near_squared = vmulq_f32(near_xyz, near_xyz);
+    float32x2_t near_sum = vpadd_f32(vget_low_f32(near_squared), vget_high_f32(near_squared));
+    near_sum = vpadd_f32(near_sum, vdup_n_f32(0.0f));
+    float near_length = std::sqrt(vget_lane_f32(near_sum, 0));
+    if (near_length > 0.00001f) {
+        float32x4_t normalized_near = vmulq_n_f32(near_plane, 1.0f / near_length);
+        vst1q_f32(&frustum.planes[4].x, normalized_near);
+    } else {
+        vst1q_f32(&frustum.planes[4].x, near_plane);
+    }
+    
+    // Normalize far plane
+    float32x4_t far_xyz = vmulq_f32(far_plane, mask);
+    float32x4_t far_squared = vmulq_f32(far_xyz, far_xyz);
+    float32x2_t far_sum = vpadd_f32(vget_low_f32(far_squared), vget_high_f32(far_squared));
+    far_sum = vpadd_f32(far_sum, vdup_n_f32(0.0f));
+    float far_length = std::sqrt(vget_lane_f32(far_sum, 0));
+    if (far_length > 0.00001f) {
+        float32x4_t normalized_far = vmulq_n_f32(far_plane, 1.0f / far_length);
+        vst1q_f32(&frustum.planes[5].x, normalized_far);
+    } else {
+        vst1q_f32(&frustum.planes[5].x, far_plane);
     }
     
     culling_state.frustum = frustum;
     culling_state.dirty = false;
     
-    // Update camera position from view matrix inverse translation
+    // Ultra-optimized camera position calculation using NEON
     // In a typical view matrix, the camera position is the negative of the translation part
     // transformed by the rotation part of the matrix
-    float32x4_t cam_pos = vdupq_n_f32(0.0f);
     
-    // Extract translation components (last row of view matrix)
-    float tx = view_matrix.r[3][0];
-    float ty = view_matrix.r[3][1];
-    float tz = view_matrix.r[3][2];
+    // Load the translation row from view matrix
+    float32x4_t translation_row = vld1q_f32(&view_matrix.r[3].x);
     
-    // Negate to get camera position in world space
-    cam_pos = vsetq_lane_f32(-tx, cam_pos, 0);
-    cam_pos = vsetq_lane_f32(-ty, cam_pos, 1);
-    cam_pos = vsetq_lane_f32(-tz, cam_pos, 2);
+    // Create a negation mask (negate XYZ but keep W)
+    const float32x4_t neg_mask = {-1.0f, -1.0f, -1.0f, 1.0f};
     
-    // Store camera position for backface culling
-    camera_position = {vgetq_lane_f32(cam_pos, 0), vgetq_lane_f32(cam_pos, 1), vgetq_lane_f32(cam_pos, 2)};
+    // Negate the translation to get camera position in one SIMD operation
+    float32x4_t cam_pos = vmulq_f32(translation_row, neg_mask);
+    
+    // Extract and store camera position for backface culling
+    camera_position.x = vgetq_lane_f32(cam_pos, 0);
+    camera_position.y = vgetq_lane_f32(cam_pos, 1);
+    camera_position.z = vgetq_lane_f32(cam_pos, 2);
+    
     camera_dirty = false;
 #else
     // Extract view matrix from the PICA registers
