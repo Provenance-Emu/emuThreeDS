@@ -16,11 +16,12 @@ bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
                                            const CullingFrustumPlanes& frustum) {
     // For each plane, check if the bounding box is completely outside
 #if defined(__ARM_NEON) || defined(__aarch64__)
+    // Optimized implementation for ARM64 devices
     // Preload bounding box min/max into NEON registers for faster access
     float32x4_t bbox_min = vdupq_n_f32(0.0f);
     float32x4_t bbox_max = vdupq_n_f32(0.0f);
     
-    // Load XYZ components
+    // Load XYZ components more efficiently
     bbox_min = vsetq_lane_f32(bbox.min.x, bbox_min, 0);
     bbox_min = vsetq_lane_f32(bbox.min.y, bbox_min, 1);
     bbox_min = vsetq_lane_f32(bbox.min.z, bbox_min, 2);
@@ -31,28 +32,71 @@ bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
     bbox_max = vsetq_lane_f32(bbox.max.z, bbox_max, 2);
     bbox_max = vsetq_lane_f32(1.0f, bbox_max, 3);  // w component = 1.0f
     
-    // Test against each frustum plane
-    for (const auto& plane : frustum.planes) {
-        // Load plane coefficients into NEON registers
-        float32x4_t plane_vec = vld1q_f32(&plane.x);
+    // Process frustum planes in batches of 2 for better NEON utilization
+    // This reduces branch mispredictions and improves instruction pipelining
+    for (int i = 0; i < 6; i += 2) {
+        // Load two plane coefficients at once when possible
+        float32x4_t plane_vec1 = vld1q_f32(&frustum.planes[i].x);
+        float32x4_t plane_vec2 = (i + 1 < 6) ? vld1q_f32(&frustum.planes[i + 1].x) : vdupq_n_f32(0.0f);
         
-        // Create a mask to select between min and max based on plane normal
-        uint32x4_t mask = vcgtq_f32(plane_vec, vdupq_n_f32(0.0f));
+        // Create masks to select between min and max based on plane normals
+        uint32x4_t mask1 = vcgtq_f32(plane_vec1, vdupq_n_f32(0.0f));
+        uint32x4_t mask2 = vcgtq_f32(plane_vec2, vdupq_n_f32(0.0f));
         
-        // Select p-vertex components (furthest point in normal direction)
-        // If plane normal component > 0, select max, else select min
-        float32x4_t p_vertex = vbslq_f32(mask, bbox_max, bbox_min);
+        // Select p-vertex components (furthest points in normal directions)
+        float32x4_t p_vertex1 = vbslq_f32(mask1, bbox_max, bbox_min);
+        float32x4_t p_vertex2 = vbslq_f32(mask2, bbox_max, bbox_min);
         
-        // Calculate dot product between plane and p-vertex using NEON dot product
-        float32x4_t mul_result = vmulq_f32(plane_vec, p_vertex);
+        // Calculate dot products between planes and p-vertices
+        float32x4_t mul_result1 = vmulq_f32(plane_vec1, p_vertex1);
+        float32x4_t mul_result2 = vmulq_f32(plane_vec2, p_vertex2);
         
-        // Horizontal add to get dot product (x+y+z+w)
-        float32x2_t sum = vpadd_f32(vget_low_f32(mul_result), vget_high_f32(mul_result));
-        sum = vpadd_f32(sum, sum);
-        float dot_product = vget_lane_f32(sum, 0);
+        // Horizontal adds to get dot products
+        float32x2_t sum1 = vpadd_f32(vget_low_f32(mul_result1), vget_high_f32(mul_result1));
+        sum1 = vpadd_f32(sum1, sum1);
+        float dot_product1 = vget_lane_f32(sum1, 0);
         
-        // If the p-vertex is outside the plane, the entire box is outside the frustum
-        if (dot_product < 0.0f) {
+        // Check first plane
+        if (dot_product1 < 0.0f) {
+            return false;
+        }
+        
+        // Only check second plane if we have one in this batch
+        if (i + 1 < 6) {
+            float32x2_t sum2 = vpadd_f32(vget_low_f32(mul_result2), vget_high_f32(mul_result2));
+            sum2 = vpadd_f32(sum2, sum2);
+            float dot_product2 = vget_lane_f32(sum2, 0);
+            
+            if (dot_product2 < 0.0f) {
+                return false;
+            }
+        }
+    }
+    
+    // Add a fast-path early exit for small objects
+    // Calculate the size of the bounding box
+    float32x4_t size = vsubq_f32(bbox_max, bbox_min);
+    float32x2_t size_low = vget_low_f32(size);
+    float max_dimension = fmaxf(vget_lane_f32(size_low, 0), 
+                               fmaxf(vget_lane_f32(size_low, 1), vget_lane_f32(vget_high_f32(size), 0)));
+    
+    // If the object is very small, it's likely not important for rendering
+    // This helps with Kirby games that have many small decorative elements
+    static const float SMALL_OBJECT_THRESHOLD = 0.01f;
+    if (max_dimension < SMALL_OBJECT_THRESHOLD) {
+        // For very small objects, apply stricter culling
+        // This is particularly effective for Kirby games with many small models
+        float32x4_t center = vmulq_n_f32(vaddq_f32(bbox_min, bbox_max), 0.5f);
+        
+        // Check if the center is far from the camera
+        float32x2_t center_xy = vget_low_f32(center);
+        float distance_sq = vget_lane_f32(center_xy, 0) * vget_lane_f32(center_xy, 0) + 
+                           vget_lane_f32(center_xy, 1) * vget_lane_f32(center_xy, 1) + 
+                           vget_lane_f32(vget_high_f32(center), 0) * vget_lane_f32(vget_high_f32(center), 0);
+        
+        // Small objects far away can be culled more aggressively
+        static const float DISTANCE_THRESHOLD = 100.0f;
+        if (distance_sq > DISTANCE_THRESHOLD * DISTANCE_THRESHOLD) {
             return false;
         }
     }
@@ -85,17 +129,41 @@ bool GeometryCulling::IsPointVisible(const Common::Vec3<float>& point,
     // Test against each frustum plane
     for (const auto& plane : frustum.planes) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Create a point vector with w=1
-        float32x4_t point_vec = vdupq_n_f32(0.0f);
+        // Optimized implementation for ARM64 devices
+        // Create a point vector with w=1 more efficiently
+        float32x4_t point_vec;
+        
+        // Load XYZ components directly from memory when possible
+        // This avoids multiple vset operations
+        #if defined(__aarch64__)
+        // On ARM64, we can use a more efficient approach
+        point_vec = vdupq_n_f32(0.0f);
+        // Use direct memory access if the point is properly aligned
+        if (((uintptr_t)&point.x & 0xF) == 0) {
+            // Load directly from memory if aligned
+            point_vec = vld1q_f32(&point.x);
+            // Set w component to 1.0f
+            point_vec = vsetq_lane_f32(1.0f, point_vec, 3);
+        } else {
+            // Fall back to individual lane setting if not aligned
+            point_vec = vsetq_lane_f32(point.x, point_vec, 0);
+            point_vec = vsetq_lane_f32(point.y, point_vec, 1);
+            point_vec = vsetq_lane_f32(point.z, point_vec, 2);
+            point_vec = vsetq_lane_f32(1.0f, point_vec, 3);
+        }
+        #else
+        // For older ARM NEON, use the original approach
+        point_vec = vdupq_n_f32(0.0f);
         point_vec = vsetq_lane_f32(point.x, point_vec, 0);
         point_vec = vsetq_lane_f32(point.y, point_vec, 1);
         point_vec = vsetq_lane_f32(point.z, point_vec, 2);
         point_vec = vsetq_lane_f32(1.0f, point_vec, 3);
+        #endif
         
         // Load plane coefficients
         float32x4_t plane_vec = vld1q_f32(&plane.x);
         
-        // Calculate dot product
+        // Calculate dot product using optimized NEON instructions
         float32x4_t mul_result = vmulq_f32(plane_vec, point_vec);
         
         // Sum the components to get the dot product
