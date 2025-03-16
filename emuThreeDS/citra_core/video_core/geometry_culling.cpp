@@ -4,6 +4,8 @@
 
 #include <cmath>
 #include "video_core/geometry_culling.h"
+#include "common/vector_math_neon.h"
+#include "common/matrix_math_neon.h"
 
 // Use ARM NEON intrinsics for ARM64 platforms
 #if defined(__ARM_NEON) || defined(__aarch64__)
@@ -11,10 +13,9 @@
 #endif
 
 namespace Pica {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+
 bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
                                            const CullingFrustumPlanes& frustum) {
-    // For each plane, check if the bounding box is completely outside
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized implementation for ARM64 devices
     // Preload bounding box min/max into NEON registers for faster access
@@ -81,11 +82,10 @@ bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
                                fmaxf(vget_lane_f32(size_low, 1), vget_lane_f32(vget_high_f32(size), 0)));
     
     // If the object is very small, it's likely not important for rendering
-    // This helps with Kirby games that have many small decorative elements
+    // This helps with games that have many small decorative elements
     static const float SMALL_OBJECT_THRESHOLD = 0.01f;
     if (max_dimension < SMALL_OBJECT_THRESHOLD) {
         // For very small objects, apply stricter culling
-        // This is particularly effective for Kirby games with many small models
         float32x4_t center = vmulq_n_f32(vaddq_f32(bbox_min, bbox_max), 0.5f);
         
         // Check if the center is far from the camera
@@ -101,6 +101,7 @@ bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
         }
     }
 #else
+    // For each plane, check if the bounding box is completely outside
     for (const auto& plane : frustum.planes) {
         // Find the p-vertex (furthest point in the normal direction)
         Common::Vec3<float> p_vertex;
@@ -126,10 +127,9 @@ bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox,
 
 bool GeometryCulling::IsPointVisible(const Common::Vec3<float>& point, 
                                      const CullingFrustumPlanes& frustum) {
-    // Test against each frustum plane
-    for (const auto& plane : frustum.planes) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Optimized implementation for ARM64 devices
+    // Test against each frustum plane using NEON
+    for (const auto& plane : frustum.planes) {
         // Create a point vector with w=1 more efficiently
         float32x4_t point_vec;
         
@@ -167,23 +167,30 @@ bool GeometryCulling::IsPointVisible(const Common::Vec3<float>& point,
         float32x4_t mul_result = vmulq_f32(plane_vec, point_vec);
         
         // Sum the components to get the dot product
-        float dot_product = vgetq_lane_f32(mul_result, 0) + 
-                           vgetq_lane_f32(mul_result, 1) + 
-                           vgetq_lane_f32(mul_result, 2) + 
-                           vgetq_lane_f32(mul_result, 3);
-#else
-        // Calculate dot product: dot(plane.xyz, point) + plane.w
-        float dot_product = plane.x * point.x + 
-                           plane.y * point.y + 
-                           plane.z * point.z + 
-                           plane.w;
-#endif
+        float32x2_t sum = vpadd_f32(vget_low_f32(mul_result), vget_high_f32(mul_result));
+        sum = vpadd_f32(sum, sum);
+        float dot_product = vget_lane_f32(sum, 0);
         
         // If point is outside any plane, it's outside the frustum
         if (dot_product < 0.0f) {
             return false;
         }
     }
+#else
+    // Test against each frustum plane
+    for (const auto& plane : frustum.planes) {
+        // Calculate dot product: dot(plane.xyz, point) + plane.w
+        float dot_product = plane.x * point.x + 
+                           plane.y * point.y + 
+                           plane.z * point.z + 
+                           plane.w;
+        
+        // If point is outside any plane, it's outside the frustum
+        if (dot_product < 0.0f) {
+            return false;
+        }
+    }
+#endif
     
     return true;
 }
@@ -424,130 +431,5 @@ bool GeometryCulling::IsTriangleFacingCamera(
     // If dot product is positive, triangle is facing the camera
     return dot_product > 0.0f;
 }
-
-#else  // Non-ARM platforms - standard implementations
-
-bool GeometryCulling::IsBoundingBoxVisible(const CullingBoundingBox& bbox, 
-                                          const CullingFrustumPlanes& frustum) {
-    // For each plane, check if the bounding box is completely outside
-    for (const auto& plane : frustum.planes) {
-        // Find the p-vertex (furthest point in the normal direction)
-        Common::Vec3<float> p_vertex;
-        p_vertex.x = (plane.x > 0.0f) ? bbox.max.x : bbox.min.x;
-        p_vertex.y = (plane.y > 0.0f) ? bbox.max.y : bbox.min.y;
-        p_vertex.z = (plane.z > 0.0f) ? bbox.max.z : bbox.min.z;
-        
-        // If the p-vertex is outside the plane, the entire box is outside the frustum
-        if (plane.x * p_vertex.x + plane.y * p_vertex.y + plane.z * p_vertex.z + plane.w < 0.0f) {
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-bool GeometryCulling::IsPointVisible(const Common::Vec3<float>& point, 
-                                    const CullingFrustumPlanes& frustum) {
-    // Test against each frustum plane
-    for (const auto& plane : frustum.planes) {
-        if (plane.x * point.x + plane.y * point.y + plane.z * point.z + plane.w < 0.0f) {
-            return false;
-        }
-    }
-    
-    return true;
-}
-
-CullingFrustumPlanes GeometryCulling::CalculateFrustumPlanes(const Matrix4x4& view_projection) {
-    CullingFrustumPlanes frustum;
-    
-    // Left plane (row3 + row0)
-    frustum.planes[0] = {
-        view_projection.r[3].x + view_projection.r[0].x,
-        view_projection.r[3].y + view_projection.r[0].y,
-        view_projection.r[3].z + view_projection.r[0].z,
-        view_projection.r[3].w + view_projection.r[0].w
-    };
-    
-    // Right plane (row3 - row0)
-    frustum.planes[1] = {
-        view_projection.r[3].x - view_projection.r[0].x,
-        view_projection.r[3].y - view_projection.r[0].y,
-        view_projection.r[3].z - view_projection.r[0].z,
-        view_projection.r[3].w - view_projection.r[0].w
-    };
-    
-    // Bottom plane (row3 + row1)
-    frustum.planes[2] = {
-        view_projection.r[3].x + view_projection.r[1].x,
-        view_projection.r[3].y + view_projection.r[1].y,
-        view_projection.r[3].z + view_projection.r[1].z,
-        view_projection.r[3].w + view_projection.r[1].w
-    };
-    
-    // Top plane (row3 - row1)
-    frustum.planes[3] = {
-        view_projection.r[3].x - view_projection.r[1].x,
-        view_projection.r[3].y - view_projection.r[1].y,
-        view_projection.r[3].z - view_projection.r[1].z,
-        view_projection.r[3].w - view_projection.r[1].w
-    };
-    
-    // Near plane (row3 + row2)
-    frustum.planes[4] = {
-        view_projection.r[3].x + view_projection.r[2].x,
-        view_projection.r[3].y + view_projection.r[2].y,
-        view_projection.r[3].z + view_projection.r[2].z,
-        view_projection.r[3].w + view_projection.r[2].w
-    };
-    
-    // Far plane (row3 - row2)
-    frustum.planes[5] = {
-        view_projection.r[3].x - view_projection.r[2].x,
-        view_projection.r[3].y - view_projection.r[2].y,
-        view_projection.r[3].z - view_projection.r[2].z,
-        view_projection.r[3].w - view_projection.r[2].w
-    };
-    
-    // Normalize all planes
-    for (auto& plane : frustum.planes) {
-        float length = std::sqrt(plane.x * plane.x + plane.y * plane.y + plane.z * plane.z);
-        plane.x /= length;
-        plane.y /= length;
-        plane.z /= length;
-        plane.w /= length;
-    }
-    
-    return frustum;
-}
-
-bool GeometryCulling::IsTriangleFacingCamera(
-    const Common::Vec3<float>& v0,
-    const Common::Vec3<float>& v1,
-    const Common::Vec3<float>& v2,
-    const Common::Vec3<float>& view_position) {
-    
-    // Calculate edge vectors
-    Common::Vec3<float> edge1 = v1 - v0;
-    Common::Vec3<float> edge2 = v2 - v0;
-    
-    // Calculate normal using cross product
-    Common::Vec3<float> normal = {
-        edge1.y * edge2.z - edge1.z * edge2.y,
-        edge1.z * edge2.x - edge1.x * edge2.z,
-        edge1.x * edge2.y - edge1.y * edge2.x
-    };
-    
-    // Calculate view direction (from triangle to camera)
-    Common::Vec3<float> view_dir = view_position - v0;
-    
-    // Calculate dot product between normal and view direction
-    float dot_product = normal.x * view_dir.x + normal.y * view_dir.y + normal.z * view_dir.z;
-    
-    // If dot product is positive, triangle is facing the camera
-    return dot_product > 0.0f;
-}
-
-#endif  // defined(__ARM_NEON) || defined(__aarch64__)
 
 } // namespace Pica

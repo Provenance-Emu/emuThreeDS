@@ -22,6 +22,7 @@
 #include "video_core/pica_types.h"
 #include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"
+#include "video_core/neon_optimizations.h"
 
 using nihstro::Instruction;
 using nihstro::OpCode;

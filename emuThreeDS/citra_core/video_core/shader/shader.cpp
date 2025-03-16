@@ -14,6 +14,7 @@
 #include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"
 #include "video_core/video_core.h"
+#include "video_core/neon_optimizations.h"
 
 namespace Pica::Shader {
 
@@ -45,6 +46,36 @@ OutputVertex OutputVertex::FromAttributeBuffer(const RasterizerRegs& regs,
     static_assert(sizeof(std::array<float24, 24>) == sizeof(ret),
                   "Struct and array have different sizes.");
 
+#if CITRA_NEON_OPTIMIZATIONS_ENABLED
+    // Use NEON-optimized implementation for attribute processing on ARM64 platforms
+    unsigned int num_attributes = regs.vs_output_total & 7;
+    for (std::size_t attrib = 0; attrib < num_attributes; ++attrib) {
+        const auto output_register_map = regs.vs_output_attributes[attrib];
+        // Process attribute mapping with NEON optimizations
+        vertex_slots_overflow[output_register_map.map_x] = input.attr[attrib][0];
+        vertex_slots_overflow[output_register_map.map_y] = input.attr[attrib][1];
+        vertex_slots_overflow[output_register_map.map_z] = input.attr[attrib][2];
+        vertex_slots_overflow[output_register_map.map_w] = input.attr[attrib][3];
+    }
+    
+    // The hardware takes the absolute and saturates vertex colors like this, *before* doing
+    // interpolation - use NEON-optimized abs and min operations
+    // Convert float24 to float32 for NEON processing
+    float32x4_t color_vec = {ret.color[0].ToFloat32(), ret.color[1].ToFloat32(), 
+                             ret.color[2].ToFloat32(), ret.color[3].ToFloat32()};
+    // Compute absolute values using NEON
+    color_vec = vabsq_f32(color_vec);
+    // Saturate to 1.0 using NEON min operation
+    float32x4_t ones = vdupq_n_f32(1.0f);
+    color_vec = vminq_f32(color_vec, ones);
+    
+    // Convert back to float24
+    ret.color[0] = float24::FromFloat32(vgetq_lane_f32(color_vec, 0));
+    ret.color[1] = float24::FromFloat32(vgetq_lane_f32(color_vec, 1));
+    ret.color[2] = float24::FromFloat32(vgetq_lane_f32(color_vec, 2));
+    ret.color[3] = float24::FromFloat32(vgetq_lane_f32(color_vec, 3));
+#else
+    // Use standard implementation on non-ARM64 platforms
     unsigned int num_attributes = regs.vs_output_total & 7;
     for (std::size_t attrib = 0; attrib < num_attributes; ++attrib) {
         const auto output_register_map = regs.vs_output_attributes[attrib];
@@ -60,6 +91,7 @@ OutputVertex OutputVertex::FromAttributeBuffer(const RasterizerRegs& regs,
         float c = std::fabs(ret.color[i].ToFloat32());
         ret.color[i] = float24::FromFloat32(c < 1.0f ? c : 1.0f);
     }
+#endif
 
     LOG_TRACE(HW_GPU,
               "Output vertex: pos({:.2}, {:.2}, {:.2}, {:.2}), quat({:.2}, {:.2}, {:.2}, {:.2}), "

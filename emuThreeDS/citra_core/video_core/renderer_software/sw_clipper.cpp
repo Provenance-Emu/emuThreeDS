@@ -15,6 +15,7 @@
 #include "video_core/renderer_software/rasterizer.h"
 #include "video_core/renderer_software/sw_clipper.h"
 #include "video_core/shader/shader.h"
+#include "video_core/neon_optimizations.h"
 
 using Pica::Rasterizer::Vertex;
 

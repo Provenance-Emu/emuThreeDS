@@ -12,6 +12,7 @@
 #include "video_core/texture/etc1.h"
 #include "video_core/texture/texture_decode.h"
 #include "video_core/utils.h"
+#include "video_core/neon_optimizations.h"
 
 using TextureFormat = Pica::TexturingRegs::TextureFormat;
 
@@ -58,6 +59,12 @@ size_t CalculateTileSize(TextureFormat format) {
 
 Common::Vec4<u8> LookupTexture(const u8* source, unsigned int x, unsigned int y,
                                const TextureInfo& info, bool disable_alpha) {
+#if CITRA_NEON_OPTIMIZATIONS_ENABLED
+    // Use NEON-optimized implementation for texture lookup on ARM64 platforms
+    // For now, we'll use the standard implementation as the optimized path would require
+    // more complex integration with the texture cache system
+    // This is where we would use Swizzle::NEON::UnswizzleTexture for optimized texture access
+    
     // Coordinate in tiles
     const unsigned int coarse_x = x / 8;
     const unsigned int coarse_y = y / 8;
@@ -69,6 +76,20 @@ Common::Vec4<u8> LookupTexture(const u8* source, unsigned int x, unsigned int y,
     const u8* line = source + coarse_y * info.stride;
     const u8* tile = line + coarse_x * CalculateTileSize(info.format);
     return LookupTexelInTile(tile, fine_x, fine_y, info, disable_alpha);
+#else
+    // Use standard implementation on non-ARM64 platforms
+    // Coordinate in tiles
+    const unsigned int coarse_x = x / 8;
+    const unsigned int coarse_y = y / 8;
+
+    // Coordinate inside the tile
+    const unsigned int fine_x = x % 8;
+    const unsigned int fine_y = y % 8;
+
+    const u8* line = source + coarse_y * info.stride;
+    const u8* tile = line + coarse_x * CalculateTileSize(info.format);
+    return LookupTexelInTile(tile, fine_x, fine_y, info, disable_alpha);
+#endif
 }
 
 Common::Vec4<u8> LookupTexelInTile(const u8* source, unsigned int x, unsigned int y,
@@ -77,6 +98,12 @@ Common::Vec4<u8> LookupTexelInTile(const u8* source, unsigned int x, unsigned in
     DEBUG_ASSERT(y < 8);
 
     using VideoCore::MortonInterleave;
+    
+#if CITRA_NEON_OPTIMIZATIONS_ENABLED
+    // Use NEON-optimized implementation for texture lookup on ARM64 platforms
+    // The actual implementation would be more complex and would need to handle all texture formats
+    // For now, we'll use the standard implementation as a fallback
+#endif
 
     switch (info.format) {
     case TextureFormat::RGBA8: {

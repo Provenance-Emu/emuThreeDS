@@ -8,10 +8,14 @@
 #include "common/vector_math.h"
 #include "video_core/pica_types.h"
 
-// Define our own matrix type since Common::Mat4x4 is not available
+// Define our own matrix types since Common::Mat4x4 is not available
 namespace Pica {
     struct Matrix4x4 {
         std::array<Common::Vec4<float>, 4> r;
+    };
+    
+    struct Matrix3x3 {
+        std::array<Common::Vec3<float>, 3> r;
     };
 }
 

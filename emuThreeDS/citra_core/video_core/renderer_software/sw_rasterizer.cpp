@@ -4,6 +4,7 @@
 
 #include "video_core/renderer_software/sw_clipper.h"
 #include "video_core/renderer_software/sw_rasterizer.h"
+#include "video_core/neon_optimizations.h"
 
 namespace VideoCore {
 
