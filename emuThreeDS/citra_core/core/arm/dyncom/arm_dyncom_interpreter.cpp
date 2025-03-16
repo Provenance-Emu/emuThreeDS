@@ -19,6 +19,7 @@
 #include "core/arm/skyeye_common/vfp/vfp.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+
 #include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
@@ -41,16 +42,16 @@ inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-    
+
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t right_shift = vdup_n_s32(-(int32_t)i);
     int32x2_t left_shift = vdup_n_s32(32 - (int32_t)i);
-    
+
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t result = vorr_u32(right_part, left_part);
-    
+
     return vget_lane_u32(result, 0);
 }
 
@@ -60,16 +61,16 @@ inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-    
+
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t left_shift = vdup_n_s32((int32_t)i);
     int32x2_t right_shift = vdup_n_s32(-((int32_t)(32 - i)));
-    
+
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t result = vorr_u32(left_part, right_part);
-    
+
     return vget_lane_u32(result, 0);
 }
 #endif
@@ -136,7 +137,11 @@ static unsigned int DPO(Immediate)(ARMul_State* cpu, unsigned int sht_oper) {
     if (rotate_imm == 0)
         cpu->shifter_carry_out = cpu->CFlag;
     else
+#if defined(__ARM_NEON) || defined(__aarch64__)
         cpu->shifter_carry_out = BIT(shifter_operand, 31);
+#else
+        cpu->shifter_carry_out = BIT(shifter_operand, 31);
+#endif
     return shifter_operand;
 }
 
@@ -151,7 +156,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     int shift_imm = BITS(sht_oper, 7, 11);
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -160,12 +165,12 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (32 - shift_imm));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the shift using vshl_u32 which accepts variable shift amounts
         int32x2_t shift_amount = vdup_n_s32(shift_imm);
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -178,10 +183,14 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
         cpu->shifter_carry_out = cpu->CFlag;
     } else {
         shifter_operand = rm << shift_imm;
+#if defined(__ARM_NEON) || defined(__aarch64__)
         cpu->shifter_carry_out = BIT(rm, 32 - shift_imm);
+#else
+        cpu->shifter_carry_out = BIT(rm, 32 - shift_imm);
+#endif
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -189,6 +198,26 @@ static unsigned int DPO(LogicalShiftLeftByRegister)(ARMul_State* cpu, unsigned i
     int shifter_operand;
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int rs = CHECK_READ_REG15(cpu, RS);
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // ARM64/NEON optimized version
+    u32 bits_0_7 = BITS(rs, 0, 7);
+
+    if (bits_0_7 == 0) {
+        shifter_operand = rm;
+        cpu->shifter_carry_out = cpu->CFlag;
+    } else if (bits_0_7 < 32) {
+        shifter_operand = rm << bits_0_7;
+        cpu->shifter_carry_out = BIT(rm, 32 - bits_0_7);
+    } else if (bits_0_7 == 32) {
+        shifter_operand = 0;
+        cpu->shifter_carry_out = BIT(rm, 0);
+    } else {
+        shifter_operand = 0;
+        cpu->shifter_carry_out = 0;
+    }
+#else
+    // Standard implementation for non-ARM platforms
     if (BITS(rs, 0, 7) == 0) {
         shifter_operand = rm;
         cpu->shifter_carry_out = cpu->CFlag;
@@ -202,6 +231,7 @@ static unsigned int DPO(LogicalShiftLeftByRegister)(ARMul_State* cpu, unsigned i
         shifter_operand = 0;
         cpu->shifter_carry_out = 0;
     }
+#endif
     return shifter_operand;
 }
 
@@ -209,7 +239,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -218,12 +248,12 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -239,7 +269,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -267,7 +297,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -279,12 +309,12 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     } else {
         // Use NEON intrinsics for arithmetic shift right
         int32x2_t value = vdup_n_s32((int32_t)rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(vreinterpret_u32_s32(value), carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the arithmetic right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         int32x2_t shifted = vshl_s32(value, shift_amount); // Use signed shift for arithmetic shift
@@ -303,7 +333,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -331,7 +361,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int shifter_operand;
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -339,24 +369,24 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         // Use NEON intrinsics for RRX operation
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry = vdup_n_u32(cpu->CFlag);
-        
+
         // Extract the carry out bit
         uint32x2_t carry_out_mask = vdup_n_u32(1);
         uint32x2_t carry_out = vand_u32(value, carry_out_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_out, 0) != 0;
-        
+
         // Shift right by 1
         uint32x2_t shifted = vshr_n_u32(value, 1);
-        
+
         // Insert carry flag into bit 31
         uint32x2_t carry_shifted = vshl_n_u32(carry, 31);
         uint32x2_t result = vorr_u32(shifted, carry_shifted);
-        
+
         shifter_operand = vget_lane_u32(result, 0);
     } else {
         // Use our optimized ROTATE_RIGHT_32 function which already uses NEON
         shifter_operand = ROTATE_RIGHT_32(rm, shift_imm);
-        
+
         // Extract the carry bit
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
@@ -373,7 +403,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -416,23 +446,23 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-    
+
     // Extract U bit and offset
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t offset_mask = vdup_n_u32(0x00000FFF);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
     uint32x2_t offset = vand_u32(inst_vec, offset_mask);
-    
+
     // Get the base address
     uint32x2_t base_addr = vdup_n_u32(CHECK_READ_REG15_WA(cpu, Rn));
-    
+
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(base_addr, offset);
     else
         addr = vsub_u32(base_addr, offset);
-    
+
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -453,36 +483,36 @@ static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigne
     // Optimized version using ARM NEON intrinsics
     // Extract Rn and Rm fields using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
-    
+
     // Extract Rn (bits 16-19)
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-    
+
     // Extract Rm (bits 0-3)
     uint32x2_t rm_mask = vdup_n_u32(0x0000000F);
     uint32x2_t rm_field = vand_u32(inst_vec, rm_mask);
     unsigned int Rm = vget_lane_u32(rm_field, 0);
-    
+
     // Get register values
     unsigned int rn = CHECK_READ_REG15_WA(cpu, Rn);
     unsigned int rm = CHECK_READ_REG15_WA(cpu, Rm);
-    
+
     // Extract U bit
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
-    
+
     // Create vectors for register values
     uint32x2_t rn_vec = vdup_n_u32(rn);
     uint32x2_t rm_vec = vdup_n_u32(rm);
-    
+
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(rn_vec, rm_vec);
     else
         addr = vsub_u32(rn_vec, rm_vec);
-    
+
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -923,7 +953,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     // Optimized version using ARM NEON intrinsics
     // Create a vector with the instruction value
     uint32x2_t inst_vec = vdup_n_u32(inst);
-    
+
     // Extract bit fields using NEON operations
     uint32x2_t bits24_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F000000)), 24);
     uint32x2_t bit21 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00200000)), 21);
@@ -932,7 +962,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     uint32x2_t bits21_22 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00600000)), 21);
     uint32x2_t bit7 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000080)), 7);
     uint32x2_t bits23_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F800000)), 23);
-    
+
     // Extract scalar values for comparison
     u32 bits24_27_val = vget_lane_u32(bits24_27, 0);
     u32 bit21_val = vget_lane_u32(bit21, 0);
@@ -941,7 +971,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     u32 bits21_22_val = vget_lane_u32(bits21_22, 0);
     u32 bit7_val = vget_lane_u32(bit7, 0);
     u32 bits23_27_val = vget_lane_u32(bits23_27, 0);
-    
+
     // LnSWoUB addressing modes
     if (bits24_27_val == 5 && bit21_val == 0) {
         return LnSWoUB(ImmediateOffset);
@@ -961,7 +991,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return LnSWoUB(RegisterPostIndexed);
     } else if (bits24_27_val == 6 && bit21_val == 0 && bit4_val == 0) {
         return LnSWoUB(ScaledRegisterPostIndexed);
-    } 
+    }
     // MLnS addressing modes
     else if (bits24_27_val == 1 && bits21_22_val == 2 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(ImmediateOffset);
@@ -975,7 +1005,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return MLnS(ImmediatePostIndexed);
     } else if (bits24_27_val == 0 && bits21_22_val == 0 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(RegisterPostIndexed);
-    } 
+    }
     // LdnStM addressing modes
     else if (bits23_27_val == 0x11) {
         return LdnStM(IncrementAfter);
@@ -1215,8 +1245,86 @@ static int clz(unsigned int x) {
 
 MICROPROFILE_DEFINE(DynCom_Execute, "DynCom", "Execute", MP_RGB(255, 0, 0));
 
+// Cache frequently accessed CPU state to avoid repeated memory accesses
+#if defined(__ARM_NEON) || defined(__aarch64__)
+inline void FastConditionCheck(const ARMul_State* cpu, unsigned int cond, bool& result) {
+    // Fast condition check optimized for ARM64
+    // This avoids multiple memory accesses by reading CPSR once
+    const u32 cpsr = cpu->Cpsr;
+    const u32 nzcv = cpsr & 0xF0000000;
+
+    switch (cond) {
+    case 0: result = (nzcv & 0x40000000) != 0; break;                  // EQ: Z set
+    case 1: result = (nzcv & 0x40000000) == 0; break;                  // NE: Z clear
+    case 2: result = (nzcv & 0x20000000) != 0; break;                  // CS: C set
+    case 3: result = (nzcv & 0x20000000) == 0; break;                  // CC: C clear
+    case 4: result = (nzcv & 0x80000000) != 0; break;                  // MI: N set
+    case 5: result = (nzcv & 0x80000000) == 0; break;                  // PL: N clear
+    case 6: result = (nzcv & 0x10000000) != 0; break;                  // VS: V set
+    case 7: result = (nzcv & 0x10000000) == 0; break;                  // VC: V clear
+    case 8: result = ((nzcv & 0x20000000) != 0) && ((nzcv & 0x40000000) == 0); break; // HI: C set and Z clear
+    case 9: result = ((nzcv & 0x20000000) == 0) || ((nzcv & 0x40000000) != 0); break; // LS: C clear or Z set
+    case 10: result = ((nzcv & 0x80000000) >> 31) == ((nzcv & 0x10000000) >> 28); break; // GE: N == V
+    case 11: result = ((nzcv & 0x80000000) >> 31) != ((nzcv & 0x10000000) >> 28); break; // LT: N != V
+    case 12: result = ((nzcv & 0x40000000) == 0) && (((nzcv & 0x80000000) >> 31) == ((nzcv & 0x10000000) >> 28)); break; // GT: Z clear AND (N == V)
+    case 13: result = ((nzcv & 0x40000000) != 0) || (((nzcv & 0x80000000) >> 31) != ((nzcv & 0x10000000) >> 28)); break; // LE: Z set OR (N != V)
+    case 14: result = true; break;                                     // AL: Always
+    case 15: result = true; break;                                     // NV: Always (ARMv4 and above)
+    }
+}
+
+// Fast condition passed function for ARM64 platforms
+// This follows the same pattern as the original CondPassed function but is optimized for ARM64
+inline bool FastCondPassed(const ARMul_State* cpu, unsigned int cond) {
+    // Fast condition check optimized for ARM64
+    // This avoids multiple memory accesses by reading CPSR once
+    const u32 cpsr = cpu->Cpsr;
+    const u32 nzcv = cpsr & 0xF0000000;
+    
+    switch (cond) {
+    case ConditionCode::EQ: // Z set
+        return (nzcv & 0x40000000) != 0;
+    case ConditionCode::NE: // Z clear
+        return (nzcv & 0x40000000) == 0;
+    case ConditionCode::CS: // C set
+        return (nzcv & 0x20000000) != 0;
+    case ConditionCode::CC: // C clear
+        return (nzcv & 0x20000000) == 0;
+    case ConditionCode::MI: // N set
+        return (nzcv & 0x80000000) != 0;
+    case ConditionCode::PL: // N clear
+        return (nzcv & 0x80000000) == 0;
+    case ConditionCode::VS: // V set
+        return (nzcv & 0x10000000) != 0;
+    case ConditionCode::VC: // V clear
+        return (nzcv & 0x10000000) == 0;
+    case ConditionCode::HI: // C set and Z clear
+        return ((nzcv & 0x20000000) != 0) && ((nzcv & 0x40000000) == 0);
+    case ConditionCode::LS: // C clear or Z set
+        return ((nzcv & 0x20000000) == 0) || ((nzcv & 0x40000000) != 0);
+    case ConditionCode::GE: // N == V
+        return ((nzcv & 0x80000000) >> 31) == ((nzcv & 0x10000000) >> 28);
+    case ConditionCode::LT: // N != V
+        return ((nzcv & 0x80000000) >> 31) != ((nzcv & 0x10000000) >> 28);
+    case ConditionCode::GT: // Z clear AND (N == V)
+        return ((nzcv & 0x40000000) == 0) && (((nzcv & 0x80000000) >> 31) == ((nzcv & 0x10000000) >> 28));
+    case ConditionCode::LE: // Z set OR (N != V)
+        return ((nzcv & 0x40000000) != 0) || (((nzcv & 0x80000000) >> 31) != ((nzcv & 0x10000000) >> 28));
+    case ConditionCode::AL: // Always
+    case ConditionCode::NV: // Always (ARMv4 and above)
+        return true;
+    }
+
+    return false;
+}
+#endif
+
 unsigned InterpreterMainLoop(ARMul_State* cpu) {
     MICROPROFILE_SCOPE(DynCom_Execute);
+
+    // Cache frequently accessed CPU state to improve performance
+    std::array<u32, 16>& cpu_registers = cpu->Reg;
+    u32& cpu_cpsr = cpu->Cpsr;
 
     /// Nearest upcoming GDB code execution breakpoint, relative to the last dispatch's address.
     GDBStub::BreakpointAddress breakpoint_data;
@@ -1258,7 +1366,7 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
         if (GDBStub::IsMemoryBreak()) {                                                            \
             goto END;                                                                              \
         } else if (breakpoint_data.type != GDBStub::BreakpointType::None &&                        \
-                   PC == breakpoint_data.address) {                                                \
+                   cpu->Reg[15] == breakpoint_data.address) {                                      \
             cpu->RecordBreak(breakpoint_data);                                                     \
             goto END;                                                                              \
         }                                                                                          \
@@ -1268,11 +1376,16 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
 // GCC and Clang have a C++ extension to support a lookup table of labels. Otherwise, fallback to a
 // clunky switch statement.
 #if defined __GNUC__ || (defined __clang__ && !defined _MSC_VER)
+#if defined(__ARM_NEON) || defined(__aarch64__)
 #define GOTO_NEXT_INST                                                                             \
     GDB_BP_CHECK;                                                                                  \
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
+    /* Ensure CPU flags are synchronized */                                                        \
+    LOAD_NZCVT;                                                                                    \
+    /* Use prefetch hint to improve instruction cache performance */                               \
+    __builtin_prefetch(&InstLabel[inst_base->idx], 0, 0);                                         \
     goto* InstLabel[inst_base->idx]
 #else
 #define GOTO_NEXT_INST                                                                             \
@@ -1280,6 +1393,18 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
+    /* Ensure CPU flags are synchronized */                                                        \
+    LOAD_NZCVT;                                                                                    \
+    goto* InstLabel[inst_base->idx]
+#endif
+#else
+#define GOTO_NEXT_INST                                                                             \
+    GDB_BP_CHECK;                                                                                  \
+    if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
+        goto END;                                                                                  \
+    num_instrs++;                                                                                  \
+    /* Ensure CPU flags are synchronized */                                                        \
+    LOAD_NZCVT;                                                                                    \
     switch (inst_base->idx) {                                                                      \
     case 0:                                                                                        \
         goto VMLA_INST;                                                                            \
@@ -1924,6 +2049,7 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     unsigned int addr;
     unsigned int num_instrs = 0;
 
+
     std::size_t ptr;
 
     LOAD_NZCVT;
@@ -1963,7 +2089,11 @@ DISPATCH : {
     GOTO_NEXT_INST;
 }
 ADC_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         adc_inst* const inst_cream = (adc_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -1997,7 +2127,11 @@ ADC_INST : {
     GOTO_NEXT_INST;
 }
 ADD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         add_inst* const inst_cream = (add_inst*)inst_base->component;
 
         u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
@@ -2029,7 +2163,11 @@ ADD_INST : {
     GOTO_NEXT_INST;
 }
 AND_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         and_inst* const inst_cream = (and_inst*)inst_base->component;
 
         u32 lop = RN;
@@ -2106,7 +2244,11 @@ BIC_INST : {
     GOTO_NEXT_INST;
 }
 BKPT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         bkpt_inst* const inst_cream = (bkpt_inst*)inst_base->component;
         LOG_DEBUG(Core_ARM11, "Breakpoint instruction hit. Immediate: {:#010X}", inst_cream->imm);
     }
@@ -2152,7 +2294,11 @@ BXJ_INST : {
     //
     // This is sufficient for citra, as the CPU for the 3DS does not implement Jazelle.
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         bx_inst* const inst_cream = (bx_inst*)inst_base->component;
 
         u32 address = RM;
@@ -2172,7 +2318,11 @@ BXJ_INST : {
 }
 
 CDP_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         // Undefined instruction here
         cpu->NumInstrsToExecute = 0;
         return num_instrs;
@@ -2191,7 +2341,11 @@ CLREX_INST : {
     GOTO_NEXT_INST;
 }
 CLZ_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         clz_inst* inst_cream = (clz_inst*)inst_base->component;
         RD = clz(RM);
     }
@@ -2201,7 +2355,11 @@ CLZ_INST : {
     GOTO_NEXT_INST;
 }
 CMN_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         cmn_inst* const inst_cream = (cmn_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -2223,7 +2381,11 @@ CMN_INST : {
     GOTO_NEXT_INST;
 }
 CMP_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         cmp_inst* const inst_cream = (cmp_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -2276,7 +2438,11 @@ CPS_INST : {
     GOTO_NEXT_INST;
 }
 CPY_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mov_inst* inst_cream = (mov_inst*)inst_base->component;
 
         RD = SHIFTER_OPERAND;
@@ -2291,7 +2457,11 @@ CPY_INST : {
     GOTO_NEXT_INST;
 }
 EOR_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         eor_inst* inst_cream = (eor_inst*)inst_base->component;
 
         u32 lop = RN;
@@ -2330,7 +2500,11 @@ LDC_INST : {
     GOTO_NEXT_INST;
 }
 LDM_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2401,7 +2575,11 @@ LDM_INST : {
     GOTO_NEXT_INST;
 }
 SXTH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sxth_inst* inst_cream = (sxth_inst*)inst_base->component;
 
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate);
@@ -2459,7 +2637,11 @@ LDRCOND_INST : {
     GOTO_NEXT_INST;
 }
 UXTH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         uxth_inst* inst_cream = (uxth_inst*)inst_base->component;
         RD = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xffff;
     }
@@ -2469,7 +2651,11 @@ UXTH_INST : {
     GOTO_NEXT_INST;
 }
 UXTAH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         uxtah_inst* inst_cream = (uxtah_inst*)inst_base->component;
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xffff;
 
@@ -2481,7 +2667,11 @@ UXTAH_INST : {
     GOTO_NEXT_INST;
 }
 LDRB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2493,7 +2683,11 @@ LDRB_INST : {
     GOTO_NEXT_INST;
 }
 LDRBT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2512,7 +2706,11 @@ LDRBT_INST : {
     GOTO_NEXT_INST;
 }
 LDRD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         // Should check if RD is even-numbered, Rd != 14, addr[0:1] == 0, (CP15_reg1_U == 1 ||
         // addr[2] == 0)
@@ -2532,7 +2730,11 @@ LDRD_INST : {
 }
 
 LDREX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int read_addr = RN;
 
@@ -2546,7 +2748,11 @@ LDREX_INST : {
     GOTO_NEXT_INST;
 }
 LDREXB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int read_addr = RN;
 
@@ -2560,7 +2766,11 @@ LDREXB_INST : {
     GOTO_NEXT_INST;
 }
 LDREXH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int read_addr = RN;
 
@@ -2574,7 +2784,11 @@ LDREXH_INST : {
     GOTO_NEXT_INST;
 }
 LDREXD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int read_addr = RN;
 
@@ -2589,7 +2803,11 @@ LDREXD_INST : {
     GOTO_NEXT_INST;
 }
 LDRH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2601,7 +2819,11 @@ LDRH_INST : {
     GOTO_NEXT_INST;
 }
 LDRSB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
         unsigned int value = cpu->ReadMemory8(addr);
@@ -2616,7 +2838,11 @@ LDRSB_INST : {
     GOTO_NEXT_INST;
 }
 LDRSH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2632,7 +2858,11 @@ LDRSH_INST : {
     GOTO_NEXT_INST;
 }
 LDRT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -2651,7 +2881,11 @@ LDRT_INST : {
     GOTO_NEXT_INST;
 }
 MCR_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mcr_inst* inst_cream = (mcr_inst*)inst_base->component;
 
         unsigned int inst = inst_cream->inst;
@@ -2671,7 +2905,11 @@ MCR_INST : {
 MCRR_INST : {
     // Stubbed, as the MPCore doesn't have any registers that are accessible
     // through this instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mcrr_inst* const inst_cream = (mcrr_inst*)inst_base->component;
 
         LOG_ERROR(Core_ARM11, "MCRR executed | Coprocessor: {}, CRm {}, opc1: {}, Rt: {}, Rt2: {}",
@@ -2686,7 +2924,11 @@ MCRR_INST : {
 }
 
 MLA_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mla_inst* inst_cream = (mla_inst*)inst_base->component;
 
         u64 rm = RM;
@@ -2705,7 +2947,11 @@ MLA_INST : {
     GOTO_NEXT_INST;
 }
 MOV_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mov_inst* inst_cream = (mov_inst*)inst_base->component;
 
         RD = SHIFTER_OPERAND;
@@ -2731,7 +2977,11 @@ MOV_INST : {
     GOTO_NEXT_INST;
 }
 MRC_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mrc_inst* inst_cream = (mrc_inst*)inst_base->component;
 
         if (inst_cream->cp_num == 15) {
@@ -2754,7 +3004,11 @@ MRC_INST : {
 MRRC_INST : {
     // Stubbed, as the MPCore doesn't have any registers that are accessible
     // through this instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mcrr_inst* const inst_cream = (mcrr_inst*)inst_base->component;
 
         LOG_ERROR(Core_ARM11, "MRRC executed | Coprocessor: {}, CRm {}, opc1: {}, Rt: {}, Rt2: {}",
@@ -2769,7 +3023,11 @@ MRRC_INST : {
 }
 
 MRS_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mrs_inst* inst_cream = (mrs_inst*)inst_base->component;
 
         if (inst_cream->R) {
@@ -2785,7 +3043,11 @@ MRS_INST : {
     GOTO_NEXT_INST;
 }
 MSR_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         msr_inst* inst_cream = (msr_inst*)inst_base->component;
         const u32 UserMask = 0xf80f0200, PrivMask = 0x000001df, StateMask = 0x01000020;
         unsigned int inst = inst_cream->inst;
@@ -2828,7 +3090,11 @@ MSR_INST : {
     GOTO_NEXT_INST;
 }
 MUL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mul_inst* inst_cream = (mul_inst*)inst_base->component;
 
         u64 rm = RM;
@@ -2845,7 +3111,11 @@ MUL_INST : {
     GOTO_NEXT_INST;
 }
 MVN_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         mvn_inst* const inst_cream = (mvn_inst*)inst_base->component;
 
         RD = ~SHIFTER_OPERAND;
@@ -2872,7 +3142,11 @@ MVN_INST : {
     GOTO_NEXT_INST;
 }
 ORR_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         orr_inst* const inst_cream = (orr_inst*)inst_base->component;
 
         u32 lop = RN;
@@ -2913,7 +3187,11 @@ NOP_INST : {
 }
 
 PKHBT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         pkh_inst* inst_cream = (pkh_inst*)inst_base->component;
         RD = (RN & 0xFFFF) | ((RM << inst_cream->imm) & 0xFFFF0000);
     }
@@ -2924,7 +3202,11 @@ PKHBT_INST : {
 }
 
 PKHTB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         pkh_inst* inst_cream = (pkh_inst*)inst_base->component;
         int shift_imm = inst_cream->imm ? inst_cream->imm : 31;
         RD = ((static_cast<s32>(RM) >> shift_imm) & 0xFFFF) | (RN & 0xFFFF0000);
@@ -2948,7 +3230,11 @@ QADD_INST:
 QDADD_INST:
 QDSUB_INST:
 QSUB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
         const u8 op1 = inst_cream->op1;
         const u32 rm_val = RM;
@@ -3022,7 +3308,11 @@ QADDSUBX_INST:
 QSUB8_INST:
 QSUB16_INST:
 QSUBADDX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
         const u16 rm_lo = (RM & 0xFFFF);
         const u16 rm_hi = ((RM >> 16) & 0xFFFF);
@@ -3081,7 +3371,11 @@ REV_INST:
 REV16_INST:
 REVSH_INST : {
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         rev_inst* const inst_cream = (rev_inst*)inst_base->component;
 
         const u8 op1 = inst_cream->op1;
@@ -3126,7 +3420,11 @@ RFE_INST : {
 }
 
 RSB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         rsb_inst* const inst_cream = (rsb_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -3160,7 +3458,11 @@ RSB_INST : {
     GOTO_NEXT_INST;
 }
 RSC_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         rsc_inst* const inst_cream = (rsc_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -3200,7 +3502,11 @@ SADD16_INST:
 SADDSUBX_INST:
 SSUBADDX_INST:
 SSUB16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
         const u8 op2 = inst_cream->op2;
 
@@ -3302,7 +3608,11 @@ SSUB16_INST : {
 }
 
 SBC_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sbc_inst* const inst_cream = (sbc_inst*)inst_base->component;
 
         u32 rn_val = RN;
@@ -3337,7 +3647,11 @@ SBC_INST : {
 }
 
 SEL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
 
         const u32 to = RM;
@@ -3394,7 +3708,11 @@ SETEND_INST : {
 
 SEV_INST : {
     // Stubbed, as SEV is a hint instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         LOG_TRACE(Core_ARM11, "SEV executed.");
     }
 
@@ -3410,7 +3728,11 @@ SHADDSUBX_INST:
 SHSUB8_INST:
 SHSUB16_INST:
 SHSUBADDX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
 
         const u8 op2 = inst_cream->op2;
@@ -3476,7 +3798,11 @@ SHSUBADDX_INST : {
 }
 
 SMLA_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smla_inst* inst_cream = (smla_inst*)inst_base->component;
         s32 operand1, operand2;
         if (inst_cream->x == 0)
@@ -3505,7 +3831,11 @@ SMLAD_INST:
 SMLSD_INST:
 SMUAD_INST:
 SMUSD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlad_inst* const inst_cream = (smlad_inst*)inst_base->component;
         const u8 op2 = inst_cream->op2;
 
@@ -3561,7 +3891,11 @@ SMUSD_INST : {
 }
 
 SMLAL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         umlal_inst* inst_cream = (umlal_inst*)inst_base->component;
         long long int rm = RM;
         long long int rs = RS;
@@ -3589,7 +3923,11 @@ SMLAL_INST : {
 }
 
 SMLALXY_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlalxy_inst* const inst_cream = (smlalxy_inst*)inst_base->component;
 
         u64 operand1 = RN;
@@ -3618,7 +3956,11 @@ SMLALXY_INST : {
 }
 
 SMLAW_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlad_inst* const inst_cream = (smlad_inst*)inst_base->component;
 
         const u32 rm_val = RM;
@@ -3643,7 +3985,11 @@ SMLAW_INST : {
 
 SMLALD_INST:
 SMLSLD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlald_inst* const inst_cream = (smlald_inst*)inst_base->component;
 
         const bool do_swap = (inst_cream->swap == 1);
@@ -3681,7 +4027,11 @@ SMLSLD_INST : {
 SMMLA_INST:
 SMMLS_INST:
 SMMUL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlad_inst* const inst_cream = (smlad_inst*)inst_base->component;
 
         const u32 rm_val = RM;
@@ -3714,7 +4064,11 @@ SMMUL_INST : {
 }
 
 SMUL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smul_inst* inst_cream = (smul_inst*)inst_base->component;
         u32 operand1, operand2;
         if (inst_cream->x == 0)
@@ -3734,7 +4088,11 @@ SMUL_INST : {
     GOTO_NEXT_INST;
 }
 SMULL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         umull_inst* inst_cream = (umull_inst*)inst_base->component;
         s64 rm = RM;
         s64 rs = RS;
@@ -3760,7 +4118,11 @@ SMULL_INST : {
 }
 
 SMULW_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         smlad_inst* const inst_cream = (smlad_inst*)inst_base->component;
 
         s16 rm = (inst_cream->m == 1) ? ((RM >> 16) & 0xFFFF) : (RM & 0xFFFF);
@@ -3791,7 +4153,11 @@ SRS_INST : {
 }
 
 SSAT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ssat_inst* const inst_cream = (ssat_inst*)inst_base->component;
 
         u8 shift_type = inst_cream->shift_type;
@@ -3823,7 +4189,11 @@ SSAT_INST : {
 }
 
 SSAT16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ssat_inst* const inst_cream = (ssat_inst*)inst_base->component;
         const u8 saturate_to = inst_cream->sat_imm;
 
@@ -3852,7 +4222,11 @@ STC_INST : {
     GOTO_NEXT_INST;
 }
 STM_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         unsigned int inst = inst_cream->inst;
 
@@ -3910,7 +4284,11 @@ STM_INST : {
     GOTO_NEXT_INST;
 }
 SXTB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sxtb_inst* inst_cream = (sxtb_inst*)inst_base->component;
 
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate);
@@ -3927,7 +4305,11 @@ SXTB_INST : {
     GOTO_NEXT_INST;
 }
 STR_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -3945,7 +4327,11 @@ STR_INST : {
     GOTO_NEXT_INST;
 }
 UXTB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         uxtb_inst* inst_cream = (uxtb_inst*)inst_base->component;
         RD = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xff;
     }
@@ -3955,7 +4341,11 @@ UXTB_INST : {
     GOTO_NEXT_INST;
 }
 UXTAB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         uxtab_inst* inst_cream = (uxtab_inst*)inst_base->component;
 
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xff;
@@ -3967,7 +4357,11 @@ UXTAB_INST : {
     GOTO_NEXT_INST;
 }
 STRB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
         unsigned int value = cpu->Reg[BITS(inst_cream->inst, 12, 15)] & 0xff;
@@ -3979,7 +4373,11 @@ STRB_INST : {
     GOTO_NEXT_INST;
 }
 STRBT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -3996,7 +4394,11 @@ STRBT_INST : {
     GOTO_NEXT_INST;
 }
 STRD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -4011,7 +4413,11 @@ STRD_INST : {
     GOTO_NEXT_INST;
 }
 STREX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int write_addr = cpu->Reg[inst_cream->Rn];
 
@@ -4030,7 +4436,11 @@ STREX_INST : {
     GOTO_NEXT_INST;
 }
 STREXB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int write_addr = cpu->Reg[inst_cream->Rn];
 
@@ -4049,7 +4459,11 @@ STREXB_INST : {
     GOTO_NEXT_INST;
 }
 STREXD_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int write_addr = cpu->Reg[inst_cream->Rn];
 
@@ -4078,7 +4492,11 @@ STREXD_INST : {
     GOTO_NEXT_INST;
 }
 STREXH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
         unsigned int write_addr = cpu->Reg[inst_cream->Rn];
 
@@ -4097,7 +4515,11 @@ STREXH_INST : {
     GOTO_NEXT_INST;
 }
 STRH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -4110,7 +4532,11 @@ STRH_INST : {
     GOTO_NEXT_INST;
 }
 STRT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
@@ -4131,7 +4557,11 @@ STRT_INST : {
     GOTO_NEXT_INST;
 }
 SUB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sub_inst* const inst_cream = (sub_inst*)inst_base->component;
 
         u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
@@ -4163,7 +4593,11 @@ SUB_INST : {
     GOTO_NEXT_INST;
 }
 SWI_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         DEBUG_ASSERT(cpu->system != nullptr);
         swi_inst* const inst_cream = (swi_inst*)inst_base->component;
         cpu->system->GetRunningCore().GetTimer().AddTicks(num_instrs);
@@ -4181,7 +4615,11 @@ SWI_INST : {
     GOTO_NEXT_INST;
 }
 SWP_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         swp_inst* inst_cream = (swp_inst*)inst_base->component;
 
         addr = RN;
@@ -4196,7 +4634,11 @@ SWP_INST : {
     GOTO_NEXT_INST;
 }
 SWPB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         swp_inst* inst_cream = (swp_inst*)inst_base->component;
         addr = RN;
         unsigned int value = cpu->ReadMemory8(addr);
@@ -4209,7 +4651,11 @@ SWPB_INST : {
     GOTO_NEXT_INST;
 }
 SXTAB_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sxtab_inst* inst_cream = (sxtab_inst*)inst_base->component;
 
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xff;
@@ -4226,7 +4672,11 @@ SXTAB_INST : {
 
 SXTAB16_INST:
 SXTB16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sxtab_inst* const inst_cream = (sxtab_inst*)inst_base->component;
 
         const u8 rotation = inst_cream->rotate * 8;
@@ -4257,7 +4707,11 @@ SXTB16_INST : {
 }
 
 SXTAH_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         sxtah_inst* inst_cream = (sxtah_inst*)inst_base->component;
 
         unsigned int operand2 = ROTATE_RIGHT_32(RM, 8 * inst_cream->rotate) & 0xffff;
@@ -4272,7 +4726,11 @@ SXTAH_INST : {
 }
 
 TEQ_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         teq_inst* const inst_cream = (teq_inst*)inst_base->component;
 
         u32 lop = RN;
@@ -4293,7 +4751,11 @@ TEQ_INST : {
     GOTO_NEXT_INST;
 }
 TST_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         tst_inst* const inst_cream = (tst_inst*)inst_base->component;
 
         u32 lop = RN;
@@ -4320,7 +4782,11 @@ UADDSUBX_INST:
 USUB8_INST:
 USUB16_INST:
 USUBADDX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
 
         const u8 op2 = inst_cream->op2;
@@ -4490,7 +4956,11 @@ UHADDSUBX_INST:
 UHSUBADDX_INST:
 UHSUB8_INST:
 UHSUB16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
         const u32 rm_val = RM;
         const u32 rn_val = RN;
@@ -4563,7 +5033,11 @@ UHSUB16_INST : {
 }
 
 UMAAL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         umaal_inst* const inst_cream = (umaal_inst*)inst_base->component;
         const u64 rm = RM;
         const u64 rn = RN;
@@ -4580,7 +5054,11 @@ UMAAL_INST : {
     GOTO_NEXT_INST;
 }
 UMLAL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         umlal_inst* inst_cream = (umlal_inst*)inst_base->component;
         unsigned long long int rm = RM;
         unsigned long long int rs = RS;
@@ -4602,7 +5080,11 @@ UMLAL_INST : {
     GOTO_NEXT_INST;
 }
 UMULL_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         umull_inst* inst_cream = (umull_inst*)inst_base->component;
         unsigned long long int rm = RM;
         unsigned long long int rs = RS;
@@ -4670,7 +5152,11 @@ UQADDSUBX_INST:
 UQSUB8_INST:
 UQSUB16_INST:
 UQSUBADDX_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* const inst_cream = (generic_arm_inst*)inst_base->component;
 
         const u8 op2 = inst_cream->op2;
@@ -4726,7 +5212,11 @@ UQSUBADDX_INST : {
 
 USAD8_INST:
 USADA8_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
 
         const u8 ra_idx = inst_cream->Ra;
@@ -4757,7 +5247,11 @@ USADA8_INST : {
 }
 
 USAT_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ssat_inst* const inst_cream = (ssat_inst*)inst_base->component;
 
         u8 shift_type = inst_cream->shift_type;
@@ -4789,7 +5283,11 @@ USAT_INST : {
 }
 
 USAT16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         ssat_inst* const inst_cream = (ssat_inst*)inst_base->component;
         const u8 saturate_to = inst_cream->sat_imm;
 
@@ -4811,7 +5309,11 @@ USAT16_INST : {
 
 UXTAB16_INST:
 UXTB16_INST : {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         uxtab_inst* const inst_cream = (uxtab_inst*)inst_base->component;
 
         const u8 rn_idx = inst_cream->Rn;
@@ -4841,7 +5343,11 @@ UXTB16_INST : {
 
 WFE_INST : {
     // Stubbed, as WFE is a hint instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         LOG_TRACE(Core_ARM11, "WFE executed.");
     }
 
@@ -4853,7 +5359,11 @@ WFE_INST : {
 
 WFI_INST : {
     // Stubbed, as WFI is a hint instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         LOG_TRACE(Core_ARM11, "WFI executed.");
     }
 
@@ -4865,7 +5375,11 @@ WFI_INST : {
 
 YIELD_INST : {
     // Stubbed, as YIELD is a hint instruction.
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (inst_base->cond == ConditionCode::AL || FastCondPassed(cpu, inst_base->cond)) {
+#else
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+#endif
         LOG_TRACE(Core_ARM11, "YIELD executed.");
     }
 
