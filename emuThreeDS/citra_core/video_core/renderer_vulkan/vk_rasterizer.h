@@ -47,6 +47,7 @@ public:
 
     void DrawTriangles() override;
     void FlushAll() override;
+    void FlushCommands();
     void FlushRegion(PAddr addr, u32 size) override;
     void InvalidateRegion(PAddr addr, u32 size) override;
     void FlushAndInvalidateRegion(PAddr addr, u32 size) override;
