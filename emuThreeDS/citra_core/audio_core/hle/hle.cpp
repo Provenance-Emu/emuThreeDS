@@ -11,7 +11,9 @@
 #include "audio_core/audio_types.h"
 #include "common/detached_tasks.h"
 
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#define USE_NEON 1
+
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include "audio_core/hle/mixer_neon.h"
 #endif
 #ifdef HAVE_MF
@@ -461,7 +463,7 @@ StereoFrame16 DspHle::Impl::GenerateCurrentFrame() {
     StereoFrame16 output_frame = mixers.GetOutput();
 
     // Write current output frame to the shared memory region
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Use NEON-optimized version for ARM platforms
     for (std::size_t samplei = 0; samplei < output_frame.size(); samplei += 8) {
         if (samplei + 8 <= output_frame.size()) {
