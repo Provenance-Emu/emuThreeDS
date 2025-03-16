@@ -10,6 +10,10 @@
 #include "audio_core/hle/shared_memory.h"
 #include "common/common_types.h"
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include "audio_core/hle/filter_neon.h"
+#endif
+
 namespace AudioCore::HLE {
 
 void SourceFilters::Reset() {
@@ -34,16 +38,42 @@ void SourceFilters::Configure(SourceConfiguration::Configuration::BiquadFilter c
     biquad_filter.Configure(config);
 }
 
+std::array<s16, 2> SourceFilters::ProcessSample(const std::array<s16, 2>& sample, bool use_simple, bool use_biquad) {
+    std::array<s16, 2> result = sample;
+    
+    // Only apply simple filter if it's enabled and requested
+    if (simple_filter_enabled && use_simple) {
+        result = simple_filter.ProcessSample(result);
+    }
+    
+    // Only apply biquad filter if it's enabled and requested
+    if (biquad_filter_enabled && use_biquad) {
+        result = biquad_filter.ProcessSample(result);
+    }
+    
+    return result;
+}
+
 void SourceFilters::ProcessFrame(StereoFrame16& frame) {
     if (!simple_filter_enabled && !biquad_filter_enabled)
         return;
 
     if (simple_filter_enabled) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Use NEON-optimized implementation on ARM platforms
+        SimpleFilter_ProcessFrame_NEON(frame, *this);
+#else
         FilterFrame(frame, simple_filter);
+#endif
     }
 
     if (biquad_filter_enabled) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Use NEON-optimized implementation on ARM platforms
+        BiquadFilter_ProcessFrame_NEON(frame, *this);
+#else
         FilterFrame(frame, biquad_filter);
+#endif
     }
 }
 

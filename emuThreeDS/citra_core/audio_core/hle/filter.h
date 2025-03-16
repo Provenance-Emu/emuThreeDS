@@ -47,6 +47,15 @@ public:
      * @param frame Audio samples to process. Modified in-place.
      */
     void ProcessFrame(StereoFrame16& frame);
+    
+    /**
+     * Processes a single stereo PCM16 sample through the enabled filters.
+     * @param sample Input sample
+     * @param use_simple If true, process through simple filter
+     * @param use_biquad If true, process through biquad filter
+     * @return Output sample after filtering
+     */
+    std::array<s16, 2> ProcessSample(const std::array<s16, 2>& sample, bool use_simple, bool use_biquad);
 
 private:
     bool simple_filter_enabled;
