@@ -26,27 +26,43 @@ inline int16x8_t ClampToS16_NEON(int32x4_t low, int32x4_t high) {
 
 // NEON-optimized version for adding and clamping stereo samples
 inline void AddAndClampToS16_NEON(std::array<s16, 2>* dst, const std::array<s16, 2>* src, int count) {
-    // Process one stereo sample at a time to avoid alignment issues
-    for (int i = 0; i < count; i++) {
-        // Load stereo sample (left, right) from dst and src
-        s16 dst_left = dst[i][0];
-        s16 dst_right = dst[i][1];
-        s16 src_left = src[i][0];
-        s16 src_right = src[i][1];
+    // Process 4 stereo samples at a time using NEON
+    int i = 0;
+    
+    // Process blocks of 4 stereo samples (8 values total)
+    for (; i + 3 < count; i += 4) {
+        // Load 4 stereo samples (8 values) from dst and src
+        int16x8_t dst_vec = vld1q_s16(reinterpret_cast<const int16_t*>(&dst[i]));
+        int16x8_t src_vec = vld1q_s16(reinterpret_cast<const int16_t*>(&src[i]));
         
-        // Apply a slight attenuation to prevent potential clipping
-        float dst_left_f32 = static_cast<float>(dst_left) * 0.99f;
-        float dst_right_f32 = static_cast<float>(dst_right) * 0.99f;
-        float src_left_f32 = static_cast<float>(src_left) * 0.99f;
-        float src_right_f32 = static_cast<float>(src_right) * 0.99f;
+        // Convert to 32-bit to prevent overflow during addition
+        int32x4_t dst_low = vmovl_s16(vget_low_s16(dst_vec));
+        int32x4_t dst_high = vmovl_s16(vget_high_s16(dst_vec));
+        int32x4_t src_low = vmovl_s16(vget_low_s16(src_vec));
+        int32x4_t src_high = vmovl_s16(vget_high_s16(src_vec));
         
-        // Add in floating point domain
-        float sum_left = dst_left_f32 + src_left_f32;
-        float sum_right = dst_right_f32 + src_right_f32;
+        // Add with saturation in 32-bit domain
+        int32x4_t sum_low = vaddq_s32(dst_low, src_low);
+        int32x4_t sum_high = vaddq_s32(dst_high, src_high);
         
-        // Convert back to s16 with saturation
-        dst[i][0] = static_cast<s16>(std::clamp(static_cast<s32>(sum_left), -32768, 32767));
-        dst[i][1] = static_cast<s16>(std::clamp(static_cast<s32>(sum_right), -32768, 32767));
+        // Convert back to 16-bit with saturation
+        int16x8_t result = vcombine_s16(vqmovn_s32(sum_low), vqmovn_s32(sum_high));
+        
+        // Store the result
+        vst1q_s16(reinterpret_cast<int16_t*>(&dst[i]), result);
+    }
+    
+    // Handle remaining samples
+    for (; i < count; i++) {
+        // Direct NEON operation for individual sample
+        int16x4_t dst_vec = vld1_s16(reinterpret_cast<const int16_t*>(&dst[i]));
+        int16x4_t src_vec = vld1_s16(reinterpret_cast<const int16_t*>(&src[i]));
+        
+        // Add with saturation
+        int16x4_t result = vqadd_s16(dst_vec, src_vec);
+        
+        // Store the result
+        vst1_s16(reinterpret_cast<int16_t*>(&dst[i]), result);
     }
 }
 
@@ -54,82 +70,89 @@ inline void AddAndClampToS16_NEON(std::array<s16, 2>* dst, const std::array<s16,
 inline void DownmixQuadToStereo_NEON(std::array<s16, 2>* dst, const std::array<s32, 4>* src, float gain, int count) {
     // Process 4 samples at a time using NEON
     int i = 0;
-    const int32_t gain_fixed = static_cast<int32_t>(gain * 16384.0f); // Fixed-point gain
+    
+    // Use float32 NEON operations for better precision
+    float32x4_t gain_vec = vdupq_n_f32(gain);
     
     // Process blocks of 4 samples
     for (; i + 3 < count; i += 4) {
         // Load 4 stereo destination samples (8 values total)
         int16x8_t dst_vec = vld1q_s16(reinterpret_cast<const int16_t*>(&dst[i]));
-        int32x4_t dst_left = vmovl_s16(vget_low_s16(dst_vec));
-        int32x4_t dst_right = vmovl_s16(vget_high_s16(dst_vec));
         
-        // Process 4 samples at once
-        int32x4_t front_left, front_right, back_left, back_right;
-        int32x4_t mixed_left, mixed_right;
+        // Convert destination samples to 32-bit for processing
+        int32x4_t dst_left_s32 = vmovl_s16(vget_low_s16(dst_vec));
+        int32x4_t dst_right_s32 = vmovl_s16(vget_high_s16(dst_vec));
         
-        // Load quad channels for 4 samples with better memory access pattern
-        // Instead of using vsetq_lane_s32 in a loop (which requires constant indices),
-        // we'll manually load the values into arrays and then create vectors from them
-        int32_t fl_array[4], fr_array[4], bl_array[4], br_array[4];
+        // Convert to float for better precision
+        float32x4_t dst_left_f32 = vcvtq_f32_s32(dst_left_s32);
+        float32x4_t dst_right_f32 = vcvtq_f32_s32(dst_right_s32);
         
-        // Load values into temporary arrays
+        // Prepare arrays for quad channel data
+        float32_t fl_array[4], fr_array[4], bl_array[4], br_array[4];
+        
+        // Extract and convert source samples to float
         for (int j = 0; j < 4; j++) {
-            fl_array[j] = src[i+j][0];
-            fr_array[j] = src[i+j][1];
-            bl_array[j] = src[i+j][2];
-            br_array[j] = src[i+j][3];
+            fl_array[j] = static_cast<float>(src[i+j][0]);
+            fr_array[j] = static_cast<float>(src[i+j][1]);
+            bl_array[j] = static_cast<float>(src[i+j][2]);
+            br_array[j] = static_cast<float>(src[i+j][3]);
         }
         
-        // Create NEON vectors from the arrays
-        front_left = vld1q_s32(fl_array);
-        front_right = vld1q_s32(fr_array);
-        back_left = vld1q_s32(bl_array);
-        back_right = vld1q_s32(br_array);
+        // Load into NEON registers
+        float32x4_t front_left = vld1q_f32(fl_array);
+        float32x4_t front_right = vld1q_f32(fr_array);
+        float32x4_t back_left = vld1q_f32(bl_array);
+        float32x4_t back_right = vld1q_f32(br_array);
         
-        // Apply fixed-point gain and mix front and back channels
-        // Use NEON multiply-accumulate operations for better performance
-        mixed_left = vmulq_n_s32(front_left, gain_fixed);
-        mixed_left = vmlaq_n_s32(mixed_left, back_left, gain_fixed);
+        // Apply gain to all channels
+        front_left = vmulq_f32(front_left, gain_vec);
+        front_right = vmulq_f32(front_right, gain_vec);
+        back_left = vmulq_f32(back_left, gain_vec);
+        back_right = vmulq_f32(back_right, gain_vec);
         
-        mixed_right = vmulq_n_s32(front_right, gain_fixed);
-        mixed_right = vmlaq_n_s32(mixed_right, back_right, gain_fixed);
+        // Mix front and back channels for left and right
+        float32x4_t mixed_left = vaddq_f32(front_left, back_left);
+        float32x4_t mixed_right = vaddq_f32(front_right, back_right);
         
-        // Shift right to account for fixed-point multiplication
-        mixed_left = vshrq_n_s32(mixed_left, 14);
-        mixed_right = vshrq_n_s32(mixed_right, 14);
+        // Add to destination
+        float32x4_t result_left_f32 = vaddq_f32(dst_left_f32, mixed_left);
+        float32x4_t result_right_f32 = vaddq_f32(dst_right_f32, mixed_right);
         
-        // Convert to s16 with saturation
-        int16x4_t left_s16 = vqmovn_s32(mixed_left);
-        int16x4_t right_s16 = vqmovn_s32(mixed_right);
+        // Convert back to int32 with rounding
+        int32x4_t result_left_s32 = vcvtnq_s32_f32(result_left_f32);
+        int32x4_t result_right_s32 = vcvtnq_s32_f32(result_right_f32);
         
-        // Add to destination with saturation
-        int16x4_t result_left = vqadd_s16(vqmovn_s32(dst_left), left_s16);
-        int16x4_t result_right = vqadd_s16(vqmovn_s32(dst_right), right_s16);
+        // Saturate to 16-bit
+        int16x4_t result_left_s16 = vqmovn_s32(result_left_s32);
+        int16x4_t result_right_s16 = vqmovn_s32(result_right_s32);
         
         // Combine and store results
-        int16x8_t result = vcombine_s16(result_left, result_right);
+        int16x8_t result = vcombine_s16(result_left_s16, result_right_s16);
         vst1q_s16(reinterpret_cast<int16_t*>(&dst[i]), result);
     }
     
     // Handle remaining samples
     for (; i < count; i++) {
         // Extract quad channels
-        s32 front_left = src[i][0];
-        s32 front_right = src[i][1];
-        s32 back_left = src[i][2];
-        s32 back_right = src[i][3];
+        float front_left = static_cast<float>(src[i][0]);
+        float front_right = static_cast<float>(src[i][1]);
+        float back_left = static_cast<float>(src[i][2]);
+        float back_right = static_cast<float>(src[i][3]);
         
-        // Apply gain and mix front and back channels (fixed-point)
-        s32 left = (gain_fixed * front_left + gain_fixed * back_left) >> 14;
-        s32 right = (gain_fixed * front_right + gain_fixed * back_right) >> 14;
-        
-        // Convert to s16 with saturation
-        s16 left_s16 = static_cast<s16>(std::clamp(left, -32768, 32767));
-        s16 right_s16 = static_cast<s16>(std::clamp(right, -32768, 32767));
+        // Apply gain and mix front and back channels
+        float left = gain * front_left + gain * back_left;
+        float right = gain * front_right + gain * back_right;
         
         // Add to destination with saturation
-        dst[i][0] = static_cast<s16>(std::clamp(static_cast<s32>(dst[i][0]) + static_cast<s32>(left_s16), -32768, 32767));
-        dst[i][1] = static_cast<s16>(std::clamp(static_cast<s32>(dst[i][1]) + static_cast<s32>(right_s16), -32768, 32767));
+        float dst_left = static_cast<float>(dst[i][0]);
+        float dst_right = static_cast<float>(dst[i][1]);
+        
+        dst_left += left;
+        dst_right += right;
+        
+        // Convert back to s16 with saturation
+        dst[i][0] = static_cast<s16>(std::clamp(static_cast<s32>(dst_left), -32768, 32767));
+        dst[i][1] = static_cast<s16>(std::clamp(static_cast<s32>(dst_right), -32768, 32767));
     }
 }
     
@@ -138,85 +161,139 @@ inline void DownmixQuadToStereo_NEON(std::array<s16, 2>* dst, const std::array<s
 inline void DownmixQuadToMono_NEON(std::array<s16, 2>* dst, const std::array<s32, 4>* src, float gain, int count) {
     // Process 4 samples at a time using NEON
     int i = 0;
-    const int32_t gain_fixed = static_cast<int32_t>(gain * 4096.0f); // Fixed-point gain
+    
+    // Use float32 NEON operations for better precision
+    float32x4_t gain_vec = vdupq_n_f32(gain);
+    float32x4_t quarter = vdupq_n_f32(0.25f); // For averaging 4 channels
     
     // Process blocks of 4 samples
     for (; i + 3 < count; i += 4) {
         // Load 4 stereo destination samples (8 values total)
         int16x8_t dst_vec = vld1q_s16(reinterpret_cast<const int16_t*>(&dst[i]));
-        int32x4_t dst_left = vmovl_s16(vget_low_s16(dst_vec));
-        int32x4_t dst_right = vmovl_s16(vget_high_s16(dst_vec));
         
-        // Process 4 samples at once
-        int32x4_t front_left, front_right, back_left, back_right;
-        int32x4_t mono_samples;
+        // Convert destination samples to 32-bit for processing
+        int32x4_t dst_left_s32 = vmovl_s16(vget_low_s16(dst_vec));
+        int32x4_t dst_right_s32 = vmovl_s16(vget_high_s16(dst_vec));
         
-        // Load quad channels for 4 samples with better memory access pattern
-        // Instead of using vsetq_lane_s32 in a loop (which requires constant indices),
-        // we'll manually load the values into arrays and then create vectors from them
-        int32_t fl_array[4], fr_array[4], bl_array[4], br_array[4];
+        // Convert to float for better precision
+        float32x4_t dst_left_f32 = vcvtq_f32_s32(dst_left_s32);
+        float32x4_t dst_right_f32 = vcvtq_f32_s32(dst_right_s32);
         
-        // Load values into temporary arrays
+        // Prepare arrays for quad channel data
+        float32_t fl_array[4], fr_array[4], bl_array[4], br_array[4];
+        
+        // Extract and convert source samples to float
         for (int j = 0; j < 4; j++) {
-            fl_array[j] = src[i+j][0];
-            fr_array[j] = src[i+j][1];
-            bl_array[j] = src[i+j][2];
-            br_array[j] = src[i+j][3];
+            fl_array[j] = static_cast<float>(src[i+j][0]);
+            fr_array[j] = static_cast<float>(src[i+j][1]);
+            bl_array[j] = static_cast<float>(src[i+j][2]);
+            br_array[j] = static_cast<float>(src[i+j][3]);
         }
         
-        // Create NEON vectors from the arrays
-        front_left = vld1q_s32(fl_array);
-        front_right = vld1q_s32(fr_array);
-        back_left = vld1q_s32(bl_array);
-        back_right = vld1q_s32(br_array);
+        // Load into NEON registers
+        float32x4_t front_left = vld1q_f32(fl_array);
+        float32x4_t front_right = vld1q_f32(fr_array);
+        float32x4_t back_left = vld1q_f32(bl_array);
+        float32x4_t back_right = vld1q_f32(br_array);
+        
+        // Apply gain to all channels
+        front_left = vmulq_f32(front_left, gain_vec);
+        front_right = vmulq_f32(front_right, gain_vec);
+        back_left = vmulq_f32(back_left, gain_vec);
+        back_right = vmulq_f32(back_right, gain_vec);
         
         // Sum all channels
-        mono_samples = vaddq_s32(front_left, front_right);
-        mono_samples = vaddq_s32(mono_samples, back_left);
-        mono_samples = vaddq_s32(mono_samples, back_right);
+        float32x4_t sum = vaddq_f32(front_left, front_right);
+        sum = vaddq_f32(sum, back_left);
+        sum = vaddq_f32(sum, back_right);
         
-        // Apply gain and divide by 4 (right shift by 2) for averaging
-        mono_samples = vmulq_n_s32(mono_samples, gain_fixed);
-        mono_samples = vshrq_n_s32(mono_samples, 14); // 12 bits for gain + 2 bits for divide by 4
+        // Average to get mono (divide by 4)
+        float32x4_t mono = vmulq_f32(sum, quarter);
         
-        // Convert to s16 with saturation
-        int16x4_t mono_s16 = vqmovn_s32(mono_samples);
+        // Add mono to both left and right channels
+        float32x4_t result_left_f32 = vaddq_f32(dst_left_f32, mono);
+        float32x4_t result_right_f32 = vaddq_f32(dst_right_f32, mono);
         
-        // Add to destination with saturation (both left and right channels)
-        int16x4_t result_left = vqadd_s16(vqmovn_s32(dst_left), mono_s16);
-        int16x4_t result_right = vqadd_s16(vqmovn_s32(dst_right), mono_s16);
+        // Convert back to int32 with rounding
+        int32x4_t result_left_s32 = vcvtnq_s32_f32(result_left_f32);
+        int32x4_t result_right_s32 = vcvtnq_s32_f32(result_right_f32);
+        
+        // Saturate to 16-bit
+        int16x4_t result_left_s16 = vqmovn_s32(result_left_s32);
+        int16x4_t result_right_s16 = vqmovn_s32(result_right_s32);
         
         // Combine and store results
-        int16x8_t result = vcombine_s16(result_left, result_right);
+        int16x8_t result = vcombine_s16(result_left_s16, result_right_s16);
         vst1q_s16(reinterpret_cast<int16_t*>(&dst[i]), result);
     }
     
     // Handle remaining samples
     for (; i < count; i++) {
         // Extract quad channels
-        s32 front_left = src[i][0];
-        s32 front_right = src[i][1];
-        s32 back_left = src[i][2];
-        s32 back_right = src[i][3];
+        float front_left = static_cast<float>(src[i][0]);
+        float front_right = static_cast<float>(src[i][1]);
+        float back_left = static_cast<float>(src[i][2]);
+        float back_right = static_cast<float>(src[i][3]);
         
-        // Apply gain and average all channels to mono (fixed-point)
-        s32 mono = (gain_fixed * (front_left + front_right + back_left + back_right)) >> 14;
+        // Apply gain and mix all channels to mono
+        float mono = gain * (front_left + front_right + back_left + back_right) * 0.25f;
         
-        // Convert to s16 with saturation
-        s16 mono_s16 = static_cast<s16>(std::clamp(mono, -32768, 32767));
+        // Add to destination with saturation
+        float dst_left = static_cast<float>(dst[i][0]);
+        float dst_right = static_cast<float>(dst[i][1]);
         
-        // Add to destination with saturation (both left and right channels)
-        dst[i][0] = static_cast<s16>(std::clamp(static_cast<s32>(dst[i][0]) + static_cast<s32>(mono_s16), -32768, 32767));
-        dst[i][1] = static_cast<s16>(std::clamp(static_cast<s32>(dst[i][1]) + static_cast<s32>(mono_s16), -32768, 32767));
+        dst_left += mono;
+        dst_right += mono;
+        
+        // Convert back to s16 with saturation
+        dst[i][0] = static_cast<s16>(std::clamp(static_cast<s32>(dst_left), -32768, 32767));
+        dst[i][1] = static_cast<s16>(std::clamp(static_cast<s32>(dst_right), -32768, 32767));
     }
 }
 
 // NEON-optimized version for converting final mix samples to output format
 inline void ConvertFinalMixSamples_NEON(s16* dst, const s16* src, int count) {
-    // Process samples in smaller batches to avoid alignment issues
-    for (int i = 0; i < count; i++) {
+    // Use NEON to process 8 samples at a time
+    int i = 0;
+    
+    // Create a scaling factor to prevent clipping (soft limiter)
+    float32x4_t scale_factor = vdupq_n_f32(0.98f);
+    
+    // Process blocks of 8 samples
+    for (; i + 7 < count; i += 8) {
+        // Load 8 source samples
+        int16x8_t src_vec = vld1q_s16(&src[i]);
+        
+        // Split into two 4-element vectors and convert to 32-bit integers
+        int32x4_t src_low_s32 = vmovl_s16(vget_low_s16(src_vec));
+        int32x4_t src_high_s32 = vmovl_s16(vget_high_s16(src_vec));
+        
+        // Convert to float for better precision
+        float32x4_t src_low_f32 = vcvtq_f32_s32(src_low_s32);
+        float32x4_t src_high_f32 = vcvtq_f32_s32(src_high_s32);
+        
+        // Apply soft limiter
+        src_low_f32 = vmulq_f32(src_low_f32, scale_factor);
+        src_high_f32 = vmulq_f32(src_high_f32, scale_factor);
+        
+        // Convert back to int32 with proper rounding
+        src_low_s32 = vcvtnq_s32_f32(src_low_f32);
+        src_high_s32 = vcvtnq_s32_f32(src_high_f32);
+        
+        // Convert back to int16 with saturation to prevent overflow
+        int16x4_t result_low = vqmovn_s32(src_low_s32);
+        int16x4_t result_high = vqmovn_s32(src_high_s32);
+        
+        // Combine results
+        int16x8_t result = vcombine_s16(result_low, result_high);
+        
+        // Store the result
+        vst1q_s16(&dst[i], result);
+    }
+    
+    // Handle remaining samples
+    for (; i < count; i++) {
         // Apply a slight limiter to prevent clipping
-        // This can help reduce buzzing caused by digital clipping
         float sample = static_cast<float>(src[i]) * 0.98f;
         dst[i] = static_cast<s16>(std::clamp(static_cast<s32>(sample), -32768, 32767));
     }
