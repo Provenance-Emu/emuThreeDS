@@ -8,6 +8,10 @@
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/weak_ptr.hpp>
 #include "audio_core/audio_types.h"
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include "audio_core/hle/mixer_neon.h"
+#endif
 #ifdef HAVE_MF
 #include "audio_core/hle/wmf_decoder.h"
 #elif HAVE_AUDIOTOOLBOX
@@ -431,11 +435,83 @@ StereoFrame16 DspHle::Impl::GenerateCurrentFrame() {
     StereoFrame16 output_frame = mixers.GetOutput();
 
     // Write current output frame to the shared memory region
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Use NEON-optimized version for ARM platforms
+    for (std::size_t samplei = 0; samplei < output_frame.size(); samplei += 8) {
+        if (samplei + 8 <= output_frame.size()) {
+            // Process 8 stereo samples (16 values) at a time
+            int16x8x2_t stereo_samples;
+            
+            // Initialize NEON registers
+            stereo_samples.val[0] = vdupq_n_s16(0);
+            stereo_samples.val[1] = vdupq_n_s16(0);
+            
+            // Load 8 stereo samples into NEON registers - unrolled with constant indices
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei][0], stereo_samples.val[0], 0);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei][1], stereo_samples.val[1], 0);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 1][0], stereo_samples.val[0], 1);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 1][1], stereo_samples.val[1], 1);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 2][0], stereo_samples.val[0], 2);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 2][1], stereo_samples.val[1], 2);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 3][0], stereo_samples.val[0], 3);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 3][1], stereo_samples.val[1], 3);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 4][0], stereo_samples.val[0], 4);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 4][1], stereo_samples.val[1], 4);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 5][0], stereo_samples.val[0], 5);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 5][1], stereo_samples.val[1], 5);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 6][0], stereo_samples.val[0], 6);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 6][1], stereo_samples.val[1], 6);
+            
+            stereo_samples.val[0] = vsetq_lane_s16(output_frame[samplei + 7][0], stereo_samples.val[0], 7);
+            stereo_samples.val[1] = vsetq_lane_s16(output_frame[samplei + 7][1], stereo_samples.val[1], 7);
+            
+            // Store to memory with byte swapping if needed - unrolled with constant indices
+            write.final_samples.pcm16[samplei][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 0));
+            write.final_samples.pcm16[samplei][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 0));
+            
+            write.final_samples.pcm16[samplei + 1][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 1));
+            write.final_samples.pcm16[samplei + 1][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 1));
+            
+            write.final_samples.pcm16[samplei + 2][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 2));
+            write.final_samples.pcm16[samplei + 2][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 2));
+            
+            write.final_samples.pcm16[samplei + 3][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 3));
+            write.final_samples.pcm16[samplei + 3][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 3));
+            
+            write.final_samples.pcm16[samplei + 4][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 4));
+            write.final_samples.pcm16[samplei + 4][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 4));
+            
+            write.final_samples.pcm16[samplei + 5][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 5));
+            write.final_samples.pcm16[samplei + 5][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 5));
+            
+            write.final_samples.pcm16[samplei + 6][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 6));
+            write.final_samples.pcm16[samplei + 6][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 6));
+            
+            write.final_samples.pcm16[samplei + 7][0] = s16_le(vgetq_lane_s16(stereo_samples.val[0], 7));
+            write.final_samples.pcm16[samplei + 7][1] = s16_le(vgetq_lane_s16(stereo_samples.val[1], 7));
+        } else {
+            // Handle remaining samples
+            for (std::size_t i = 0; i < output_frame.size() - samplei; i++) {
+                for (std::size_t channeli = 0; channeli < output_frame[0].size(); channeli++) {
+                    write.final_samples.pcm16[samplei + i][channeli] = s16_le(output_frame[samplei + i][channeli]);
+                }
+            }
+        }
+    }
+#else
+    // Original implementation for non-ARM platforms
     for (std::size_t samplei = 0; samplei < output_frame.size(); samplei++) {
         for (std::size_t channeli = 0; channeli < output_frame[0].size(); channeli++) {
             write.final_samples.pcm16[samplei][channeli] = s16_le(output_frame[samplei][channeli]);
         }
     }
+#endif
 
     return output_frame;
 }

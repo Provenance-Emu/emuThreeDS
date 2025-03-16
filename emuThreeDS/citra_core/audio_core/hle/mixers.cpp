@@ -8,6 +8,10 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include "audio_core/hle/mixer_neon.h"
+#endif
+
 namespace AudioCore::HLE {
 
 void Mixers::Reset() {
@@ -94,9 +98,39 @@ static std::array<s16, 2> AddAndClampToS16(const std::array<s16, 2>& a,
             ClampToS16(static_cast<s32>(a[1]) + static_cast<s32>(b[1]))};
 }
 
+// Optimized version for adding and clamping multiple stereo samples
+static void AddAndClampToS16Batch(std::array<s16, 2>* dst, const std::array<s16, 2>* src, int count) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Use NEON-optimized version if available
+    AddAndClampToS16_NEON(dst, src, count);
+#else
+    // Fallback for non-NEON platforms
+    for (int i = 0; i < count; i++) {
+        dst[i] = AddAndClampToS16(dst[i], src[i]);
+    }
+#endif
+}
+
 void Mixers::DownmixAndMixIntoCurrentFrame(float gain, const QuadFrame32& samples) {
     // TODO(merry): Limiter. (Currently we're performing final mixing assuming a disabled limiter.)
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Use NEON-optimized versions for ARM platforms
+    switch (state.output_format) {
+    case OutputFormat::Mono:
+        DownmixQuadToMono_NEON(current_frame.data(), samples.data(), gain, samples_per_frame);
+        return;
+
+    case OutputFormat::Surround:
+        // TODO(merry): Implement surround sound.
+        // fallthrough
+
+    case OutputFormat::Stereo:
+        DownmixQuadToStereo_NEON(current_frame.data(), samples.data(), gain, samples_per_frame);
+        return;
+    }
+#else
+    // Original implementation for non-ARM platforms
     switch (state.output_format) {
     case OutputFormat::Mono:
         std::transform(
@@ -129,6 +163,7 @@ void Mixers::DownmixAndMixIntoCurrentFrame(float gain, const QuadFrame32& sample
             });
         return;
     }
+#endif
 
     UNREACHABLE_MSG("Invalid output_format {}", static_cast<std::size_t>(state.output_format));
 }
@@ -137,6 +172,53 @@ void Mixers::AuxReturn(const IntermediateMixSamples& read_samples) {
     // NOTE: read_samples.mix{1,2}.pcm32 annoyingly have their dimensions in reverse order to
     // QuadFrame32.
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (state.mixer1_enabled) {
+        // Process 4 samples at a time using NEON
+        for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
+            for (std::size_t channel = 0; channel < 4; channel++) {
+                // Load 4 samples at once
+                if (sample + 4 <= samples_per_frame) {
+                    int32x4_t samples = vld1q_s32(&read_samples.mix1.pcm32[channel][sample]);
+                    
+                    // Store samples with transposed indices - unrolled loop with constant indices
+                    state.intermediate_mix_buffer[1][sample][channel] = vgetq_lane_s32(samples, 0);
+                    state.intermediate_mix_buffer[1][sample + 1][channel] = vgetq_lane_s32(samples, 1);
+                    state.intermediate_mix_buffer[1][sample + 2][channel] = vgetq_lane_s32(samples, 2);
+                    state.intermediate_mix_buffer[1][sample + 3][channel] = vgetq_lane_s32(samples, 3);
+                } else {
+                    // Handle remaining samples
+                    for (std::size_t i = 0; i < samples_per_frame - sample; i++) {
+                        state.intermediate_mix_buffer[1][sample + i][channel] = read_samples.mix1.pcm32[channel][sample + i];
+                    }
+                }
+            }
+        }
+    }
+
+    if (state.mixer2_enabled) {
+        // Process 4 samples at a time using NEON
+        for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
+            for (std::size_t channel = 0; channel < 4; channel++) {
+                // Load 4 samples at once
+                if (sample + 4 <= samples_per_frame) {
+                    int32x4_t samples = vld1q_s32(&read_samples.mix2.pcm32[channel][sample]);
+                    
+                    // Store samples with transposed indices - unrolled loop with constant indices
+                    state.intermediate_mix_buffer[2][sample][channel] = vgetq_lane_s32(samples, 0);
+                    state.intermediate_mix_buffer[2][sample + 1][channel] = vgetq_lane_s32(samples, 1);
+                    state.intermediate_mix_buffer[2][sample + 2][channel] = vgetq_lane_s32(samples, 2);
+                    state.intermediate_mix_buffer[2][sample + 3][channel] = vgetq_lane_s32(samples, 3);
+                } else {
+                    // Handle remaining samples
+                    for (std::size_t i = 0; i < samples_per_frame - sample; i++) {
+                        state.intermediate_mix_buffer[2][sample + i][channel] = read_samples.mix2.pcm32[channel][sample + i];
+                    }
+                }
+            }
+        }
+    }
+#else
     if (state.mixer1_enabled) {
         for (std::size_t sample = 0; sample < samples_per_frame; sample++) {
             for (std::size_t channel = 0; channel < 4; channel++) {
@@ -154,6 +236,7 @@ void Mixers::AuxReturn(const IntermediateMixSamples& read_samples) {
             }
         }
     }
+#endif
 }
 
 void Mixers::AuxSend(IntermediateMixSamples& write_samples,
@@ -163,6 +246,59 @@ void Mixers::AuxSend(IntermediateMixSamples& write_samples,
 
     state.intermediate_mix_buffer[0] = input[0];
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    if (state.mixer1_enabled) {
+        // Process 4 samples at a time using NEON
+        for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
+            for (std::size_t channel = 0; channel < 4; channel++) {
+                if (sample + 4 <= samples_per_frame) {
+                    // Prepare to load 4 samples with transposed indices - unrolled with constant indices
+                    int32x4_t samples;
+                    samples = vsetq_lane_s32(input[1][sample][channel], vdupq_n_s32(0), 0);
+                    samples = vsetq_lane_s32(input[1][sample + 1][channel], samples, 1);
+                    samples = vsetq_lane_s32(input[1][sample + 2][channel], samples, 2);
+                    samples = vsetq_lane_s32(input[1][sample + 3][channel], samples, 3);
+                    
+                    // Store 4 samples at once
+                    vst1q_s32(&write_samples.mix1.pcm32[channel][sample], samples);
+                } else {
+                    // Handle remaining samples
+                    for (std::size_t i = 0; i < samples_per_frame - sample; i++) {
+                        write_samples.mix1.pcm32[channel][sample + i] = input[1][sample + i][channel];
+                    }
+                }
+            }
+        }
+    } else {
+        state.intermediate_mix_buffer[1] = input[1];
+    }
+
+    if (state.mixer2_enabled) {
+        // Process 4 samples at a time using NEON
+        for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
+            for (std::size_t channel = 0; channel < 4; channel++) {
+                if (sample + 4 <= samples_per_frame) {
+                    // Prepare to load 4 samples with transposed indices - unrolled with constant indices
+                    int32x4_t samples;
+                    samples = vsetq_lane_s32(input[2][sample][channel], vdupq_n_s32(0), 0);
+                    samples = vsetq_lane_s32(input[2][sample + 1][channel], samples, 1);
+                    samples = vsetq_lane_s32(input[2][sample + 2][channel], samples, 2);
+                    samples = vsetq_lane_s32(input[2][sample + 3][channel], samples, 3);
+                    
+                    // Store 4 samples at once
+                    vst1q_s32(&write_samples.mix2.pcm32[channel][sample], samples);
+                } else {
+                    // Handle remaining samples
+                    for (std::size_t i = 0; i < samples_per_frame - sample; i++) {
+                        write_samples.mix2.pcm32[channel][sample + i] = input[2][sample + i][channel];
+                    }
+                }
+            }
+        }
+    } else {
+        state.intermediate_mix_buffer[2] = input[2];
+    }
+#else
     if (state.mixer1_enabled) {
         for (std::size_t sample = 0; sample < samples_per_frame; sample++) {
             for (std::size_t channel = 0; channel < 4; channel++) {
@@ -182,6 +318,7 @@ void Mixers::AuxSend(IntermediateMixSamples& write_samples,
     } else {
         state.intermediate_mix_buffer[2] = input[2];
     }
+#endif
 }
 
 void Mixers::MixCurrentFrame() {
