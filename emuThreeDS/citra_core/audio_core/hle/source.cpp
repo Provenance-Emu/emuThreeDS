@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include "audio_core/codec.h"
+#include "audio_core/hle/audio_cache.h"
 #include "audio_core/hle/common.h"
 #include "audio_core/hle/source.h"
 #include "audio_core/interpolate.h"
@@ -42,6 +43,9 @@ void Source::MixInto(QuadFrame32& dest, std::size_t intermediate_mix_id) const {
 void Source::Reset() {
     current_frame.fill({});
     state = {};
+    
+    // Don't clear the global cache here as it might be used by other sources
+    // If needed, the cache can be cleared explicitly
 }
 
 void Source::SetMemory(Memory::MemorySystem& memory) {
@@ -375,6 +379,36 @@ bool Source::DequeueBuffer() {
         state.adpcm_state.yn2 = buf.adpcm_yn[1];
     }
 
+    // Check if this buffer is in the cache
+    // Only use cached buffers for looping sounds or buffers that have been played before
+    bool use_cache = buf.is_looping || buf.has_played;
+    
+    if (use_cache) {
+        // Generate a unique cache key based on physical address, length, format, and channel config
+        u32 cache_key = buf.buffer_id;
+        
+        // Try to get the buffer from cache
+        auto cached_buffer = g_audio_sample_cache.GetBuffer(cache_key);
+        
+        if (cached_buffer) {
+            // Use the cached buffer
+            state.current_buffer = *cached_buffer;
+            LOG_TRACE(Audio_DSP, "source_id={} buffer_id={} using cached buffer size={}",
+                      source_id, buf.buffer_id, state.current_buffer.size());
+            
+            // Update access time to keep this buffer in cache longer
+            g_audio_sample_cache.UpdateAccessTime(cache_key);
+            
+            // Skip decoding since we're using the cached version
+            state.current_sample_number = (!buf.has_played) ? buf.play_position : 0;
+            state.next_sample_number = state.current_sample_number;
+            state.current_buffer_physical_address = buf.physical_address;
+            state.current_buffer_id = buf.buffer_id;
+            state.buffer_update = buf.from_queue && !buf.has_played;
+            return true;
+        }
+    }
+
     // This physical address masking occurs due to how the DSP DMA hardware is configured by the
     // firmware.
     const u8* const memory = memory_system->GetPhysicalPointer(buf.physical_address & 0xFFFFFFFC);
@@ -395,6 +429,14 @@ bool Source::DequeueBuffer() {
         default:
             UNIMPLEMENTED();
             break;
+        }
+        
+        // Cache the buffer if it's a looping sound or large enough to be worth caching
+        if (use_cache && state.current_buffer.size() > 16) {
+            u32 cache_key = buf.buffer_id;
+            g_audio_sample_cache.CacheBuffer(cache_key, state.current_buffer);
+            LOG_TRACE(Audio_DSP, "source_id={} buffer_id={} cached new buffer size={}",
+                      source_id, buf.buffer_id, state.current_buffer.size());
         }
     } else {
         LOG_WARNING(Audio_DSP,
