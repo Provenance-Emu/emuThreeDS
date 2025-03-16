@@ -7,7 +7,9 @@
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/vector.hpp>
 #include <boost/serialization/weak_ptr.hpp>
+#include <mutex>
 #include "audio_core/audio_types.h"
+#include "common/detached_tasks.h"
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include "audio_core/hle/mixer_neon.h"
@@ -110,6 +112,9 @@ private:
     std::unique_ptr<HLE::DecoderBase> decoder{};
 
     std::weak_ptr<DSP_DSP> dsp_dsp{};
+    
+    // Mutex for thread safety in async operations
+    std::mutex mutex;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
@@ -300,7 +305,7 @@ void DspHle::Impl::PipeWrite(DspPipe pipe_number, const std::vector<u8>& buffer)
         return;
     }
     case DspPipe::Binary: {
-        // TODO(B3N30): Make this async, and signal the interrupt
+        // Process the binary request asynchronously
         HLE::BinaryRequest request;
         if (sizeof(request) != buffer.size()) {
             LOG_CRITICAL(Audio_DSP, "got binary pipe with wrong size {}", buffer.size());
@@ -313,12 +318,33 @@ void DspHle::Impl::PipeWrite(DspPipe pipe_number, const std::vector<u8>& buffer)
             UNIMPLEMENTED();
             return;
         }
-        std::optional<HLE::BinaryResponse> response = decoder->ProcessRequest(request);
-        if (response) {
-            const HLE::BinaryResponse& value = *response;
-            pipe_data[static_cast<u32>(pipe_number)].resize(sizeof(value));
-            std::memcpy(pipe_data[static_cast<u32>(pipe_number)].data(), &value, sizeof(value));
-        }
+        
+        // Create a copy of necessary data for the async task
+        auto pipe_num = pipe_number;
+        auto decoder_ptr = decoder.get();
+        auto dsp_service = dsp_dsp;
+        
+        // Launch the processing task asynchronously
+        Common::DetachedTasks::AddTask([this, request, pipe_num, decoder_ptr, dsp_service]() {
+            // Process the request in the background thread
+            std::optional<HLE::BinaryResponse> response = decoder_ptr->ProcessRequest(request);
+            
+            if (response) {
+                const HLE::BinaryResponse& value = *response;
+                
+                // Lock to safely modify shared data
+                std::lock_guard<std::mutex> lock(mutex);
+                
+                // Store the response in the pipe data
+                pipe_data[static_cast<u32>(pipe_num)].resize(sizeof(value));
+                std::memcpy(pipe_data[static_cast<u32>(pipe_num)].data(), &value, sizeof(value));
+                
+                // Signal the interrupt to notify that processing is complete
+                if (auto service = dsp_service.lock()) {
+                    service->SignalInterrupt(InterruptType::Pipe, pipe_num);
+                }
+            }
+        });
         break;
     }
     default:
