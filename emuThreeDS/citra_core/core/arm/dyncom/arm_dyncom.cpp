@@ -6,7 +6,6 @@
 #include <cstring>
 #include <memory>
 #include "core/arm/dyncom/arm_dyncom.h"
-#include "core/arm/dyncom/arm_dyncom_dec.h"
 #include "core/arm/dyncom/arm_dyncom_interpreter.h"
 #include "core/arm/dyncom/arm_dyncom_trans.h"
 #include "core/arm/skyeye_common/armstate.h"
@@ -90,12 +89,10 @@ void ARM_DynCom::Step() {
 void ARM_DynCom::ClearInstructionCache() {
     state->instruction_cache.clear();
     trans_cache_buf_top = 0;
-    ClearARMInstructionCache(); // Clear the instruction decode cache
-    ClearTranslationCache(); // Clear the translation cache
 }
 
 void ARM_DynCom::InvalidateCacheRange(u32, std::size_t) {
-    ClearInstructionCache(); // This now also clears the instruction decode cache
+    ClearInstructionCache();
 }
 
 void ARM_DynCom::SetPageTable(const std::shared_ptr<Memory::PageTable>& page_table) {
