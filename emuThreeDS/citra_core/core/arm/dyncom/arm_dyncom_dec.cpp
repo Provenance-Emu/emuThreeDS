@@ -444,15 +444,23 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 namespace {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // ARM-optimized bit extraction function to replace the BITS macro
-    inline u32 ExtractBits(u32 value, u32 start, u32 end) {
-        u32 num_bits = end - start + 1;
-        u32 mask = (1U << num_bits) - 1;
+    template<typename T>
+    inline T ExtractBits(T value, u32 start, u32 end) {
+        // This implementation is optimized for ARM platforms
+        // It extracts bits from start to end (inclusive) from the value
+        const u32 type_size = sizeof(T) * 8;
+        const u32 num_bits = end - start + 1;
+        const T mask = (static_cast<T>(1) << num_bits) - 1;
         return (value >> start) & mask;
     }
 #else
-    // Standard bit extraction function to replace the BITS macro
-    inline u32 ExtractBits(u32 value, u32 start, u32 end) {
-        return ((value << ((sizeof(value) * 8 - 1) - end)) >> (sizeof(value) * 8 - end + start - 1));
+    // Standard bit extraction function to match the BITS macro exactly
+    template<typename T>
+    inline T ExtractBits(T value, u32 start, u32 end) {
+        // This implementation exactly matches the BITS macro:
+        // #define BITS(s, a, b) ((s << ((sizeof(s) * 8 - 1) - b)) >> (sizeof(s) * 8 - b + a - 1))
+        const u32 type_size = sizeof(T) * 8;
+        return ((value << ((type_size - 1) - end)) >> (type_size - end + start - 1));
     }
 #endif
     // Pre-computed hash table mapping instruction keys to potential instruction indices
@@ -469,13 +477,14 @@ namespace {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
-        // Optimized for ARM64 - simple shift and mask
-        return (instr >> 20) & 0xFF;
+        // Optimized for ARM64 - use our optimized ExtractBits function
+        return static_cast<u8>(ExtractBits<u32>(instr, 20, 27));
     }
 #else
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
-        return (instr >> 20) & 0xFF;
+        // Use our standard ExtractBits function that matches the BITS macro
+        return static_cast<u8>(ExtractBits<u32>(instr, 20, 27));
     }
 #endif
 
@@ -564,8 +573,8 @@ namespace {
                 u32 end_bit = pattern.content[base + 1];
                 u32 expected_value = pattern.content[base + 2];
 
-                // Extract bits using our optimized function
-                u32 extracted_bits = ExtractBits(instr, start_bit, end_bit);
+                // Extract bits using our optimized function with explicit template parameter
+                u32 extracted_bits = ExtractBits<u32>(instr, start_bit, end_bit);
 
                 if (extracted_bits != expected_value) {
                     return false;
@@ -589,8 +598,8 @@ namespace {
             u32 end_bit = pattern.content[base + 1];
             u32 expected_value = pattern.content[base + 2];
 
-            // Extract bits using our optimized function
-            u32 extracted_bits = ExtractBits(instr, start_bit, end_bit);
+            // Extract bits using our optimized function with explicit template parameter
+            u32 extracted_bits = ExtractBits<u32>(instr, start_bit, end_bit);
 
             if (extracted_bits != expected_value) {
                 return false;
@@ -601,7 +610,25 @@ namespace {
 
         return true;
     }
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Global instruction decode cache for ARM64/NEON platforms
+    static std::unordered_map<u32, ARMInstructionInfo> instruction_cache;
+#else
+    // Global instruction decode cache for other platforms
+    static std::unordered_map<u32, ARMInstructionInfo> instruction_cache;
+#endif
 } // namespace
+
+// Clear the instruction decode cache
+void ClearARMInstructionCache() {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Clear cache for ARM64/NEON platforms
+    instruction_cache.clear();
+#else
+    // Clear cache for other platforms
+    instruction_cache.clear();
+#endif
+}
 
 ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
     // Initialize lookup table if needed
@@ -609,6 +636,36 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
         InitLookupTable();
     }
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // ARM64/NEON optimized path
+    // Check if we have this instruction in our cache
+    auto cache_it = instruction_cache.find(instr);
+    if (cache_it != instruction_cache.end()) {
+        // Cache hit! Use the cached result
+        if (cache_it->second.status == ARMDecodeStatus::SUCCESS) {
+            *idx = cache_it->second.instruction_index;
+        }
+        return cache_it->second.status;
+    }
+
+    // Cache miss - need to decode the instruction
+    ARMInstructionInfo result;
+#else
+    // Standard path for other platforms
+    // Check if we have this instruction in our cache
+    auto cache_it = instruction_cache.find(instr);
+    if (cache_it != instruction_cache.end()) {
+        // Cache hit! Use the cached result
+        if (cache_it->second.status == ARMDecodeStatus::SUCCESS) {
+            *idx = cache_it->second.instruction_index;
+        }
+        return cache_it->second.status;
+    }
+
+    // Cache miss - need to decode the instruction
+    ARMInstructionInfo result;
+#endif
+    
     // Get the key bits from the instruction
     u8 key = ExtractInstrKey(instr);
 
@@ -632,6 +689,18 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
 
             // Found a match!
             *idx = candidate_idx;
+            
+            // Cache the successful result
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            result.instruction_index = candidate_idx;
+            result.status = ARMDecodeStatus::SUCCESS;
+            instruction_cache[instr] = result;
+#else
+            result.instruction_index = candidate_idx;
+            result.status = ARMDecodeStatus::SUCCESS;
+            instruction_cache[instr] = result;
+#endif
+            
             return ARMDecodeStatus::SUCCESS;
         }
     }
@@ -665,9 +734,32 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
 
             // Found a match!
             *idx = i;
+            
+            // Cache the successful result
+#if defined(__ARM_NEON) || defined(__aarch64__)
+            result.instruction_index = i;
+            result.status = ARMDecodeStatus::SUCCESS;
+            instruction_cache[instr] = result;
+#else
+            result.instruction_index = i;
+            result.status = ARMDecodeStatus::SUCCESS;
+            instruction_cache[instr] = result;
+#endif
+            
             return ARMDecodeStatus::SUCCESS;
         }
     }
 
+    // Cache the failure result
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    result.instruction_index = 0;
+    result.status = ARMDecodeStatus::FAILURE;
+    instruction_cache[instr] = result;
+#else
+    result.instruction_index = 0;
+    result.status = ARMDecodeStatus::FAILURE;
+    instruction_cache[instr] = result;
+#endif
+    
     return ARMDecodeStatus::FAILURE;
 }

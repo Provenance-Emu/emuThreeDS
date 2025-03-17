@@ -1107,8 +1107,65 @@ enum { KEEP_GOING, FETCH_EXCEPTION };
 
 MICROPROFILE_DEFINE(DynCom_Decode, "DynCom", "Decode", MP_RGB(255, 64, 64));
 
+// We can't safely cache ARM_INST_PTR objects directly because they're allocated dynamically
+// and would be freed when the original instruction is no longer needed.
+// Instead, we'll only cache the instruction index and size, then use the index to
+// translate the instruction again when needed.
+struct TranslatedInstructionInfo {
+    int instruction_index;
+    u32 inst_size;
+};
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+// Translation cache for ARM64/NEON platforms
+static std::unordered_map<u32, TranslatedInstructionInfo> translation_cache;
+#else
+// Translation cache for other platforms
+static std::unordered_map<u32, TranslatedInstructionInfo> translation_cache;
+#endif
+
+// Clear the translation cache
+void ClearTranslationCache() {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Clear cache for ARM64/NEON platforms
+    translation_cache.clear();
+#else
+    // Clear cache for other platforms
+    translation_cache.clear();
+#endif
+}
+
 static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, const u32 phys_addr,
-                                                    ARM_INST_PTR& inst_base) {
+                                                     ARM_INST_PTR& inst_base) {
+    MICROPROFILE_SCOPE(DynCom_Decode);
+    
+    // Create a cache key that includes the physical address and the T flag
+    // This ensures we handle both ARM and Thumb modes correctly
+    u32 cache_key = (phys_addr & 0xFFFFFFFC) | (cpu->TFlag ? 1 : 0);
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // ARM64/NEON optimized path
+    // Check if we have this instruction in our cache
+    auto cache_it = translation_cache.find(cache_key);
+    if (cache_it != translation_cache.end()) {
+        // Cache hit! Use the cached instruction index
+        int idx = cache_it->second.instruction_index;
+        inst_base = arm_instruction_trans[idx](cpu->memory.Read32(phys_addr & 0xFFFFFFFC), idx);
+        return cache_it->second.inst_size;
+    }
+#else
+    // Standard path for other platforms
+    // Check if we have this instruction in our cache
+    auto cache_it = translation_cache.find(cache_key);
+    if (cache_it != translation_cache.end()) {
+        // Cache hit! Use the cached instruction index
+        int idx = cache_it->second.instruction_index;
+        inst_base = arm_instruction_trans[idx](cpu->memory.Read32(phys_addr & 0xFFFFFFFC), idx);
+        return cache_it->second.inst_size;
+    }
+#endif
+    
+    // Cache miss - need to translate the instruction
     u32 inst_size = 4;
     u32 inst = cpu->memory.Read32(phys_addr & 0xFFFFFFFC);
 
@@ -1135,6 +1192,21 @@ static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, cons
         CITRA_IGNORE_EXIT(-1);
     }
     inst_base = arm_instruction_trans[idx](inst, idx);
+    
+    // Cache the instruction index and size
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // ARM64/NEON optimized path for caching
+    TranslatedInstructionInfo trans_info;
+    trans_info.instruction_index = idx;
+    trans_info.inst_size = inst_size;
+    translation_cache[cache_key] = trans_info;
+#else
+    // Standard path for caching
+    TranslatedInstructionInfo trans_info;
+    trans_info.instruction_index = idx;
+    trans_info.inst_size = inst_size;
+    translation_cache[cache_key] = trans_info;
+#endif
 
     return inst_size;
 }

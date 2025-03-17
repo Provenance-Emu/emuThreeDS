@@ -4,8 +4,19 @@
 
 #pragma once
 
+#include <unordered_map>
 #include "common/common_types.h"
 
 enum class ARMDecodeStatus { SUCCESS, FAILURE };
 
+// Cached instruction decode result
+struct ARMInstructionInfo {
+    int instruction_index;
+    ARMDecodeStatus status;
+};
+
+// Decode an ARM instruction with caching
 ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx);
+
+// Clear the instruction decode cache
+void ClearARMInstructionCache();

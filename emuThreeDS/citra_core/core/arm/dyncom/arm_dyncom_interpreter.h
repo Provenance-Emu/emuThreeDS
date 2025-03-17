@@ -6,4 +6,8 @@
 
 struct ARMul_State;
 
+// Main interpreter loop
 unsigned InterpreterMainLoop(ARMul_State* state);
+
+// Clear the translation cache
+void ClearTranslationCache();
