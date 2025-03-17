@@ -6,6 +6,8 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstring> // For std::memcpy
+#include <array>
 #include "common/common_types.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -1107,8 +1109,77 @@ enum { KEEP_GOING, FETCH_EXCEPTION };
 
 MICROPROFILE_DEFINE(DynCom_Decode, "DynCom", "Decode", MP_RGB(255, 64, 64));
 
+// Forward declaration
 static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, const u32 phys_addr,
-                                                    ARM_INST_PTR& inst_base) {
+                                                     ARM_INST_PTR& inst_base);
+
+// Define the arm_instruction_count based on arm_instruction_trans_len
+const int arm_instruction_count = static_cast<int>(arm_instruction_trans_len);
+
+/**
+ * Translate a batch of ARM instructions using SIMD-based decoding
+ * @param cpu The CPU state
+ * @param phys_addr The physical address of the first instruction
+ * @param inst_bases Array to store the translated instruction pointers
+ * @param count Number of instructions to translate
+ * @return Number of instructions successfully translated
+ */
+static int InterpreterTranslateInstructionBatch(const ARMul_State* cpu, const u32 phys_addr,
+                                               ARM_INST_PTR* inst_bases, int count) {
+    // Only use batch processing for ARM mode (not Thumb)
+    if (cpu->TFlag) {
+        // Fall back to single instruction translation for Thumb mode
+        ARM_INST_PTR inst_base;
+        InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
+        inst_bases[0] = inst_base;
+        return 1;
+    }
+    
+    // Read multiple instructions at once
+    u32 instrs[16]; // Maximum batch size (adjust as needed)
+    int batch_size = std::min(count, 16);
+    
+    // Read instructions from memory
+    for (int i = 0; i < batch_size; i++) {
+        u32 addr = phys_addr + (i * 4); // ARM instructions are 4 bytes
+        instrs[i] = cpu->memory.Read32(addr & 0xFFFFFFFC);
+    }
+    
+    // Decode instructions in batch
+    int indices[16];
+    int decoded_count = BatchDecodeARMInstructions(instrs, indices, batch_size);
+    
+    // If no instructions were decoded successfully, fall back to single instruction decoding
+    if (decoded_count == 0) {
+        LOG_WARNING(Core_ARM11, "Batch decoding failed, falling back to single instruction decoding");
+        ARM_INST_PTR inst_base;
+        if (InterpreterTranslateInstruction(cpu, phys_addr, inst_base) > 0) {
+            inst_bases[0] = inst_base;
+            return 1;
+        }
+        return 0;
+    }
+    
+    // Create instruction bases for each decoded instruction
+    int valid_count = 0;
+    for (int i = 0; i < decoded_count; i++) {
+        // Validate the index before using it
+        if (indices[i] >= 0 && indices[i] < arm_instruction_count) {
+            inst_bases[valid_count] = arm_instruction_trans[indices[i]](instrs[i], indices[i]);
+            valid_count++;
+        } else {
+            // Invalid index, log error
+            LOG_ERROR(Core_ARM11, "Invalid instruction index: %d for instruction: 0x%08X", 
+                      indices[i], instrs[i]);
+        }
+    }
+    
+    // Return the number of valid instructions processed
+    return valid_count;
+}
+
+static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, const u32 phys_addr,
+                                                     ARM_INST_PTR& inst_base) {
     u32 inst_size = 4;
     u32 inst = cpu->memory.Read32(phys_addr & 0xFFFFFFFC);
 
@@ -1146,22 +1217,79 @@ static int InterpreterTranslateBlock(ARMul_State* cpu, std::size_t& bb_start, u3
     // Allocate memory and init InsCream
     // Go on next, until terminal instruction
     // Save start addr of basicblock in CreamCache
-    ARM_INST_PTR inst_base = nullptr;
-    TransExtData ret = TransExtData::NON_BRANCH;
     bb_start = trans_cache_buf_top;
 
     u32 phys_addr = addr;
     u32 pc_start = cpu->Reg[15];
-
-    while (ret == TransExtData::NON_BRANCH) {
-        u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
-        phys_addr += inst_size;
-
-        if ((phys_addr & 0xfff) == 0) {
-            inst_base->br = TransExtData::END_OF_PAGE;
+    
+    // Use batch processing for ARM mode (not Thumb)
+    if (!cpu->TFlag) {
+        // Try to decode and translate a batch of instructions at once
+        const int MAX_BATCH_SIZE = 8; // Maximum batch size to process at once
+        ARM_INST_PTR inst_bases[MAX_BATCH_SIZE];
+        
+        int translated_count = InterpreterTranslateInstructionBatch(cpu, phys_addr, inst_bases, MAX_BATCH_SIZE);
+        
+        // If batch translation failed completely, fall back to normal processing
+        if (translated_count == 0) {
+            ARM_INST_PTR inst_base = nullptr;
+            TransExtData ret = TransExtData::NON_BRANCH;
+            
+            while (ret == TransExtData::NON_BRANCH) {
+                u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
+                phys_addr += inst_size;
+                
+                if ((phys_addr & 0xfff) == 0) {
+                    inst_base->br = TransExtData::END_OF_PAGE;
+                }
+                ret = inst_base->br;
+            }
+        } else {
+            // Process the translated instructions
+            ARM_INST_PTR inst_base = nullptr;
+            TransExtData ret = TransExtData::NON_BRANCH;
+            int i = 0;
+            
+            while (i < translated_count && ret == TransExtData::NON_BRANCH) {
+                inst_base = inst_bases[i];
+                phys_addr += 4; // ARM instructions are 4 bytes
+                
+                if ((phys_addr & 0xfff) == 0) {
+                    inst_base->br = TransExtData::END_OF_PAGE;
+                }
+                ret = inst_base->br;
+                i++;
+            }
+            
+            // If we processed all instructions in the batch and didn't hit a branch,
+            // continue with normal processing
+            if (i == translated_count && ret == TransExtData::NON_BRANCH) {
+                while (ret == TransExtData::NON_BRANCH) {
+                    u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
+                    phys_addr += inst_size;
+                    
+                    if ((phys_addr & 0xfff) == 0) {
+                        inst_base->br = TransExtData::END_OF_PAGE;
+                    }
+                    ret = inst_base->br;
+                }
+            }
         }
-        ret = inst_base->br;
-    };
+    } else {
+        // Original code path for Thumb mode
+        ARM_INST_PTR inst_base = nullptr;
+        TransExtData ret = TransExtData::NON_BRANCH;
+        
+        while (ret == TransExtData::NON_BRANCH) {
+            u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
+            phys_addr += inst_size;
+            
+            if ((phys_addr & 0xfff) == 0) {
+                inst_base->br = TransExtData::END_OF_PAGE;
+            }
+            ret = inst_base->br;
+        }
+    }
 
     cpu->instruction_cache[pc_start] = bb_start;
 
@@ -1176,7 +1304,9 @@ static int InterpreterTranslateSingle(ARMul_State* cpu, std::size_t& bb_start, u
 
     u32 phys_addr = addr;
     u32 pc_start = cpu->Reg[15];
-
+    
+    // For single instruction translation, we still use the regular method
+    // as the batch processing overhead isn't worth it for just one instruction
     InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
 
     if (inst_base->br == TransExtData::NON_BRANCH) {
