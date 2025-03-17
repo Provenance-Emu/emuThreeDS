@@ -4,6 +4,14 @@
 
 #include "core/arm/dyncom/arm_dyncom_dec.h"
 #include "core/arm/skyeye_common/armsupp.h"
+#include "common/logging/log.h"
+
+#include <vector>
+#include <array>
+#include <algorithm>
+
+// Define the logging section
+//ENUM_DEFINE(Log::Class, Core_ARM11);
 
 namespace {
 struct InstructionSetEncodingItem {
@@ -440,29 +448,23 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 };
 // clang-format on
 
-// Optimized instruction decoder using a hash-based approach for faster matching
+// Optimized instruction decoder using a binary search tree for faster matching
 namespace {
+// Optimized bit extraction function to replace the BITS macro
+template<typename T>
+inline T ExtractBits(T value, u32 start, u32 end) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // ARM-optimized bit extraction function to replace the BITS macro
-    template<typename T>
-    inline T ExtractBits(T value, u32 start, u32 end) {
-        // This implementation is optimized for ARM platforms
-        // It extracts bits from start to end (inclusive) from the value
-        const u32 type_size = sizeof(T) * 8;
-        const u32 num_bits = end - start + 1;
-        const T mask = (static_cast<T>(1) << num_bits) - 1;
-        return (value >> start) & mask;
-    }
+    // ARM-optimized implementation
+    const u32 num_bits = end - start + 1;
+    const T mask = (static_cast<T>(1) << num_bits) - 1;
+    return (value >> start) & mask;
 #else
-    // Standard bit extraction function to match the BITS macro exactly
-    template<typename T>
-    inline T ExtractBits(T value, u32 start, u32 end) {
-        // This implementation exactly matches the BITS macro:
-        // #define BITS(s, a, b) ((s << ((sizeof(s) * 8 - 1) - b)) >> (sizeof(s) * 8 - b + a - 1))
-        const u32 type_size = sizeof(T) * 8;
-        return ((value << ((type_size - 1) - end)) >> (type_size - end + start - 1));
-    }
+    // Standard implementation that exactly matches the BITS macro
+    // #define BITS(s, a, b) ((s << ((sizeof(s) * 8 - 1) - b)) >> (sizeof(s) * 8 - b + a - 1))
+    const u32 type_size = sizeof(T) * 8;
+    return ((value << ((type_size - 1) - end)) >> (type_size - end + start - 1));
 #endif
+}
     // Pre-computed hash table mapping instruction keys to potential instruction indices
     struct InstrLookupEntry {
         u8 num_candidates = 0; // Number of potential matches
@@ -472,28 +474,206 @@ namespace {
     // Lookup table - initialized at first use
     InstrLookupEntry instr_lookup_table[256] = {};
     bool lookup_table_initialized = false;
+    
+    // Binary search tree node for instruction lookups
+    struct InstrBSTNode {
+        u32 key_mask = 0;       // Mask of bits that are relevant for this node
+        u32 key_value = 0;      // Expected value of those bits
+        int instruction_idx = -1; // Index into arm_instruction array if this is a leaf node
+        InstrBSTNode* left = nullptr;  // Child node if bits don't match
+        InstrBSTNode* right = nullptr; // Child node if bits match
+    };
 
-    // Extract key bits from instruction to use as a hash key
-#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Root of the binary search tree - initialized at first use
+    InstrBSTNode* bst_root = nullptr;
+    bool bst_initialized = false;
+
+    // Pool of BST nodes to avoid dynamic allocation during initialization
+    static constexpr size_t MAX_BST_NODES = 1024; // Should be enough for all instructions
+    InstrBSTNode bst_node_pool[MAX_BST_NODES];
+    size_t next_free_node = 0;
+
+    // Get a new BST node from the pool
+    InstrBSTNode* AllocateBSTNode() {
+        if (next_free_node >= MAX_BST_NODES) {
+            LOG_ERROR(Core_ARM11, "BST node pool exhausted!");
+            return nullptr;
+        }
+        return &bst_node_pool[next_free_node++];
+    }
+
+    // No longer need a hash key function since we're using a binary search tree
+    // We'll keep this function for backward compatibility with the instruction cache
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
-        // Optimized for ARM64 - use our optimized ExtractBits function
-        return static_cast<u8>(ExtractBits<u32>(instr, 20, 27));
+        // This is a simple shift and mask operation that's fast on all platforms
+        return static_cast<u8>((instr >> 20) & 0xFF);
     }
-#else
-    inline u8 ExtractInstrKey(u32 instr) {
-        // Use bits 20-27 as they're the most discriminative for ARM instructions
-        // Use our standard ExtractBits function that matches the BITS macro
-        return static_cast<u8>(ExtractBits<u32>(instr, 20, 27));
-    }
-#endif
 
-    // Initialize the lookup table at runtime
+    // Helper function to find the most discriminative bit for a set of instructions
+    std::pair<u32, u32> FindBestDiscriminativeBit(const std::vector<int>& instruction_indices) {
+        // Count the number of 1s and 0s for each bit position across all instructions
+        std::array<int, 32> bit_counts = {};
+        
+        // For each instruction, count the bits that are set in its patterns
+        for (int idx : instruction_indices) {
+            const auto& instr = arm_instruction[idx];
+            
+            // Look at each pattern in the instruction
+            for (int j = 0; j < instr.attribute_value; j++) {
+                int bit_start = instr.content[j*3];
+                int bit_end = instr.content[j*3 + 1];
+                u32 pattern_value = instr.content[j*3 + 2];
+                
+                // For each bit in the pattern
+                for (int bit = bit_start; bit <= bit_end; bit++) {
+                    // Calculate if this bit is set in the pattern
+                    int bit_pos = bit - bit_start;
+                    bool is_set = (pattern_value & (1U << bit_pos)) != 0;
+                    
+                    // Increment the count for this bit position
+                    if (is_set) {
+                        bit_counts[bit]++;
+                    }
+                }
+            }
+        }
+        
+        // Find the bit position that most evenly splits the instructions
+        int best_bit = -1;
+        int best_score = -1;
+        
+        for (int bit = 0; bit < 32; bit++) {
+            int count = bit_counts[bit];
+            int total = instruction_indices.size();
+            
+            // Score is how close to 50/50 split this bit provides
+            int score = total - std::abs(count - (total - count));
+            
+            if (score > best_score) {
+                best_score = score;
+                best_bit = bit;
+            }
+        }
+        
+        // If we couldn't find a good bit, use bit 0 as default
+        if (best_bit == -1) {
+            best_bit = 0;
+        }
+        
+        return {1U << best_bit, (bit_counts[best_bit] > instruction_indices.size() / 2) ? (1U << best_bit) : 0};
+    }
+    
+    // Build a binary search tree node for a set of instructions
+    InstrBSTNode* BuildBSTNode(const std::vector<int>& instruction_indices) {
+        // If we have only one instruction, create a leaf node
+        if (instruction_indices.size() == 1) {
+            InstrBSTNode* node = AllocateBSTNode();
+            if (!node) return nullptr;
+            
+            node->instruction_idx = instruction_indices[0];
+            return node;
+        }
+        
+        // Find the best bit to split on
+        auto [mask, value] = FindBestDiscriminativeBit(instruction_indices);
+        
+        // Create a new node
+        InstrBSTNode* node = AllocateBSTNode();
+        if (!node) return nullptr;
+        
+        node->key_mask = mask;
+        node->key_value = value;
+        
+        // Split instructions based on this bit
+        std::vector<int> left_indices;
+        std::vector<int> right_indices;
+        
+        for (int idx : instruction_indices) {
+            const auto& instr = arm_instruction[idx];
+            bool matches = false;
+            
+            // Check if this instruction matches the bit pattern
+            for (int j = 0; j < instr.attribute_value && !matches; j++) {
+                int bit_start = instr.content[j*3];
+                int bit_end = instr.content[j*3 + 1];
+                u32 pattern_value = instr.content[j*3 + 2];
+                
+                // Find which bit in our mask corresponds to this pattern
+                int bit_pos = __builtin_ctz(mask); // Get position of least significant bit
+                
+                // Check if this pattern covers our bit
+                if (bit_start <= bit_pos && bit_end >= bit_pos) {
+                    // Extract the bit from the pattern
+                    int shift = bit_pos - bit_start;
+                    u32 bit_value = (pattern_value >> shift) & 1;
+                    
+                    // Check if it matches our expected value
+                    matches = (bit_value == ((value & mask) != 0));
+                }
+            }
+            
+            // Add to appropriate child list
+            if (matches) {
+                right_indices.push_back(idx);
+            } else {
+                left_indices.push_back(idx);
+            }
+        }
+        
+        // Build child nodes
+        if (!left_indices.empty()) {
+            node->left = BuildBSTNode(left_indices);
+        }
+        
+        if (!right_indices.empty()) {
+            node->right = BuildBSTNode(right_indices);
+        }
+        
+        return node;
+    }
+    
+    // Initialize the binary search tree at runtime
+    void InitBST() {
+        if (bst_initialized)
+            return;
+
+        // Reset the node pool
+        next_free_node = 0;
+        
+        // Collect all valid instruction indices
+        std::vector<int> all_indices;
+        int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
+        
+        for (int i = 0; i < instr_slots; i++) {
+            // Skip VFP3 instructions as 3DS doesn't support them
+            if (arm_instruction[i].version == ARMVFP3)
+                continue;
+
+            // Only process instructions with at least one pattern
+            if (arm_instruction[i].attribute_value == 0)
+                continue;
+                
+            all_indices.push_back(i);
+        }
+        
+        // Build the binary search tree
+        bst_root = BuildBSTNode(all_indices);
+        
+        bst_initialized = true;
+        LOG_INFO(Core_ARM11, "ARM instruction BST initialized with %zu nodes", next_free_node);
+    }
+    
+    // For backward compatibility, keep the old lookup table initialization
     void InitLookupTable() {
+        // We'll initialize both the lookup table and the BST
         if (lookup_table_initialized)
             return;
 
-        // Populate the table
+        // Initialize the BST first
+        InitBST();
+        
+        // Populate the table for backward compatibility
         int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
         for (int i = 0; i < instr_slots; i++) {
             // Skip VFP3 instructions as 3DS doesn't support them
@@ -573,8 +753,10 @@ namespace {
                 u32 end_bit = pattern.content[base + 1];
                 u32 expected_value = pattern.content[base + 2];
 
-                // Extract bits using our optimized function with explicit template parameter
-                u32 extracted_bits = ExtractBits<u32>(instr, start_bit, end_bit);
+                // Extract bits directly for better performance
+                u32 num_bits = end_bit - start_bit + 1;
+                u32 mask = (1U << num_bits) - 1;
+                u32 extracted_bits = (instr >> start_bit) & mask;
 
                 if (extracted_bits != expected_value) {
                     return false;
@@ -598,8 +780,10 @@ namespace {
             u32 end_bit = pattern.content[base + 1];
             u32 expected_value = pattern.content[base + 2];
 
-            // Extract bits using our optimized function with explicit template parameter
-            u32 extracted_bits = ExtractBits<u32>(instr, start_bit, end_bit);
+            // Extract bits directly for better performance
+            u32 num_bits = end_bit - start_bit + 1;
+            u32 mask = (1U << num_bits) - 1;
+            u32 extracted_bits = (instr >> start_bit) & mask;
 
             if (extracted_bits != expected_value) {
                 return false;
@@ -610,61 +794,82 @@ namespace {
 
         return true;
     }
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // Global instruction decode cache for ARM64/NEON platforms
-    static std::unordered_map<u32, ARMInstructionInfo> instruction_cache;
-#else
-    // Global instruction decode cache for other platforms
-    static std::unordered_map<u32, ARMInstructionInfo> instruction_cache;
-#endif
+    
+    // Search the binary search tree for a matching instruction
+    int SearchBST(u32 instr) {
+        if (!bst_initialized) {
+            InitBST();
+        }
+        
+        // Start at the root node
+        InstrBSTNode* node = bst_root;
+        
+        // Traverse the tree until we reach a leaf node
+        while (node && node->instruction_idx == -1) {
+            // Check if the instruction matches the current node's pattern
+            bool matches = ((instr & node->key_mask) == node->key_value);
+            
+            // Go to the appropriate child node
+            node = matches ? node->right : node->left;
+        }
+        
+        // If we found a leaf node, return its instruction index
+        if (node) {
+            // Verify that the instruction actually matches the pattern
+            int idx = node->instruction_idx;
+            if (CheckInstructionMatch(instr, arm_instruction[idx])) {
+                // Check exclusions
+                if (!CheckExclusionMatch(instr, arm_exclusion_code[idx])) {
+                    return idx;
+                }
+            }
+        }
+        
+        // No match found
+        return -1;
+    }
+// Global instruction decode cache
+static std::unordered_map<u32, ARMInstructionInfo> instruction_cache;
 } // namespace
 
 // Clear the instruction decode cache
 void ClearARMInstructionCache() {
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // Clear cache for ARM64/NEON platforms
     instruction_cache.clear();
-#else
-    // Clear cache for other platforms
-    instruction_cache.clear();
-#endif
 }
 
 ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
+    // Check if we have this instruction in our cache
+    auto cache_it = instruction_cache.find(instr);
+    if (cache_it != instruction_cache.end()) {
+        // Cache hit! Use the cached result
+        if (cache_it->second.status == ARMDecodeStatus::SUCCESS) {
+            *idx = cache_it->second.instruction_index;
+        }
+        return cache_it->second.status;
+    }
+
+    // Cache miss - need to decode the instruction
+    ARMInstructionInfo result;
+    
+    // First, try using the binary search tree for fast lookup
+    int bst_result = SearchBST(instr);
+    if (bst_result >= 0) {
+        // Found a match in the BST!
+        *idx = bst_result;
+        
+        // Cache the successful result
+        result.instruction_index = bst_result;
+        result.status = ARMDecodeStatus::SUCCESS;
+        instruction_cache[instr] = result;
+        
+        return ARMDecodeStatus::SUCCESS;
+    }
+    
+    // BST lookup failed, fall back to the hash table for backward compatibility
     // Initialize lookup table if needed
     if (!lookup_table_initialized) {
         InitLookupTable();
     }
-
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // ARM64/NEON optimized path
-    // Check if we have this instruction in our cache
-    auto cache_it = instruction_cache.find(instr);
-    if (cache_it != instruction_cache.end()) {
-        // Cache hit! Use the cached result
-        if (cache_it->second.status == ARMDecodeStatus::SUCCESS) {
-            *idx = cache_it->second.instruction_index;
-        }
-        return cache_it->second.status;
-    }
-
-    // Cache miss - need to decode the instruction
-    ARMInstructionInfo result;
-#else
-    // Standard path for other platforms
-    // Check if we have this instruction in our cache
-    auto cache_it = instruction_cache.find(instr);
-    if (cache_it != instruction_cache.end()) {
-        // Cache hit! Use the cached result
-        if (cache_it->second.status == ARMDecodeStatus::SUCCESS) {
-            *idx = cache_it->second.instruction_index;
-        }
-        return cache_it->second.status;
-    }
-
-    // Cache miss - need to decode the instruction
-    ARMInstructionInfo result;
-#endif
     
     // Get the key bits from the instruction
     u8 key = ExtractInstrKey(instr);
@@ -691,22 +896,16 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
             *idx = candidate_idx;
             
             // Cache the successful result
-#if defined(__ARM_NEON) || defined(__aarch64__)
             result.instruction_index = candidate_idx;
             result.status = ARMDecodeStatus::SUCCESS;
             instruction_cache[instr] = result;
-#else
-            result.instruction_index = candidate_idx;
-            result.status = ARMDecodeStatus::SUCCESS;
-            instruction_cache[instr] = result;
-#endif
             
             return ARMDecodeStatus::SUCCESS;
         }
     }
 
     // If we got here, we need to do a full search as fallback
-    // This handles cases where our hash table might have missed something
+    // This handles cases where both the BST and hash table might have missed something
     int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
 
     for (int i = 0; i < instr_slots; i++) {
@@ -736,30 +935,18 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
             *idx = i;
             
             // Cache the successful result
-#if defined(__ARM_NEON) || defined(__aarch64__)
             result.instruction_index = i;
             result.status = ARMDecodeStatus::SUCCESS;
             instruction_cache[instr] = result;
-#else
-            result.instruction_index = i;
-            result.status = ARMDecodeStatus::SUCCESS;
-            instruction_cache[instr] = result;
-#endif
             
             return ARMDecodeStatus::SUCCESS;
         }
     }
 
     // Cache the failure result
-#if defined(__ARM_NEON) || defined(__aarch64__)
     result.instruction_index = 0;
     result.status = ARMDecodeStatus::FAILURE;
     instruction_cache[instr] = result;
-#else
-    result.instruction_index = 0;
-    result.status = ARMDecodeStatus::FAILURE;
-    instruction_cache[instr] = result;
-#endif
     
     return ARMDecodeStatus::FAILURE;
 }
