@@ -222,6 +222,7 @@ void RestoreGlobalState(bool is_powered_on) {
 
     // Audio
     values.audio_emulation.SetGlobal(true);
+    values.enable_realtime_audio.SetGlobal(true);
     values.enable_audio_stretching.SetGlobal(true);
     values.volume.SetGlobal(true);
 

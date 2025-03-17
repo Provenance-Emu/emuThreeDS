@@ -53,6 +53,7 @@ enum class Class : ClassType {
     Core_Timing,       ///< CoreTiming functions
     Core_Cheats,       ///< Cheat functions
     Config,            ///< Emulator configuration (including commandline)
+    Savestate,         ///< Savestates
     Debug,             ///< Debugging tools
     Debug_Emulated,    ///< Debug messages from the emulated programs
     Debug_GPU,         ///< GPU debugging tools

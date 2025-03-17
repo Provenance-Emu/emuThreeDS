@@ -12,8 +12,7 @@ class AudioToolboxDecoder final : public DecoderBase {
 public:
     explicit AudioToolboxDecoder(Memory::MemorySystem& memory);
     ~AudioToolboxDecoder() override;
-    std::optional<BinaryResponse> ProcessRequest(const BinaryRequest& request) override;
-    bool IsValid() const override;
+    BinaryMessage ProcessRequest(const BinaryMessage& request) override;
 
 private:
     class Impl;

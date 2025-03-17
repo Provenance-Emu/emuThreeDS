@@ -19,3 +19,8 @@ using oarchive = boost::archive::binary_oarchive;
     BOOST_CLASS_EXPORT_IMPLEMENT(A)                                                                \
     BOOST_SERIALIZATION_REGISTER_ARCHIVE(iarchive)                                                 \
     BOOST_SERIALIZATION_REGISTER_ARCHIVE(oarchive)
+
+#define DEBUG_SERIALIZATION_POINT                                                                  \
+    do {                                                                                           \
+        LOG_DEBUG(Savestate, "");                                                                  \
+    } while (0)

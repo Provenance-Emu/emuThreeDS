@@ -128,6 +128,8 @@ void TelemetrySession::AddInitialInfo(Loader::AppLoader& app_loader) {
              static_cast<int>(Settings::values.output_type.GetValue()));
     AddField(Telemetry::FieldType::UserConfig, "Audio_EnableAudioStretching",
              Settings::values.enable_audio_stretching.GetValue());
+    AddField(Telemetry::FieldType::UserConfig, "Audio_EnableRealtimeAudio",
+             Settings::values.enable_realtime_audio.GetValue());
     AddField(Telemetry::FieldType::UserConfig, "Core_UseCpuJit",
              Settings::values.use_cpu_jit.GetValue());
     AddField(Telemetry::FieldType::UserConfig, "Renderer_ResolutionFactor",

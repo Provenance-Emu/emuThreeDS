@@ -21,20 +21,6 @@
 
 namespace AudioCore {
 namespace {
-struct SinkDetails {
-    using FactoryFn = std::unique_ptr<Sink> (*)(std::string_view);
-    using ListDevicesFn = std::vector<std::string> (*)();
-
-    /// Type of this sink.
-    SinkType type;
-    /// Name for this sink.
-    std::string_view name;
-    /// A method to call to construct an instance of this type of sink.
-    FactoryFn factory;
-    /// A method to call to list available devices.
-    ListDevicesFn list_devices;
-};
-
 // sink_details is ordered in terms of desirability, with the best choice at the top.
 constexpr std::array sink_details = {
 #ifdef HAVE_COREAUDIO
@@ -82,16 +68,26 @@ const SinkDetails& GetSinkDetails(SinkType sink_type) {
 }
 } // Anonymous namespace
 
-std::string_view GetSinkName(SinkType sink_type) {
-    return GetSinkDetails(sink_type).name;
+std::vector<SinkDetails> ListSinks() {
+    return {sink_details.begin(), sink_details.end()};
 }
 
-std::vector<std::string> GetDeviceListForSink(SinkType sink_type) {
-    return GetSinkDetails(sink_type).list_devices();
+const SinkDetails& GetSinkDetails(SinkType sink_type) {
+    auto iter = std::find_if(
+        sink_details.begin(), sink_details.end(),
+        [sink_type](const auto& sink_detail) { return sink_detail.type == sink_type; });
+
+    if (sink_type == SinkType::Auto || iter == sink_details.end()) {
+        if (sink_type != SinkType::Auto) {
+            LOG_ERROR(Audio, "AudioCore::GetSinkDetails given invalid sink_type {}", sink_type);
+        }
+        // Auto-select.
+        // sink_details is ordered in terms of desirability, with the best choice at the front.
+        iter = sink_details.begin();
+    }
+
+    return *iter;
 }
 
-std::unique_ptr<Sink> CreateSinkFromID(SinkType sink_type, std::string_view device_id) {
-    return GetSinkDetails(sink_type).factory(device_id);
-}
 
 } // namespace AudioCore

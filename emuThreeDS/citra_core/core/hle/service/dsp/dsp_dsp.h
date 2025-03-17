@@ -1,4 +1,4 @@
-// Copyright 2014 Citra Emulator Project
+// Copyright Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -12,6 +12,7 @@
 #include "core/hle/kernel/event.h"
 #include "core/hle/result.h"
 #include "core/hle/service/service.h"
+#include "common/archives.h"
 
 namespace Core {
 class System;
@@ -19,14 +20,13 @@ class System;
 
 namespace Service::DSP {
 
+/// There are three types of interrupts
+enum class InterruptType : u32 { Zero = 0, One = 1, Pipe = 2, Count };
+
 class DSP_DSP final : public ServiceFramework<DSP_DSP> {
 public:
     explicit DSP_DSP(Core::System& system);
     ~DSP_DSP();
-
-    /// There are three types of interrupts
-    static constexpr std::size_t NUM_INTERRUPT_TYPE = 3;
-    enum class InterruptType : u32 { Zero = 0, One = 1, Pipe = 2 };
 
     /// Actual service implementation only has 6 'slots' for interrupts.
     static constexpr std::size_t max_number_of_interrupt_events = 6;
@@ -270,12 +270,13 @@ private:
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
+        DEBUG_SERIALIZATION_POINT;
         ar& boost::serialization::base_object<Kernel::SessionRequestHandler>(*this);
-        ar& semaphore_event;
-        ar& preset_semaphore;
-        ar& interrupt_zero;
-        ar& interrupt_one;
-        ar& pipes;
+        ar & semaphore_event;
+        ar & preset_semaphore;
+        ar & interrupt_zero;
+        ar & interrupt_one;
+        ar & pipes;
     }
     friend class boost::serialization::access;
 };

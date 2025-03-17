@@ -143,7 +143,7 @@ void FFMPEGDecoder::Impl::Clear() {
     av_packet.reset();
 }
 
-std::optional<BinaryResponse> FFMPEGDecoder::Impl::Decode(const BinaryRequest& request) {
+BinaryMessage FFMPEGDecoder::Impl::Decode(const BinaryMessage& request) {
     BinaryResponse response;
     response.codec = request.codec;
     response.cmd = request.cmd;
@@ -261,12 +261,8 @@ FFMPEGDecoder::FFMPEGDecoder(Memory::MemorySystem& memory) : impl(std::make_uniq
 
 FFMPEGDecoder::~FFMPEGDecoder() = default;
 
-std::optional<BinaryResponse> FFMPEGDecoder::ProcessRequest(const BinaryRequest& request) {
+BinaryMessage FFMPEGDecoder::ProcessRequest(const BinaryMessage& request) {
     return impl->ProcessRequest(request);
-}
-
-bool FFMPEGDecoder::IsValid() const {
-    return impl->IsValid();
 }
 
 } // namespace AudioCore::HLE

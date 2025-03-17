@@ -12,8 +12,7 @@ class FFMPEGDecoder final : public DecoderBase {
 public:
     explicit FFMPEGDecoder(Memory::MemorySystem& memory);
     ~FFMPEGDecoder() override;
-    std::optional<BinaryResponse> ProcessRequest(const BinaryRequest& request) override;
-    bool IsValid() const override;
+    BinaryMessage ProcessRequest(const BinaryMessage& request) override;
 
 private:
     class Impl;

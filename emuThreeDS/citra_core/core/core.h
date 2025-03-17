@@ -155,6 +155,24 @@ public:
         return is_powered_on;
     }
 
+    [[nodiscard]] PerfStats::Results GetAndResetPerfStats();
+
+    void ReportArticTraffic(u32 bytes) {
+        if (perf_stats) {
+            perf_stats->AddArticBaseTraffic(bytes);
+        }
+    }
+
+    void ReportPerfArticEvent(PerfStats::PerfArticEventBits event, bool set) {
+        if (perf_stats) {
+            perf_stats->ReportPerfArticEvent(event, set);
+        }
+    }
+
+    [[nodiscard]] PerfStats::Results GetLastPerfStats();
+
+    double GetStableFrameTimeScale();
+
     /**
      * Returns a reference to the telemetry session for this emulation session.
      * @returns Reference to the telemetry session.
@@ -165,8 +183,6 @@ public:
 
     /// Prepare the core emulation for a reschedule
     void PrepareReschedule();
-
-    [[nodiscard]] PerfStats::Results GetAndResetPerfStats();
 
     /**
      * Gets a reference to the emulated CPU.
@@ -263,6 +279,10 @@ public:
 
     /// Gets a const reference to the video dumper backend
     [[nodiscard]] const VideoDumper::Backend& VideoDumper() const;
+    
+    [[nodiscard]] std::shared_ptr<VideoDumper::Backend> GetVideoDumper() const {
+        return video_dumper;
+    }
 
     std::unique_ptr<PerfStats> perf_stats;
     FrameLimiter frame_limiter;
@@ -370,7 +390,7 @@ private:
     std::unique_ptr<Cheats::CheatEngine> cheat_engine;
 
     /// Video dumper backend
-    std::unique_ptr<VideoDumper::Backend> video_dumper;
+    std::shared_ptr<VideoDumper::Backend> video_dumper;
 
     /// Custom texture cache system
     std::unique_ptr<VideoCore::CustomTexManager> custom_tex_manager;
