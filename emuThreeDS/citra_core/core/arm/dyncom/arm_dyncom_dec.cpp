@@ -511,139 +511,385 @@ inline T ExtractBits(T value, u32 start, u32 end) {
     }
 
     // Helper function to find the most discriminative bit for a set of instructions
+    // Creates a weight-balanced tree for optimal search performance
     std::pair<u32, u32> FindBestDiscriminativeBit(const std::vector<int>& instruction_indices) {
-        // Count the number of 1s and 0s for each bit position across all instructions
-        std::array<int, 32> bit_counts = {};
+        // If there's only one instruction or empty list, use a safe default
+        if (instruction_indices.size() <= 1) {
+            return {1U, 0}; // Use bit 0 with value 0
+        }
         
-        // For each instruction, count the bits that are set in its patterns
-        for (int idx : instruction_indices) {
+        // For weight balancing, we'll analyze both bit values (0 and 1) for each bit position
+        std::array<int, 32> bit_ones = {}; // Count of instructions with bit=1
+        std::array<int, 32> bit_zeros = {}; // Count of instructions with bit=0
+        std::array<int, 32> bit_coverage = {}; // Count of instructions where this bit is specified
+        
+        // For each instruction, analyze its bit patterns
+        for (size_t i = 0; i < instruction_indices.size(); i++) {
+            int idx = instruction_indices[i];
+            
+            // Safety check for valid index
+            if (idx < 0 || idx >= static_cast<int>(sizeof(arm_instruction) / sizeof(arm_instruction[0]))) {
+                LOG_ERROR(Core_ARM11, "Invalid instruction index %d in FindBestDiscriminativeBit", idx);
+                continue; // Skip invalid indices
+            }
+            
             const auto& instr = arm_instruction[idx];
+            
+            // Skip invalid attribute values
+            if (instr.attribute_value <= 0 || instr.attribute_value > 100) { // Arbitrary upper limit for safety
+                LOG_WARNING(Core_ARM11, "Suspicious attribute value %d for instruction %d", instr.attribute_value, idx);
+                continue;
+            }
+            
+            // Track which bits we've seen for this instruction
+            std::array<bool, 32> seen_bits = {};
             
             // Look at each pattern in the instruction
             for (int j = 0; j < instr.attribute_value; j++) {
+                // Safety check for content array access
+                if (j*3 + 2 >= static_cast<int>(sizeof(instr.content) / sizeof(instr.content[0]))) {
+                    LOG_WARNING(Core_ARM11, "Content array index out of bounds for instruction %d", idx);
+                    break;
+                }
+                
                 int bit_start = instr.content[j*3];
                 int bit_end = instr.content[j*3 + 1];
                 u32 pattern_value = instr.content[j*3 + 2];
                 
+                // Validate bit range
+                if (bit_start < 0 || bit_end >= 32 || bit_start > bit_end) {
+                    LOG_WARNING(Core_ARM11, "Invalid bit range [%d,%d] for instruction %d", bit_start, bit_end, idx);
+                    continue; // Skip invalid bit ranges
+                }
+                
                 // For each bit in the pattern
-                for (int bit = bit_start; bit <= bit_end; bit++) {
+                for (int bit = bit_start; bit <= bit_end && bit < 32; bit++) {
+                    // Skip if we've already processed this bit for this instruction
+                    if (seen_bits[bit]) continue;
+                    seen_bits[bit] = true;
+                    
                     // Calculate if this bit is set in the pattern
                     int bit_pos = bit - bit_start;
-                    bool is_set = (pattern_value & (1U << bit_pos)) != 0;
+                    if (bit_pos < 0 || bit_pos >= 32) continue; // Safety check
                     
-                    // Increment the count for this bit position
-                    if (is_set) {
-                        bit_counts[bit]++;
+                    // Count this bit as covered
+                    bit_coverage[bit]++;
+                    
+                    // Count if the bit is 0 or 1
+                    if ((pattern_value & (1U << bit_pos)) != 0) {
+                        bit_ones[bit]++;
+                    } else {
+                        bit_zeros[bit]++;
                     }
                 }
             }
         }
         
-        // Find the bit position that most evenly splits the instructions
+        // Find the bit position that creates the most weight-balanced split
         int best_bit = -1;
-        int best_score = -1;
+        double best_balance = -1.0;
+        bool use_one_branch = false;
+        size_t total = instruction_indices.size();
+        
+        // Prevent division by zero
+        if (total == 0) {
+            LOG_ERROR(Core_ARM11, "Empty instruction set in FindBestDiscriminativeBit");
+            return {1U, 0}; // Use bit 0 with value 0
+        }
         
         for (int bit = 0; bit < 32; bit++) {
-            int count = bit_counts[bit];
-            int total = instruction_indices.size();
+            // Skip bits that don't have good coverage
+            if (bit_coverage[bit] < total * 0.7) continue;
             
-            // Score is how close to 50/50 split this bit provides
-            int score = total - std::abs(count - (total - count));
+            // Calculate balance factors for both 0 and 1 branches
+            double balance_zero = static_cast<double>(bit_zeros[bit]) / total;
+            double balance_one = static_cast<double>(bit_ones[bit]) / total;
             
-            if (score > best_score) {
-                best_score = score;
+            // Normalize to 0-0.5 range (closer to 0.5 is better balanced)
+            if (balance_zero > 0.5) balance_zero = 1.0 - balance_zero;
+            if (balance_one > 0.5) balance_one = 1.0 - balance_one;
+            
+            // Use the better of the two balances
+            double balance = std::max(balance_zero, balance_one);
+            bool use_one = (balance_one >= balance_zero);
+            
+            // We want the most balanced split (closest to 0.5)
+            if (balance > best_balance) {
+                best_balance = balance;
                 best_bit = bit;
+                use_one_branch = use_one;
             }
         }
         
-        // If we couldn't find a good bit, use bit 0 as default
+        // If we couldn't find a good bit, try again with lower coverage requirement
         if (best_bit == -1) {
-            best_bit = 0;
+            for (int bit = 0; bit < 32; bit++) {
+                // Skip bits with no coverage
+                if (bit_coverage[bit] == 0) continue;
+                
+                // Calculate balance factors with safety check for division by zero
+                double balance_zero = 0.0;
+                double balance_one = 0.0;
+                
+                if (bit_coverage[bit] > 0) {
+                    balance_zero = static_cast<double>(bit_zeros[bit]) / bit_coverage[bit];
+                    balance_one = static_cast<double>(bit_ones[bit]) / bit_coverage[bit];
+                }
+                
+                // Normalize to 0-0.5 range
+                if (balance_zero > 0.5) balance_zero = 1.0 - balance_zero;
+                if (balance_one > 0.5) balance_one = 1.0 - balance_one;
+                
+                double balance = std::max(balance_zero, balance_one);
+                bool use_one = (balance_one >= balance_zero);
+                
+                if (balance > best_balance) {
+                    best_balance = balance;
+                    best_bit = bit;
+                    use_one_branch = use_one;
+                }
+            }
         }
         
-        return {1U << best_bit, (bit_counts[best_bit] > instruction_indices.size() / 2) ? (1U << best_bit) : 0};
+        // If we still couldn't find a good bit, use bit 0 as default
+        if (best_bit == -1) {
+            LOG_WARNING(Core_ARM11, "Could not find a good discriminative bit, using default");
+            best_bit = 0;
+            use_one_branch = false;
+        }
+        
+        // Safety check for bit_pos
+        if (best_bit < 0 || best_bit >= 32) {
+            LOG_ERROR(Core_ARM11, "Invalid best_bit %d, using default", best_bit);
+            best_bit = 0;
+            use_one_branch = false;
+        }
+        
+        return {1U << best_bit, use_one_branch ? (1U << best_bit) : 0};
     }
     
-    // Build a binary search tree node for a set of instructions
-    InstrBSTNode* BuildBSTNode(const std::vector<int>& instruction_indices) {
-        // If we have only one instruction, create a leaf node
-        if (instruction_indices.size() == 1) {
-            InstrBSTNode* node = AllocateBSTNode();
-            if (!node) return nullptr;
-            
-            node->instruction_idx = instruction_indices[0];
-            return node;
-        }
-        
-        // Find the best bit to split on
-        auto [mask, value] = FindBestDiscriminativeBit(instruction_indices);
-        
-        // Create a new node
+    // Non-recursive helper to create a leaf node
+    InstrBSTNode* CreateLeafNode(int instruction_idx) {
         InstrBSTNode* node = AllocateBSTNode();
         if (!node) return nullptr;
         
-        node->key_mask = mask;
-        node->key_value = value;
-        
-        // Split instructions based on this bit
-        std::vector<int> left_indices;
-        std::vector<int> right_indices;
-        
-        for (int idx : instruction_indices) {
-            const auto& instr = arm_instruction[idx];
-            bool matches = false;
-            
-            // Check if this instruction matches the bit pattern
-            for (int j = 0; j < instr.attribute_value && !matches; j++) {
-                int bit_start = instr.content[j*3];
-                int bit_end = instr.content[j*3 + 1];
-                u32 pattern_value = instr.content[j*3 + 2];
-                
-                // Find which bit in our mask corresponds to this pattern
-                int bit_pos = __builtin_ctz(mask); // Get position of least significant bit
-                
-                // Check if this pattern covers our bit
-                if (bit_start <= bit_pos && bit_end >= bit_pos) {
-                    // Extract the bit from the pattern
-                    int shift = bit_pos - bit_start;
-                    u32 bit_value = (pattern_value >> shift) & 1;
-                    
-                    // Check if it matches our expected value
-                    matches = (bit_value == ((value & mask) != 0));
-                }
-            }
-            
-            // Add to appropriate child list
-            if (matches) {
-                right_indices.push_back(idx);
-            } else {
-                left_indices.push_back(idx);
-            }
-        }
-        
-        // Build child nodes
-        if (!left_indices.empty()) {
-            node->left = BuildBSTNode(left_indices);
-        }
-        
-        if (!right_indices.empty()) {
-            node->right = BuildBSTNode(right_indices);
-        }
+        node->instruction_idx = instruction_idx;
+        node->left = nullptr;
+        node->right = nullptr;
+        node->key_mask = 0;
+        node->key_value = 0;
         
         return node;
     }
     
-    // Initialize the binary search tree at runtime
+    // Build a weight-balanced binary search tree using an iterative approach to prevent stack overflow
+    InstrBSTNode* BuildBSTNode(const std::vector<int>& instruction_indices) {
+        // Handle base cases
+        if (instruction_indices.empty()) {
+            return nullptr;
+        }
+        
+        if (instruction_indices.size() == 1) {
+            return CreateLeafNode(instruction_indices[0]);
+        }
+        
+        // Safety check - if we're about to exceed our node pool, return a leaf node with the first instruction
+        if (next_free_node >= MAX_BST_NODES - 10) { // Leave room for a few more nodes
+            LOG_WARNING(Core_ARM11, "BST node pool nearly exhausted, creating leaf node instead");
+            return CreateLeafNode(instruction_indices[0]);
+        }
+        
+        // Use a queue-based approach for breadth-first tree construction
+        // Each entry contains: (node pointer, vector of instruction indices to process)
+        struct BuildTask {
+            InstrBSTNode* node;
+            std::vector<int> indices;
+            bool is_left_child;
+            InstrBSTNode* parent;
+        };
+        
+        std::vector<BuildTask> tasks;
+        
+        // Create the root node first
+        InstrBSTNode* root = AllocateBSTNode();
+        if (!root) return nullptr;
+        
+        // Initialize root as internal node
+        root->instruction_idx = -1;
+        root->left = nullptr;
+        root->right = nullptr;
+        
+        // Add the initial task for the root
+        tasks.push_back({root, instruction_indices, false, nullptr});
+        
+        // Process tasks in a breadth-first manner
+        size_t current_task = 0;
+        
+        // Limit the number of iterations to prevent infinite loops
+        const size_t max_iterations = MAX_BST_NODES * 2;
+        size_t iteration_count = 0;
+        
+        while (current_task < tasks.size() && iteration_count < max_iterations) {
+            iteration_count++;
+            
+            // Get the current task
+            BuildTask& task = tasks[current_task++];
+            InstrBSTNode* node = task.node;
+            const std::vector<int>& indices = task.indices;
+            
+            // If we only have one instruction, make this a leaf node
+            if (indices.size() == 1) {
+                node->instruction_idx = indices[0];
+                continue; // Done with this node
+            }
+            
+            // Find the best bit to split on
+            auto [mask, value] = FindBestDiscriminativeBit(indices);
+            
+            // Safety check for mask
+            if (mask == 0) {
+                LOG_WARNING(Core_ARM11, "Invalid mask 0 in BuildBSTNode, creating leaf node");
+                node->instruction_idx = indices[0];
+                continue; // Done with this node
+            }
+            
+            // Set node properties
+            node->key_mask = mask;
+            node->key_value = value;
+            
+            // Find which bit position we're testing
+            int bit_pos = __builtin_ctz(mask); // Get position of least significant bit
+            bool expected_value = (value != 0);
+            
+            // Split instructions based on this bit
+            std::vector<int> left_indices;
+            std::vector<int> right_indices;
+            
+            // Process each instruction
+            for (size_t i = 0; i < indices.size(); i++) {
+                int idx = indices[i];
+                if (idx < 0 || idx >= static_cast<int>(sizeof(arm_instruction) / sizeof(arm_instruction[0]))) {
+                    LOG_ERROR(Core_ARM11, "Invalid instruction index %d in BuildBSTNode", idx);
+                    continue; // Skip invalid indices
+                }
+                
+                const auto& instr = arm_instruction[idx];
+                bool matches = false;
+                
+                // Check if this instruction matches the bit pattern
+                for (int j = 0; j < instr.attribute_value && !matches; j++) {
+                    int bit_start = instr.content[j*3];
+                    int bit_end = instr.content[j*3 + 1];
+                    
+                    // Validate bit range
+                    if (bit_start < 0 || bit_end >= 32 || bit_start > bit_end) {
+                        continue; // Skip invalid bit ranges
+                    }
+                    
+                    u32 pattern_value = instr.content[j*3 + 2];
+                    
+                    // Check if this pattern covers our bit of interest
+                    if (bit_start <= bit_pos && bit_end >= bit_pos) {
+                        // Extract the bit from the pattern
+                        int shift = bit_pos - bit_start;
+                        if (shift >= 0 && shift < 32) {
+                            bool bit_value = ((pattern_value >> shift) & 1) != 0;
+                            matches = (bit_value == expected_value);
+                            break;
+                        }
+                    }
+                }
+                
+                // Add to appropriate child list
+                if (matches) {
+                    right_indices.push_back(idx);
+                } else {
+                    left_indices.push_back(idx);
+                }
+            }
+            
+            // Handle degenerate cases
+            if (left_indices.empty() && right_indices.size() == 1) {
+                // All instructions went to the right branch and there's only one
+                node->instruction_idx = right_indices[0];
+                continue; // Done with this node
+            } else if (right_indices.empty() && left_indices.size() == 1) {
+                // All instructions went to the left branch and there's only one
+                node->instruction_idx = left_indices[0];
+                continue; // Done with this node
+            }
+            
+            // Check if we're about to exceed node pool capacity
+            if (next_free_node >= MAX_BST_NODES - 2) {
+                LOG_WARNING(Core_ARM11, "BST node pool exhausted during iterative build");
+                node->instruction_idx = indices[0]; // Convert to leaf node
+                continue; // Done with this node
+            }
+            
+            // Create child nodes if needed
+            if (!left_indices.empty()) {
+                InstrBSTNode* left_node = AllocateBSTNode();
+                if (left_node) {
+                    left_node->instruction_idx = -1; // Mark as internal node initially
+                    left_node->left = nullptr;
+                    left_node->right = nullptr;
+                    node->left = left_node;
+                    
+                    // Add left child task
+                    tasks.push_back({left_node, std::move(left_indices), true, node});
+                } else {
+                    LOG_ERROR(Core_ARM11, "Failed to allocate left child node");
+                }
+            }
+            
+            if (!right_indices.empty()) {
+                InstrBSTNode* right_node = AllocateBSTNode();
+                if (right_node) {
+                    right_node->instruction_idx = -1; // Mark as internal node initially
+                    right_node->left = nullptr;
+                    right_node->right = nullptr;
+                    node->right = right_node;
+                    
+                    // Add right child task
+                    tasks.push_back({right_node, std::move(right_indices), false, node});
+                } else {
+                    LOG_ERROR(Core_ARM11, "Failed to allocate right child node");
+                }
+            }
+        }
+        
+        // Check if we hit the iteration limit
+        if (iteration_count >= max_iterations) {
+            LOG_ERROR(Core_ARM11, "Exceeded maximum iterations in iterative BST build");
+        }
+        
+        return root;
+    }
+    
+    // Initialize the weight-balanced binary search tree at runtime
     void InitBST() {
-        if (bst_initialized)
+        if (bst_initialized) {
+            LOG_INFO(Core_ARM11, "BST already initialized, skipping");
             return;
+        }
 
         // Reset the node pool
         next_free_node = 0;
         
+        // Initialize all nodes to a safe state
+        for (size_t i = 0; i < MAX_BST_NODES; i++) {
+            bst_node_pool[i].instruction_idx = -1;
+            bst_node_pool[i].key_mask = 0;
+            bst_node_pool[i].key_value = 0;
+            bst_node_pool[i].left = nullptr;
+            bst_node_pool[i].right = nullptr;
+        }
+        
         // Collect all valid instruction indices
         std::vector<int> all_indices;
         int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
+        
+        LOG_INFO(Core_ARM11, "Processing %d instruction slots for BST initialization", instr_slots);
         
         for (int i = 0; i < instr_slots; i++) {
             // Skip VFP3 instructions as 3DS doesn't support them
@@ -651,17 +897,45 @@ inline T ExtractBits(T value, u32 start, u32 end) {
                 continue;
 
             // Only process instructions with at least one pattern
-            if (arm_instruction[i].attribute_value == 0)
+            if (arm_instruction[i].attribute_value <= 0 || 
+                arm_instruction[i].attribute_value > 100) { // Arbitrary upper limit for safety
+                LOG_WARNING(Core_ARM11, "Skipping instruction %d with suspicious attribute value %d", 
+                           i, arm_instruction[i].attribute_value);
                 continue;
+            }
                 
             all_indices.push_back(i);
         }
         
-        // Build the binary search tree
-        bst_root = BuildBSTNode(all_indices);
+        LOG_INFO(Core_ARM11, "Building weight-balanced BST with %zu valid instructions", all_indices.size());
         
-        bst_initialized = true;
-        LOG_INFO(Core_ARM11, "ARM instruction BST initialized with %zu nodes", next_free_node);
+        // Safety check - make sure we have instructions to process
+        if (all_indices.empty()) {
+            LOG_ERROR(Core_ARM11, "No valid instructions found for BST initialization");
+            bst_initialized = true; // Mark as initialized to prevent repeated attempts
+            return;
+        }
+        
+        try {
+            // Build the weight-balanced binary search tree
+            bst_root = BuildBSTNode(all_indices);
+            
+            // Verify the root node was created
+            if (!bst_root) {
+                LOG_ERROR(Core_ARM11, "Failed to create BST root node");
+                bst_initialized = true; // Mark as initialized to prevent repeated attempts
+                return;
+            }
+            
+            bst_initialized = true;
+            LOG_INFO(Core_ARM11, "ARM instruction weight-balanced BST initialized with %zu nodes", next_free_node);
+        } catch (const std::exception& e) {
+            LOG_ERROR(Core_ARM11, "Exception during BST initialization: %s", e.what());
+            bst_initialized = true; // Mark as initialized to prevent repeated attempts
+        } catch (...) {
+            LOG_ERROR(Core_ARM11, "Unknown exception during BST initialization");
+            bst_initialized = true; // Mark as initialized to prevent repeated attempts
+        }
     }
     
     // For backward compatibility, keep the old lookup table initialization
@@ -795,7 +1069,7 @@ inline T ExtractBits(T value, u32 start, u32 end) {
         return true;
     }
     
-    // Search the binary search tree for a matching instruction
+    // Search the weight-balanced binary search tree for a matching instruction
     int SearchBST(u32 instr) {
         if (!bst_initialized) {
             InitBST();
@@ -803,20 +1077,61 @@ inline T ExtractBits(T value, u32 start, u32 end) {
         
         // Start at the root node
         InstrBSTNode* node = bst_root;
+        if (!node) {
+            LOG_ERROR(Core_ARM11, "BST root is null");
+            return -1;
+        }
+        
+        // Prevent infinite loops by limiting traversal depth
+        int max_depth = 100; // This should be more than enough for any reasonable tree
+        int current_depth = 0;
         
         // Traverse the tree until we reach a leaf node
-        while (node && node->instruction_idx == -1) {
+        while (node && node->instruction_idx == -1 && current_depth < max_depth) {
             // Check if the instruction matches the current node's pattern
-            bool matches = ((instr & node->key_mask) == node->key_value);
+            // For weight-balanced trees, we use a precise bit comparison
+            u32 mask = node->key_mask;
+            u32 value = node->key_value;
+            
+            // Safety check for invalid mask
+            if (mask == 0) {
+                LOG_ERROR(Core_ARM11, "Invalid mask 0 in SearchBST at depth %d", current_depth);
+                break;
+            }
+            
+            bool matches = ((instr & mask) == value);
             
             // Go to the appropriate child node
-            node = matches ? node->right : node->left;
+            InstrBSTNode* next_node = matches ? node->right : node->left;
+            
+            // Check for null child pointer
+            if (!next_node) {
+                // This is unexpected in our tree structure, but handle it gracefully
+                LOG_WARNING(Core_ARM11, "Unexpected null child in BST at depth %d", current_depth);
+                break;
+            }
+            
+            node = next_node;
+            current_depth++;
+        }
+        
+        // Check if we hit the depth limit
+        if (current_depth >= max_depth) {
+            LOG_ERROR(Core_ARM11, "BST traversal exceeded max depth, possible infinite loop");
+            return -1;
         }
         
         // If we found a leaf node, return its instruction index
-        if (node) {
-            // Verify that the instruction actually matches the pattern
+        if (node && node->instruction_idx != -1) {
             int idx = node->instruction_idx;
+            
+            // Safety check for valid index
+            if (idx < 0 || idx >= static_cast<int>(sizeof(arm_instruction) / sizeof(arm_instruction[0]))) {
+                LOG_ERROR(Core_ARM11, "Invalid instruction index %d in SearchBST", idx);
+                return -1;
+            }
+            
+            // Verify that the instruction actually matches the pattern
             if (CheckInstructionMatch(instr, arm_instruction[idx])) {
                 // Check exclusions
                 if (!CheckExclusionMatch(instr, arm_exclusion_code[idx])) {
@@ -851,10 +1166,10 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
     // Cache miss - need to decode the instruction
     ARMInstructionInfo result;
     
-    // First, try using the binary search tree for fast lookup
+    // First, try using the weight-balanced binary search tree for optimal lookup performance
     int bst_result = SearchBST(instr);
     if (bst_result >= 0) {
-        // Found a match in the BST!
+        // Found a match in the weight-balanced BST!
         *idx = bst_result;
         
         // Cache the successful result
@@ -865,7 +1180,8 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
         return ARMDecodeStatus::SUCCESS;
     }
     
-    // BST lookup failed, fall back to the hash table for backward compatibility
+    // Weight-balanced BST lookup failed, fall back to the hash table for backward compatibility
+    // This should rarely happen with our optimized tree structure
     // Initialize lookup table if needed
     if (!lookup_table_initialized) {
         InitLookupTable();
@@ -899,6 +1215,10 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
             result.instruction_index = candidate_idx;
             result.status = ARMDecodeStatus::SUCCESS;
             instruction_cache[instr] = result;
+            
+            // This is a miss in our weight-balanced BST, which shouldn't happen often
+            // Log it for debugging purposes
+            LOG_DEBUG(Core_ARM11, "Weight-balanced BST miss for instruction 0x%08x, found via hash table", instr);
             
             return ARMDecodeStatus::SUCCESS;
         }
@@ -938,6 +1258,10 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
             result.instruction_index = i;
             result.status = ARMDecodeStatus::SUCCESS;
             instruction_cache[instr] = result;
+            
+            // This is a complete miss in all our optimized structures
+            // Log it for debugging purposes
+            LOG_DEBUG(Core_ARM11, "Complete lookup miss for instruction 0x%08x, found via full scan", instr);
             
             return ARMDecodeStatus::SUCCESS;
         }
