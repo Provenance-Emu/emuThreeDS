@@ -28,7 +28,7 @@
 
 #include "common/common_types.h"
 
-#define USE_NEON 1
+#define USE_NEON 0
 
 enum class ThumbDecodeStatus {
     UNDEFINED, // Undefined Thumb instruction
