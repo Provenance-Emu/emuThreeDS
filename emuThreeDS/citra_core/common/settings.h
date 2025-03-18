@@ -410,7 +410,8 @@ struct Values {
 
     // Core
     Setting<bool> use_cpu_jit{true, "use_cpu_jit"};
-    SwitchableSetting<s32, true> cpu_clock_percentage{100, 5, 400, "cpu_clock_percentage"};
+    // 0 is a special value for auto mode, normal range is 5-400%
+    SwitchableSetting<s32, true> cpu_clock_percentage{100, 0, 400, "cpu_clock_percentage"};
     SwitchableSetting<bool> is_new_3ds{true, "is_new_3ds"};
 
     // Data Storage

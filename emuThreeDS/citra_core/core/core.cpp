@@ -70,6 +70,64 @@ Core::Timing& Global() {
     return System::GetInstance().CoreTiming();
 }
 
+AutoCpuClockAdjuster::AutoCpuClockAdjuster(System& system) : system_(system) {
+    last_adjustment_time_ = std::chrono::steady_clock::now();
+}
+
+void AutoCpuClockAdjuster::Update() {
+    if (!enabled_) {
+        return;
+    }
+
+    auto now = std::chrono::steady_clock::now();
+    if (now - last_adjustment_time_ < adjustment_interval_) {
+        return; // Not time to adjust yet
+    }
+    last_adjustment_time_ = now;
+
+    // Get current performance stats
+    const auto perf_stats = system_.GetLastPerfStats();
+    double current_fps = perf_stats.game_fps;
+
+    // Corrected algorithm logic:
+    // 1. Always aim for auto_mode_max_percentage_ (default 100%) CPU clock to minimize input latency when possible
+    // 2. When FPS is below target, DECREASE CPU clock (counter-intuitive but helps in emulation)
+    // 3. If FPS is good, gradually move back toward auto_mode_max_percentage_
+
+    const s32 default_percentage = auto_mode_max_percentage_; // Default target
+
+    if (current_fps < target_fps_min_) {
+        // FPS is too low, DECREASE CPU clock to improve emulation performance
+        // This is counter-intuitive but in emulation can help achieve better FPS
+        if (current_percentage_ > min_percentage_) {
+            // Only decrease if we're not already at minimum
+            current_percentage_ = std::max(min_percentage_, current_percentage_ - adjustment_step_);
+            LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} < {:.1f}, decreasing to {}%",
+                     current_fps, target_fps_min_, current_percentage_);
+        }
+    } else if (current_percentage_ < default_percentage) {
+        // FPS is good but we're underclocked - gradually move back toward 100% for better latency
+        current_percentage_ = std::min(default_percentage, current_percentage_ + adjustment_step_);
+        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, adjusting toward default {}%",
+                 current_fps, target_fps_min_, default_percentage);
+    } else if (current_percentage_ > default_percentage) {
+        // We're overclocked, move back to default 100%
+        current_percentage_ = std::max(default_percentage, current_percentage_ - adjustment_step_);
+        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, adjusting toward default {}%",
+                 current_fps, target_fps_min_, default_percentage);
+    } else {
+        // We're at the default percentage and FPS is acceptable
+        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, maintaining default {}%",
+                 current_fps, target_fps_min_, default_percentage);
+    }
+
+    // Update the CPU clock percentage
+    system_.CoreTiming().UpdateClockSpeed(current_percentage_);
+
+    // Store current FPS for next comparison
+    last_fps_ = current_fps;
+}
+
 System::~System() = default;
 
 System::ResultStatus System::RunLoop(bool tight_loop) {
@@ -231,6 +289,11 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
     HW::Update();
     Reschedule();
 
+    // Update auto CPU clock adjustment if enabled
+    if (auto_cpu_clock && auto_cpu_clock->IsEnabled()) {
+        auto_cpu_clock->Update();
+    }
+
     return status;
 }
 
@@ -375,7 +438,18 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     memory = std::make_unique<Memory::MemorySystem>();
 
-    timing = std::make_unique<Timing>(num_cores, Settings::values.cpu_clock_percentage.GetValue());
+    // Initialize timing with appropriate CPU clock percentage
+    // If cpu_clock_percentage is 0, use auto_mode_max_percentage_ as default and enable auto mode
+    s32 initial_percentage = Settings::values.cpu_clock_percentage.GetValue();
+    bool auto_mode = (initial_percentage == 0);
+    if (auto_mode) {
+        initial_percentage = AutoCpuClockAdjuster::auto_mode_max_percentage_; // Start with default and let auto adjuster handle it
+    }
+    timing = std::make_unique<Timing>(num_cores, initial_percentage);
+
+    // Initialize auto CPU clock adjuster
+    auto_cpu_clock = std::make_unique<AutoCpuClockAdjuster>(*this);
+    auto_cpu_clock->SetEnabled(auto_mode);
 
     kernel = std::make_unique<Kernel::KernelSystem>(
         *memory, *timing, [this] { PrepareReschedule(); }, system_mode, num_cores, n3ds_mode);

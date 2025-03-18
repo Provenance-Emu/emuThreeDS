@@ -97,7 +97,20 @@ void Apply() {
 
     auto& system = Core::System::GetInstance();
     if (system.IsPoweredOn()) {
-        system.CoreTiming().UpdateClockSpeed(values.cpu_clock_percentage.GetValue());
+        // Handle auto CPU clock mode (value of 0)
+        s32 cpu_clock = values.cpu_clock_percentage.GetValue();
+        if (cpu_clock == 0) {
+            // Enable auto mode and use current value
+            if (system.auto_cpu_clock) {
+                system.auto_cpu_clock->SetEnabled(true);
+            }
+        } else {
+            // Disable auto mode and set specific value
+            if (system.auto_cpu_clock) {
+                system.auto_cpu_clock->SetEnabled(false);
+            }
+            system.CoreTiming().UpdateClockSpeed(cpu_clock);
+        }
         Core::DSP().SetSink(values.output_type.GetValue(), values.output_device.GetValue());
         Core::DSP().EnableStretching(values.enable_audio_stretching.GetValue());
 
