@@ -6,8 +6,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <cstring> // For std::memcpy
-#include <array>
 #include "common/common_types.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -45,16 +43,16 @@ inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-
+    
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t right_shift = vdup_n_s32(-(int32_t)i);
     int32x2_t left_shift = vdup_n_s32(32 - (int32_t)i);
-
+    
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t result = vorr_u32(right_part, left_part);
-
+    
     return vget_lane_u32(result, 0);
 }
 
@@ -64,16 +62,16 @@ inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-
+    
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t left_shift = vdup_n_s32((int32_t)i);
     int32x2_t right_shift = vdup_n_s32(-((int32_t)(32 - i)));
-
+    
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t result = vorr_u32(left_part, right_part);
-
+    
     return vget_lane_u32(result, 0);
 }
 #endif
@@ -155,7 +153,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     int shift_imm = BITS(sht_oper, 7, 11);
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
-
+    
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -164,12 +162,12 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-
+        
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (32 - shift_imm));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-
+        
         // Perform the shift using vshl_u32 which accepts variable shift amounts
         int32x2_t shift_amount = vdup_n_s32(shift_imm);
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -185,7 +183,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
         cpu->shifter_carry_out = BIT(rm, 32 - shift_imm);
     }
 #endif
-
+    
     return shifter_operand;
 }
 
@@ -213,7 +211,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-
+    
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -222,12 +220,12 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-
+        
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-
+        
         // Perform the right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -243,7 +241,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-
+    
     return shifter_operand;
 }
 
@@ -271,7 +269,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-
+    
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -283,12 +281,12 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     } else {
         // Use NEON intrinsics for arithmetic shift right
         int32x2_t value = vdup_n_s32((int32_t)rm);
-
+        
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(vreinterpret_u32_s32(value), carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-
+        
         // Perform the arithmetic right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         int32x2_t shifted = vshl_s32(value, shift_amount); // Use signed shift for arithmetic shift
@@ -307,7 +305,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-
+    
     return shifter_operand;
 }
 
@@ -335,7 +333,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int shifter_operand;
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
-
+    
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -343,24 +341,24 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         // Use NEON intrinsics for RRX operation
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry = vdup_n_u32(cpu->CFlag);
-
+        
         // Extract the carry out bit
         uint32x2_t carry_out_mask = vdup_n_u32(1);
         uint32x2_t carry_out = vand_u32(value, carry_out_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_out, 0) != 0;
-
+        
         // Shift right by 1
         uint32x2_t shifted = vshr_n_u32(value, 1);
-
+        
         // Insert carry flag into bit 31
         uint32x2_t carry_shifted = vshl_n_u32(carry, 31);
         uint32x2_t result = vorr_u32(shifted, carry_shifted);
-
+        
         shifter_operand = vget_lane_u32(result, 0);
     } else {
         // Use our optimized ROTATE_RIGHT_32 function which already uses NEON
         shifter_operand = ROTATE_RIGHT_32(rm, shift_imm);
-
+        
         // Extract the carry bit
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
@@ -377,7 +375,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-
+    
     return shifter_operand;
 }
 
@@ -420,23 +418,23 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-
+    
     // Extract U bit and offset
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t offset_mask = vdup_n_u32(0x00000FFF);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
     uint32x2_t offset = vand_u32(inst_vec, offset_mask);
-
+    
     // Get the base address
     uint32x2_t base_addr = vdup_n_u32(CHECK_READ_REG15_WA(cpu, Rn));
-
+    
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(base_addr, offset);
     else
         addr = vsub_u32(base_addr, offset);
-
+    
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -457,36 +455,36 @@ static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigne
     // Optimized version using ARM NEON intrinsics
     // Extract Rn and Rm fields using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
-
+    
     // Extract Rn (bits 16-19)
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-
+    
     // Extract Rm (bits 0-3)
     uint32x2_t rm_mask = vdup_n_u32(0x0000000F);
     uint32x2_t rm_field = vand_u32(inst_vec, rm_mask);
     unsigned int Rm = vget_lane_u32(rm_field, 0);
-
+    
     // Get register values
     unsigned int rn = CHECK_READ_REG15_WA(cpu, Rn);
     unsigned int rm = CHECK_READ_REG15_WA(cpu, Rm);
-
+    
     // Extract U bit
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
-
+    
     // Create vectors for register values
     uint32x2_t rn_vec = vdup_n_u32(rn);
     uint32x2_t rm_vec = vdup_n_u32(rm);
-
+    
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(rn_vec, rm_vec);
     else
         addr = vsub_u32(rn_vec, rm_vec);
-
+    
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -927,7 +925,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     // Optimized version using ARM NEON intrinsics
     // Create a vector with the instruction value
     uint32x2_t inst_vec = vdup_n_u32(inst);
-
+    
     // Extract bit fields using NEON operations
     uint32x2_t bits24_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F000000)), 24);
     uint32x2_t bit21 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00200000)), 21);
@@ -936,7 +934,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     uint32x2_t bits21_22 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00600000)), 21);
     uint32x2_t bit7 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000080)), 7);
     uint32x2_t bits23_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F800000)), 23);
-
+    
     // Extract scalar values for comparison
     u32 bits24_27_val = vget_lane_u32(bits24_27, 0);
     u32 bit21_val = vget_lane_u32(bit21, 0);
@@ -945,7 +943,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     u32 bits21_22_val = vget_lane_u32(bits21_22, 0);
     u32 bit7_val = vget_lane_u32(bit7, 0);
     u32 bits23_27_val = vget_lane_u32(bits23_27, 0);
-
+    
     // LnSWoUB addressing modes
     if (bits24_27_val == 5 && bit21_val == 0) {
         return LnSWoUB(ImmediateOffset);
@@ -965,7 +963,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return LnSWoUB(RegisterPostIndexed);
     } else if (bits24_27_val == 6 && bit21_val == 0 && bit4_val == 0) {
         return LnSWoUB(ScaledRegisterPostIndexed);
-    }
+    } 
     // MLnS addressing modes
     else if (bits24_27_val == 1 && bits21_22_val == 2 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(ImmediateOffset);
@@ -979,7 +977,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return MLnS(ImmediatePostIndexed);
     } else if (bits24_27_val == 0 && bits21_22_val == 0 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(RegisterPostIndexed);
-    }
+    } 
     // LdnStM addressing modes
     else if (bits23_27_val == 0x11) {
         return LdnStM(IncrementAfter);
@@ -1111,81 +1109,8 @@ enum { KEEP_GOING, FETCH_EXCEPTION };
 
 MICROPROFILE_DEFINE(DynCom_Decode, "DynCom", "Decode", MP_RGB(255, 64, 64));
 
-// Forward declaration
 static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, const u32 phys_addr,
-                                                     ARM_INST_PTR& inst_base);
-
-// Define the arm_instruction_count based on arm_instruction_trans_len
-const int arm_instruction_count = static_cast<int>(arm_instruction_trans_len);
-
-/**
- * Translate a batch of ARM instructions using SIMD-based decoding
- * @param cpu The CPU state
- * @param phys_addr The physical address of the first instruction
- * @param inst_bases Array to store the translated instruction pointers
- * @param count Number of instructions to translate
- * @return Number of instructions successfully translated
- */
-static int InterpreterTranslateInstructionBatch(const ARMul_State* cpu, const u32 phys_addr,
-                                               ARM_INST_PTR* inst_bases, int count) {
-    // Only use batch processing for ARM mode (not Thumb)
-    if (cpu->TFlag) {
-        // Fall back to single instruction translation for Thumb mode
-        ARM_INST_PTR inst_base;
-        InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
-        inst_bases[0] = inst_base;
-        return 1;
-    }
-
-    // Read multiple instructions at once
-    u32 instrs[16]; // Maximum batch size (adjust as needed)
-    int batch_size = std::min(count, 16);
-
-    // Read instructions from memory
-    for (int i = 0; i < batch_size; i++) {
-        u32 addr = phys_addr + (i * 4); // ARM instructions are 4 bytes
-        instrs[i] = cpu->memory.Read32(addr & 0xFFFFFFFC);
-    }
-
-    // Decode instructions in batch
-    int indices[16];
-    int decoded_count = BatchDecodeARMInstructions(instrs, indices, batch_size);
-
-    // If no instructions were decoded successfully, fall back to single instruction decoding
-    if (decoded_count == 0) {
-        LOG_WARNING(Core_ARM11, "Batch decoding failed, falling back to single instruction decoding");
-        ARM_INST_PTR inst_base;
-        if (InterpreterTranslateInstruction(cpu, phys_addr, inst_base) > 0) {
-            inst_bases[0] = inst_base;
-            return 1;
-        }
-        return 0;
-    }
-
-    // Create instruction bases for each decoded instruction
-    int valid_count = 0;
-    for (int i = 0; i < decoded_count; i++) {
-        // Validate the index before using it
-        if (indices[i] >= 0 && indices[i] < arm_instruction_count) {
-            inst_bases[valid_count] = arm_instruction_trans[indices[i]](instrs[i], indices[i]);
-            valid_count++;
-        } else {
-            // Only log at debug level to avoid spamming the console
-            static std::unordered_map<u32, bool> logged_instructions;
-            if (!logged_instructions[instrs[i]]) {
-                LOG_DEBUG(Core_ARM11, "Skipping unknown instruction: 0x%08X (bits[27:24]: 0x%X, bits[23:20]: 0x%X, bits[7:4]: 0x%X)",
-                         instrs[i], (instrs[i] >> 24) & 0xF, (instrs[i] >> 20) & 0xF, (instrs[i] >> 4) & 0xF);
-                logged_instructions[instrs[i]] = true;
-            }
-        }
-    }
-
-    // Return the number of valid instructions processed
-    return valid_count;
-}
-
-static unsigned int InterpreterTranslateInstruction(const ARMul_State* cpu, const u32 phys_addr,
-                                                     ARM_INST_PTR& inst_base) {
+                                                    ARM_INST_PTR& inst_base) {
     u32 inst_size = 4;
     u32 inst = cpu->memory.Read32(phys_addr & 0xFFFFFFFC);
 
@@ -1223,79 +1148,22 @@ static int InterpreterTranslateBlock(ARMul_State* cpu, std::size_t& bb_start, u3
     // Allocate memory and init InsCream
     // Go on next, until terminal instruction
     // Save start addr of basicblock in CreamCache
+    ARM_INST_PTR inst_base = nullptr;
+    TransExtData ret = TransExtData::NON_BRANCH;
     bb_start = trans_cache_buf_top;
 
     u32 phys_addr = addr;
     u32 pc_start = cpu->Reg[15];
 
-    // Use batch processing for ARM mode (not Thumb)
-    if (!cpu->TFlag) {
-        // Try to decode and translate a batch of instructions at once
-        const int MAX_BATCH_SIZE = 8; // Maximum batch size to process at once
-        ARM_INST_PTR inst_bases[MAX_BATCH_SIZE];
+    while (ret == TransExtData::NON_BRANCH) {
+        u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
+        phys_addr += inst_size;
 
-        int translated_count = InterpreterTranslateInstructionBatch(cpu, phys_addr, inst_bases, MAX_BATCH_SIZE);
-
-        // If batch translation failed completely, fall back to normal processing
-        if (translated_count == 0) {
-            ARM_INST_PTR inst_base = nullptr;
-            TransExtData ret = TransExtData::NON_BRANCH;
-
-            while (ret == TransExtData::NON_BRANCH) {
-                u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
-                phys_addr += inst_size;
-
-                if ((phys_addr & 0xfff) == 0) {
-                    inst_base->br = TransExtData::END_OF_PAGE;
-                }
-                ret = inst_base->br;
-            }
-        } else {
-            // Process the translated instructions
-            ARM_INST_PTR inst_base = nullptr;
-            TransExtData ret = TransExtData::NON_BRANCH;
-            int i = 0;
-
-            while (i < translated_count && ret == TransExtData::NON_BRANCH) {
-                inst_base = inst_bases[i];
-                phys_addr += 4; // ARM instructions are 4 bytes
-
-                if ((phys_addr & 0xfff) == 0) {
-                    inst_base->br = TransExtData::END_OF_PAGE;
-                }
-                ret = inst_base->br;
-                i++;
-            }
-
-            // If we processed all instructions in the batch and didn't hit a branch,
-            // continue with normal processing
-            if (i == translated_count && ret == TransExtData::NON_BRANCH) {
-                while (ret == TransExtData::NON_BRANCH) {
-                    u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
-                    phys_addr += inst_size;
-
-                    if ((phys_addr & 0xfff) == 0) {
-                        inst_base->br = TransExtData::END_OF_PAGE;
-                    }
-                    ret = inst_base->br;
-                }
-            }
+        if ((phys_addr & 0xfff) == 0) {
+            inst_base->br = TransExtData::END_OF_PAGE;
         }
-    } else {
-        // Original code path for Thumb mode
-        ARM_INST_PTR inst_base = nullptr;
-        TransExtData ret = TransExtData::NON_BRANCH;
-
-        while (ret == TransExtData::NON_BRANCH) {
-            u32 inst_size = InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
-            phys_addr += inst_size;
-
-            if ((phys_addr & 0xfff) == 0) {
-                inst_base->br = TransExtData::END_OF_PAGE;
-            }
-            ret = inst_base->br;
-        }
-    }
+        ret = inst_base->br;
+    };
 
     cpu->instruction_cache[pc_start] = bb_start;
 
@@ -1311,8 +1179,6 @@ static int InterpreterTranslateSingle(ARMul_State* cpu, std::size_t& bb_start, u
     u32 phys_addr = addr;
     u32 pc_start = cpu->Reg[15];
 
-    // For single instruction translation, we still use the regular method
-    // as the batch processing overhead isn't worth it for just one instruction
     InterpreterTranslateInstruction(cpu, phys_addr, inst_base);
 
     if (inst_base->br == TransExtData::NON_BRANCH) {
