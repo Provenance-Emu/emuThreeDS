@@ -58,6 +58,11 @@ public:
     // Specialized cache methods
     void ClearSpecializedCache();
     void EnableSpecializedCache(bool enabled);
+    
+    // Methods to control specialized cache for specific memory regions
+    void EnableSpecializedCacheForAppHeap(bool enabled);
+    void EnableSpecializedCacheForLinearHeap(bool enabled);
+    void EnableSpecializedCacheForVRAM(bool enabled);
 
     std::unique_ptr<ThreadContext> NewContext() const override;
     void SaveContext(const std::unique_ptr<ThreadContext>& arg) override;

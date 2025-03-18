@@ -19,8 +19,22 @@
 // Enabled by default for better performance
 static bool use_direct_threaded_interpreter = false;
 
-// External declaration of the global specialized cache flag
-extern bool g_use_specialized_cache;
+
+// Flag to enable/disable specialized cache
+#if USE_SPECIALIZED_CACHE
+bool g_use_specialized_cache = true;
+
+// Flag to enable/disable specialized cache for specific memory regions
+// This is useful for debugging and troubleshooting
+bool g_use_specialized_cache_for_app_heap = false;     // 0x08000000 - 0x10000000
+bool g_use_specialized_cache_for_linear_heap = false;  // 0x14000000 - 0x1C000000
+bool g_use_specialized_cache_for_vram = false;        // 0x1F000000 - 0x1FF00000
+#else
+bool g_use_specialized_cache = false;
+bool g_use_specialized_cache_for_app_heap = false;     // 0x08000000 - 0x10000000
+bool g_use_specialized_cache_for_linear_heap = false;  // 0x14000000 - 0x1C000000
+bool g_use_specialized_cache_for_vram = false;
+#endif
 
 class DynComThreadContext final : public ARM_Interface::ThreadContext {
 public:
@@ -99,7 +113,7 @@ void ARM_DynCom::Step() {
 void ARM_DynCom::ClearInstructionCache() {
     state->instruction_cache.clear();
     trans_cache_buf_top = 0;
-    
+
 #if USE_SPECIALIZED_CACHE
     if (g_use_specialized_cache) {
         // Also clear the specialized cache
@@ -178,25 +192,68 @@ void ARM_DynCom::ExecuteInstructions(u64 num_instructions) {
               num_instructions, state->Reg[15], state->Cpsr, state->TFlag);
 
     unsigned ticks_executed = 0;
-    
+
 #if USE_SPECIALIZED_CACHE
     // Try to use the specialized cache first if it's enabled
     // This works regardless of which interpreter is used
     if (g_use_specialized_cache) {
         u32 pc = state->Reg[15];
-        
-        // Check if the current PC is valid
-        if (IsValidMemoryAddress(pc)) {
-            // Get the global specialized cache
-            auto& specialized_cache = GetGlobalSpecializedCache();
-            
-            // Try to execute a specialized block
-            ticks_executed = specialized_cache.ExecuteBlock(state.get(), pc);
-            
-            // If we successfully executed a specialized block, we're done
-            if (ticks_executed > 0) {
-                LOG_TRACE(Core_ARM11, "Used specialized cache for execution at PC=0x%08X", pc);
-                goto execution_complete;
+
+        // Check if the current PC is valid and aligned
+        if (IsValidMemoryAddress(pc) && (pc & 0x3) == 0) {
+            bool safe_for_specialized_cache = true;
+
+            // Check if the PC is in a memory region where we want to use the specialized cache
+            if (pc >= 0x08000000 && pc < 0x10000000) { // Application heap
+                safe_for_specialized_cache = g_use_specialized_cache_for_app_heap;
+                if (!safe_for_specialized_cache) {
+                    LOG_TRACE(Core_ARM11, "Skipping specialized cache for app heap at PC=0x%08X", pc);
+                }
+            } else if (pc >= 0x14000000 && pc < 0x1C000000) { // Linear heap
+                safe_for_specialized_cache = g_use_specialized_cache_for_linear_heap;
+                if (!safe_for_specialized_cache) {
+                    LOG_TRACE(Core_ARM11, "Skipping specialized cache for linear heap at PC=0x%08X", pc);
+                }
+            } else if (pc >= 0x1F000000 && pc < 0x1FF00000) { // VRAM
+                safe_for_specialized_cache = g_use_specialized_cache_for_vram;
+                if (!safe_for_specialized_cache) {
+                    LOG_TRACE(Core_ARM11, "Skipping specialized cache for VRAM at PC=0x%08X", pc);
+                }
+            }
+
+            // Always skip specialized cache for these sensitive regions
+            if ((pc >= 0x1EC00000 && pc < 0x1F000000) || // IO register area
+                (pc >= 0x1FF00000 && pc < 0x1FF80000) || // DSP memory
+                (pc >= 0x1FF80000 && pc < 0x1FF83000)) { // Config memory
+                safe_for_specialized_cache = false;
+                LOG_TRACE(Core_ARM11, "Skipping specialized cache for sensitive memory region at PC=0x%08X", pc);
+            }
+
+            if (safe_for_specialized_cache) {
+                // Verify we can read the instruction at this address before trying the specialized cache
+                try {
+                    u32 instr = state->memory.Read32(pc);
+
+                    // Check for suspicious instruction values that might indicate invalid memory
+                    if (instr == 0 || instr == 0xFFFFFFFF) {
+                        LOG_WARNING(Core_ARM11, "Skipping specialized cache due to suspicious instruction 0x%08X at PC=0x%08X", instr, pc);
+                    } else {
+                        // Get the global specialized cache
+                        auto& specialized_cache = GetGlobalSpecializedCache();
+
+                        // Try to execute a specialized block
+                        ticks_executed = specialized_cache.ExecuteBlock(state.get(), pc);
+
+                        // If we successfully executed a specialized block, we're done
+                        if (ticks_executed > 0) {
+                            LOG_TRACE(Core_ARM11, "Used specialized cache for execution at PC=0x%08X", pc);
+                            goto execution_complete;
+                        }
+                    }
+                } catch (...) {
+                    LOG_ERROR(Core_ARM11, "Exception reading instruction at PC=0x%08X", pc);
+                    // Fall back to regular interpreter
+                }
             }
         }
     }
@@ -212,7 +269,7 @@ void ARM_DynCom::ExecuteInstructions(u64 num_instructions) {
         LOG_TRACE(Core_ARM11, "Using original interpreter");
         ticks_executed = InterpreterMainLoop(state.get());
     }
-    
+
 #if USE_SPECIALIZED_CACHE
 execution_complete:
 #endif
@@ -239,14 +296,6 @@ void ARM_DynCom::ResetProfiler() {
 void ARM_DynCom::PrintProfilerStats() {
     ARMDyncomProfiler::GetInstance().PrintStats();
 }
-
-
-// Flag to enable/disable specialized cache
-#if USE_SPECIALIZED_CACHE
-bool g_use_specialized_cache = true;
-#else
-bool g_use_specialized_cache = false;
-#endif
 
 // Clear the specialized cache
 void ARM_DynCom::ClearSpecializedCache() {

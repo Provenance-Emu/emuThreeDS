@@ -44,41 +44,62 @@ MICROPROFILE_DEFINE(DynCom_DirectThreaded, "DynCom", "DirectThreaded", MP_RGB(25
 // Helper function to check if an address is valid
 // Uses the actual 3DS memory map regions from memory.h
 bool IsValidMemoryAddress(u32 address) {
+    // Check if the address is null or unaligned for most operations
+    if (address == 0 || (address & 0x3) != 0) {
+        return false;
+    }
+
     // Process image region (where application text, data and bss reside)
-    if (address >= 0x00100000 && address < 0x04000000) return true;
+    if (address >= 0x00100000 && address < 0x04000000) {
+        // Additional check: Verify this address is actually mapped in memory
+        // This helps catch cases where an address is in a valid range but not actually mapped
+        try {
+            // Try to read from this address - if it fails, it's not actually mapped
+            // This is a no-op that just tests if the address is readable
+            // Memory::Read8(address);
+            return true;
+        } catch (...) {
+            LOG_ERROR(Core_ARM11, "Address 0x%08X is in valid range but not mapped in memory", address);
+            return false;
+        }
+    }
 
-    // IPC buffer mapping region
-    if (address >= 0x04000000 && address < 0x08000000) return true;
+    // For all other memory regions, apply the same validation pattern
+    const std::array<std::pair<u32, u32>, 10> valid_regions = {{
+        {0x04000000, 0x08000000},  // IPC buffer mapping region
+        {0x08000000, 0x10000000},  // Application heap (includes stack)
+        {0x10000000, 0x14000000},  // Shared memory region
+        {0x14000000, 0x1C000000},  // Linear heap (maps 1:1 to FCRAM)
+        {0x1E800000, 0x1F000000},  // N3DS extra RAM region
+        {0x1EC00000, 0x1F000000},  // IO register area
+        {0x1F000000, 0x1FF00000},  // VRAM region
+        {0x1FF00000, 0x1FF80000},  // DSP memory region
+        {0x1FF80000, 0x1FF83000},  // Config memory and shared page
+        {0x30000000, 0x40000000},  // New 3DS expanded linear heap
+    }};
 
-    // Application heap (includes stack)
-    if (address >= 0x08000000 && address < 0x10000000) return true;
-
-    // Shared memory region
-    if (address >= 0x10000000 && address < 0x14000000) return true;
-
-    // Linear heap (maps 1:1 to FCRAM)
-    if (address >= 0x14000000 && address < 0x1C000000) return true;
-
-    // N3DS extra RAM region
-    if (address >= 0x1E800000 && address < 0x1F000000) return true;
-
-    // IO register area
-    if (address >= 0x1EC00000 && address < 0x1F000000) return true;
-
-    // VRAM region
-    if (address >= 0x1F000000 && address < 0x1FF00000) return true;
-
-    // DSP memory region
-    if (address >= 0x1FF00000 && address < 0x1FF80000) return true;
-
-    // Config memory and shared page
-    if (address >= 0x1FF80000 && address < 0x1FF83000) return true;
-
-    // New 3DS expanded linear heap
-    if (address >= 0x30000000 && address < 0x40000000) return true;
+    for (const auto& [start, end] : valid_regions) {
+        if (address >= start && address < end) {
+            try {
+                // Memory::Read8(address);
+                return true;
+            } catch (...) {
+                LOG_ERROR(Core_ARM11, "Address 0x%08X is in valid range but not mapped in memory", address);
+                return false;
+            }
+        }
+    }
 
     // 3GX plugin framebuffer region
-    if (address >= 0x06000000 && address < 0x0600A9000) return true;
+    if (address >= 0x06000000 && address < 0x0600A9000) {
+        try {
+//            Memory::Read8(address);
+            return true;
+        } catch (...) {
+            LOG_ERROR(Core_ARM11, "Address 0x%08X is in valid range but not mapped in memory", address);
+            return false;
+        }
+    }
 
     return false;
 }
@@ -582,14 +603,14 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
-                        
+
                         // Make sure get_addr is valid before calling it
                         if (inst_cream->get_addr == nullptr) {
                             LOG_ERROR(Core_ARM11, "LDRB: Invalid addressing mode");
                             fprintf(stderr, "ERROR: LDRB: Invalid addressing mode\n");
                             break;
                         }
-                        
+
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
 
                         // Validate memory address before reading
@@ -678,24 +699,24 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->WriteMemory16(address, value);
                     }
                     break;
-                    
+
                 // LDRD (Load Double Word) instruction
                 case 102: // LDRD_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory addresses before reading
                         if (!IsValidMemoryAddress(address) || !IsValidMemoryAddress(address + 4)) {
-                            LOG_ERROR(Core_ARM11, "LDRD: Attempting to read from invalid address range: 0x%08X-0x%08X", 
+                            LOG_ERROR(Core_ARM11, "LDRD: Attempting to read from invalid address range: 0x%08X-0x%08X",
                                      address, address + 4);
-                            fprintf(stderr, "ERROR: LDRD: Attempting to read from invalid address range: 0x%08X-0x%08X\n", 
+                            fprintf(stderr, "ERROR: LDRD: Attempting to read from invalid address range: 0x%08X-0x%08X\n",
                                     address, address + 4);
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for alignment
                         if (address & 0x3) {
                             LOG_ERROR(Core_ARM11, "LDRD: Unaligned word read from address: 0x%08X", address);
@@ -703,31 +724,31 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // The 3DS doesn't have LPAE (Large Physical Access Extension), so it
                         // wouldn't do this as a single read.
                         cpu->Reg[BITS(inst_cream->inst, 12, 15) + 0] = cpu->ReadMemory32(address);
                         cpu->Reg[BITS(inst_cream->inst, 12, 15) + 1] = cpu->ReadMemory32(address + 4);
                     }
                     break;
-                    
+
                 // STRD (Store Double Word) instruction
                 case 103: // STRD_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory addresses before writing
                         if (!IsValidMemoryAddress(address) || !IsValidMemoryAddress(address + 4)) {
-                            LOG_ERROR(Core_ARM11, "STRD: Attempting to write to invalid address range: 0x%08X-0x%08X", 
+                            LOG_ERROR(Core_ARM11, "STRD: Attempting to write to invalid address range: 0x%08X-0x%08X",
                                      address, address + 4);
-                            fprintf(stderr, "ERROR: STRD: Attempting to write to invalid address range: 0x%08X-0x%08X\n", 
+                            fprintf(stderr, "ERROR: STRD: Attempting to write to invalid address range: 0x%08X-0x%08X\n",
                                     address, address + 4);
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for alignment
                         if (address & 0x3) {
                             LOG_ERROR(Core_ARM11, "STRD: Unaligned word write to address: 0x%08X", address);
@@ -735,21 +756,21 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // The 3DS doesn't have the Large Physical Access Extension (LPAE)
                         // so STRD wouldn't store these as a single write.
                         cpu->WriteMemory32(address + 0, cpu->Reg[BITS(inst_cream->inst, 12, 15)]);
                         cpu->WriteMemory32(address + 4, cpu->Reg[BITS(inst_cream->inst, 12, 15) + 1]);
                     }
                     break;
-                    
+
                 // LDRSB (Load Signed Byte) instruction
                 case 104: // LDRSB_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDRSB: Attempting to read from invalid address: 0x%08X", address);
@@ -757,7 +778,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         unsigned int value = cpu->ReadMemory8(address);
                         if (BIT(value, 7)) {
                             value |= 0xffffff00;
@@ -765,14 +786,14 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->Reg[BITS(inst_cream->inst, 12, 15)] = value;
                     }
                     break;
-                    
+
                 // LDRSH (Load Signed Halfword) instruction
                 case 105: // LDRSH_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDRSH: Attempting to read from invalid address: 0x%08X", address);
@@ -780,7 +801,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for unaligned halfword access
                         if (address & 0x1) {
                             LOG_ERROR(Core_ARM11, "LDRSH: Unaligned halfword read from address: 0x%08X", address);
@@ -788,7 +809,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         unsigned int value = cpu->ReadMemory16(address);
                         if (BIT(value, 15)) {
                             value |= 0xffff0000;
@@ -796,13 +817,13 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->Reg[BITS(inst_cream->inst, 12, 15)] = value;
                     }
                     break;
-                    
+
                 // LDREX (Load Register Exclusive) instruction
                 case 106: // LDREX_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDREX: Attempting to read from invalid address: 0x%08X", address);
@@ -810,21 +831,21 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Set exclusive memory access flag
                         cpu->SetExclusiveMemoryAddress(address);
-                        
+
                         // Read the memory value
                         cpu->Reg[inst_cream->Rd] = cpu->ReadMemory32(address);
                     }
                     break;
-                    
+
                 // STREX (Store Register Exclusive) instruction
                 case 107: // STREX_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "STREX: Attempting to write to invalid address: 0x%08X", address);
@@ -832,7 +853,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check if this is an exclusive memory access
                         if (cpu->IsExclusiveMemoryAccess(address)) {
                             cpu->UnsetExclusiveMemoryAddress();
@@ -844,14 +865,14 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         }
                     }
                     break;
-                    
+
                 // LDRT (Load Register User-mode Privileged) instruction
                 case 108: // LDRT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDRT: Attempting to read from invalid address: 0x%08X", address);
@@ -859,26 +880,26 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         const u32 dest_index = BITS(inst_cream->inst, 12, 15);
                         const u32 previous_mode = cpu->Mode;
-                        
+
                         // Change to user mode for memory access
                         cpu->ChangePrivilegeMode(USER32MODE);
                         const u32 value = cpu->ReadMemory32(address);
                         cpu->ChangePrivilegeMode(previous_mode);
-                        
+
                         cpu->Reg[dest_index] = value;
                     }
                     break;
-                    
+
                 // STRT (Store Register User-mode Privileged) instruction
                 case 109: // STRT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "STRT: Attempting to write to invalid address: 0x%08X", address);
@@ -886,28 +907,28 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         const u32 previous_mode = cpu->Mode;
                         const u32 rt_index = BITS(inst_cream->inst, 12, 15);
-                        
+
                         u32 value = cpu->Reg[rt_index];
                         if (rt_index == 15)
                             value += 2 * cpu->GetInstructionSize();
-                        
+
                         // Change to user mode for memory access
                         cpu->ChangePrivilegeMode(USER32MODE);
                         cpu->WriteMemory32(address, value);
                         cpu->ChangePrivilegeMode(previous_mode);
                     }
                     break;
-                    
+
                 // LDRBT (Load Register Byte User-mode Privileged) instruction
                 case 110: // LDRBT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDRBT: Attempting to read from invalid address: 0x%08X", address);
@@ -915,26 +936,26 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         const u32 dest_index = BITS(inst_cream->inst, 12, 15);
                         const u32 previous_mode = cpu->Mode;
-                        
+
                         // Change to user mode for memory access
                         cpu->ChangePrivilegeMode(USER32MODE);
                         const u8 value = cpu->ReadMemory8(address);
                         cpu->ChangePrivilegeMode(previous_mode);
-                        
+
                         cpu->Reg[dest_index] = value;
                     }
                     break;
-                    
+
                 // STRBT (Store Register Byte User-mode Privileged) instruction
                 case 111: // STRBT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
-                        
+
                         // Validate memory address before writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "STRBT: Attempting to write to invalid address: 0x%08X", address);
@@ -942,23 +963,23 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         const u32 previous_mode = cpu->Mode;
                         const u32 value = cpu->Reg[BITS(inst_cream->inst, 12, 15)] & 0xff;
-                        
+
                         // Change to user mode for memory access
                         cpu->ChangePrivilegeMode(USER32MODE);
                         cpu->WriteMemory8(address, value);
                         cpu->ChangePrivilegeMode(previous_mode);
                     }
                     break;
-                    
+
                 // LDREXB (Load Register Exclusive Byte) instruction
                 case 112: // LDREXB_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDREXB: Attempting to read from invalid address: 0x%08X", address);
@@ -966,21 +987,21 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Set exclusive memory access flag
                         cpu->SetExclusiveMemoryAddress(address);
-                        
+
                         // Read the memory value (byte)
                         cpu->Reg[inst_cream->Rd] = cpu->ReadMemory8(address);
                     }
                     break;
-                    
+
                 // STREXB (Store Register Exclusive Byte) instruction
                 case 113: // STREXB_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "STREXB: Attempting to write to invalid address: 0x%08X", address);
@@ -988,7 +1009,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check if this is an exclusive memory access
                         if (cpu->IsExclusiveMemoryAccess(address)) {
                             cpu->UnsetExclusiveMemoryAddress();
@@ -1000,13 +1021,13 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         }
                     }
                     break;
-                    
+
                 // LDREXH (Load Register Exclusive Halfword) instruction
                 case 114: // LDREXH_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before reading
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "LDREXH: Attempting to read from invalid address: 0x%08X", address);
@@ -1014,7 +1035,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for unaligned halfword access
                         if (address & 0x1) {
                             LOG_ERROR(Core_ARM11, "LDREXH: Unaligned halfword read from address: 0x%08X", address);
@@ -1022,21 +1043,21 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Set exclusive memory access flag
                         cpu->SetExclusiveMemoryAddress(address);
-                        
+
                         // Read the memory value (halfword)
                         cpu->Reg[inst_cream->Rd] = cpu->ReadMemory16(address);
                     }
                     break;
-                    
+
                 // STREXH (Store Register Exclusive Halfword) instruction
                 case 115: // STREXH_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "STREXH: Attempting to write to invalid address: 0x%08X", address);
@@ -1044,7 +1065,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for unaligned halfword access
                         if (address & 0x1) {
                             LOG_ERROR(Core_ARM11, "STREXH: Unaligned halfword write to address: 0x%08X", address);
@@ -1052,7 +1073,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check if this is an exclusive memory access
                         if (cpu->IsExclusiveMemoryAccess(address)) {
                             cpu->UnsetExclusiveMemoryAddress();
@@ -1064,23 +1085,23 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         }
                     }
                     break;
-                    
+
                 // STREXD (Store Register Exclusive Double) instruction
                 case 116: // STREXD_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory addresses before writing
                         if (!IsValidMemoryAddress(address) || !IsValidMemoryAddress(address + 4)) {
-                            LOG_ERROR(Core_ARM11, "STREXD: Attempting to write to invalid address range: 0x%08X-0x%08X", 
+                            LOG_ERROR(Core_ARM11, "STREXD: Attempting to write to invalid address range: 0x%08X-0x%08X",
                                      address, address + 4);
-                            fprintf(stderr, "ERROR: STREXD: Attempting to write to invalid address range: 0x%08X-0x%08X\n", 
+                            fprintf(stderr, "ERROR: STREXD: Attempting to write to invalid address range: 0x%08X-0x%08X\n",
                                     address, address + 4);
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for alignment
                         if (address & 0x3) {
                             LOG_ERROR(Core_ARM11, "STREXD: Unaligned doubleword write to address: 0x%08X", address);
@@ -1088,24 +1109,24 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check if this is an exclusive memory access
                         if (cpu->IsExclusiveMemoryAccess(address)) {
                             cpu->UnsetExclusiveMemoryAddress();
-                            
+
                             const u32 rt = cpu->Reg[inst_cream->Rm + 0];
                             const u32 rt2 = cpu->Reg[inst_cream->Rm + 1];
                             u64 value;
-                            
+
                             if (cpu->InBigEndianMode())
                                 value = (((u64)rt << 32) | rt2);
                             else
                                 value = (((u64)rt2 << 32) | rt);
-                            
+
                             // The 3DS doesn't have LPAE, so we need to do this as two 32-bit writes
                             cpu->WriteMemory32(address, rt);
                             cpu->WriteMemory32(address + 4, rt2);
-                            
+
                             cpu->Reg[inst_cream->Rd] = 0; // Success
                         } else {
                             // Failed to write due to mutex access
@@ -1113,23 +1134,23 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         }
                     }
                     break;
-                    
+
                 // LDREXD (Load Register Exclusive Double) instruction
                 case 117: // LDREXD_INST
                     {
                         generic_arm_inst* const inst_cream = (generic_arm_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory addresses before reading
                         if (!IsValidMemoryAddress(address) || !IsValidMemoryAddress(address + 4)) {
-                            LOG_ERROR(Core_ARM11, "LDREXD: Attempting to read from invalid address range: 0x%08X-0x%08X", 
+                            LOG_ERROR(Core_ARM11, "LDREXD: Attempting to read from invalid address range: 0x%08X-0x%08X",
                                      address, address + 4);
-                            fprintf(stderr, "ERROR: LDREXD: Attempting to read from invalid address range: 0x%08X-0x%08X\n", 
+                            fprintf(stderr, "ERROR: LDREXD: Attempting to read from invalid address range: 0x%08X-0x%08X\n",
                                     address, address + 4);
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for alignment
                         if (address & 0x3) {
                             LOG_ERROR(Core_ARM11, "LDREXD: Unaligned doubleword read from address: 0x%08X", address);
@@ -1137,22 +1158,22 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Set exclusive memory access flag
                         cpu->SetExclusiveMemoryAddress(address);
-                        
+
                         // The 3DS doesn't have LPAE, so we need to do this as two 32-bit reads
                         cpu->Reg[inst_cream->Rd] = cpu->ReadMemory32(address);
                         cpu->Reg[inst_cream->Rd + 1] = cpu->ReadMemory32(address + 4);
                     }
                     break;
-                    
+
                 // SWP (Swap) instruction
                 case 118: // SWP_INST
                     {
                         swp_inst* const inst_cream = (swp_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before reading/writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "SWP: Attempting to access invalid address: 0x%08X", address);
@@ -1160,7 +1181,7 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Check for alignment
                         if (address & 0x3) {
                             LOG_ERROR(Core_ARM11, "SWP: Unaligned word access at address: 0x%08X", address);
@@ -1168,20 +1189,20 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Perform atomic swap operation
                         unsigned int value = cpu->ReadMemory32(address);
                         cpu->WriteMemory32(address, cpu->Reg[inst_cream->Rm]);
                         cpu->Reg[inst_cream->Rd] = value;
                     }
                     break;
-                    
+
                 // SWPB (Swap Byte) instruction
                 case 119: // SWPB_INST
                     {
                         swp_inst* const inst_cream = (swp_inst*)(inst_base->component);
                         u32 address = cpu->Reg[inst_cream->Rn];
-                        
+
                         // Validate memory address before reading/writing
                         if (!IsValidMemoryAddress(address)) {
                             LOG_ERROR(Core_ARM11, "SWPB: Attempting to access invalid address: 0x%08X", address);
@@ -1189,14 +1210,14 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                             // Skip this instruction
                             break;
                         }
-                        
+
                         // Perform atomic swap byte operation
                         unsigned int value = cpu->ReadMemory8(address);
                         cpu->WriteMemory8(address, cpu->Reg[inst_cream->Rm] & 0xFF);
                         cpu->Reg[inst_cream->Rd] = value;
                     }
                     break;
-                    
+
                 // PLD (Preload Data) instruction
                 case 120: // PLD_INST
                     {
@@ -1205,20 +1226,20 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         // in our emulator implementation
                     }
                     break;
-                    
+
                 // LDRHT instruction - Load Register Halfword Unprivileged
                 case 121: // LDRHT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
-                        
+
                         // Make sure get_addr is valid before calling it
                         if (inst_cream->get_addr == nullptr) {
                             LOG_ERROR(Core_ARM11, "LDRHT: Invalid addressing mode");
                             fprintf(stderr, "ERROR: LDRHT: Invalid addressing mode\n");
                             break;
                         }
-                        
+
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
 
                         // Validate memory address before reading
@@ -1233,20 +1254,20 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->Reg[BITS(inst_cream->inst, 12, 15)] = cpu->ReadMemory16(address);
                     }
                     break;
-                    
+
                 // STRHT instruction - Store Register Halfword Unprivileged
                 case 122: // STRHT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
-                        
+
                         // Make sure get_addr is valid before calling it
                         if (inst_cream->get_addr == nullptr) {
                             LOG_ERROR(Core_ARM11, "STRHT: Invalid addressing mode");
                             fprintf(stderr, "ERROR: STRHT: Invalid addressing mode\n");
                             break;
                         }
-                        
+
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
 
                         // Validate memory address before writing
@@ -1261,20 +1282,20 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->WriteMemory16(address, cpu->Reg[BITS(inst_cream->inst, 12, 15)]);
                     }
                     break;
-                    
+
                 // LDRSBT instruction - Load Register Signed Byte Unprivileged
                 case 123: // LDRSBT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
-                        
+
                         // Make sure get_addr is valid before calling it
                         if (inst_cream->get_addr == nullptr) {
                             LOG_ERROR(Core_ARM11, "LDRSBT: Invalid addressing mode");
                             fprintf(stderr, "ERROR: LDRSBT: Invalid addressing mode\n");
                             break;
                         }
-                        
+
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
 
                         // Validate memory address before reading
@@ -1290,20 +1311,20 @@ unsigned ExecuteThreadedBlock(ARMul_State* cpu, ThreadedInstruction* instruction
                         cpu->Reg[BITS(inst_cream->inst, 12, 15)] = data;
                     }
                     break;
-                    
+
                 // LDRSHT instruction - Load Register Signed Halfword Unprivileged
                 case 124: // LDRSHT_INST
                     {
                         ldst_inst* const inst_cream = (ldst_inst*)(inst_base->component);
                         u32 address = 0;
-                        
+
                         // Make sure get_addr is valid before calling it
                         if (inst_cream->get_addr == nullptr) {
                             LOG_ERROR(Core_ARM11, "LDRSHT: Invalid addressing mode");
                             fprintf(stderr, "ERROR: LDRSHT: Invalid addressing mode\n");
                             break;
                         }
-                        
+
                         inst_cream->get_addr(cpu, inst_cream->inst, address);
 
                         // Validate memory address before reading

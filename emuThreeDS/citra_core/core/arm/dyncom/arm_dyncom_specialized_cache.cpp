@@ -71,11 +71,42 @@ MICROPROFILE_DEFINE(DynCom_SpecializedCache, "DynCom", "SpecializedCache", MP_RG
 unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
     MICROPROFILE_SCOPE(DynCom_SpecializedCache);
     
+    // Validate CPU state
+    if (cpu == nullptr) {
+        LOG_ERROR(Core_ARM11, "SpecializedBlock::Execute called with nullptr CPU");
+        return 0;
+    }
+    
     // Add debug logging
     LOG_TRACE(Core_ARM11, "SpecializedBlock::Execute type=%d, PC before=0x%08X", 
               static_cast<int>(type), cpu->Reg[15]);
-    fprintf(stderr, "SpecializedBlock::Execute type=%d, PC before=0x%08X\n", 
-            static_cast<int>(type), cpu->Reg[15]);
+    
+    // Validate that the start and end addresses are valid
+    if (!IsValidMemoryAddress(start_address) || !IsValidMemoryAddress(end_address)) {
+        LOG_ERROR(Core_ARM11, "Invalid memory address in block: start=0x%08X, end=0x%08X", 
+                 start_address, end_address);
+        return 0;
+    }
+    
+    // Check if addresses are aligned
+    if ((start_address & 0x3) != 0 || (end_address & 0x3) != 0) {
+        LOG_ERROR(Core_ARM11, "Unaligned memory address in block: start=0x%08X, end=0x%08X", 
+                 start_address, end_address);
+        return 0;
+    }
+    
+    // Validate instruction count
+    if (instruction_count <= 0) {
+        LOG_ERROR(Core_ARM11, "Invalid instruction count in block: %d at 0x%08X", 
+                 instruction_count, start_address);
+        return 0;
+    }
+    
+    // Validate block type
+    if (type == BlockType::UNKNOWN) {
+        LOG_ERROR(Core_ARM11, "Attempted to execute block with UNKNOWN type at 0x%08X", start_address);
+        return 0;
+    }
     
     // Get the profiler instance
     auto& profiler = ARMDyncomProfiler::GetInstance();
@@ -85,6 +116,9 @@ unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
     
     unsigned executed_instructions = 0;
     
+    // Use a try-catch block to catch any exceptions during execution
+    try {
+    
     switch (type) {
         case BlockType::MEMORY_COPY: {
             // Optimized memory copy implementation
@@ -92,30 +126,47 @@ unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
             u32 dst_addr = cpu->Reg[data.memory_copy.dst_reg];
             u32 count = cpu->Reg[data.memory_copy.count_reg];
             
-            // Limit the count to a reasonable value to prevent infinite loops
-            count = std::min(count, 1024u);
+            // Validate initial memory addresses
+            if (!IsValidMemoryAddress(src_addr) || !IsValidMemoryAddress(dst_addr)) {
+                LOG_ERROR(Core_ARM11, "Memory copy: Invalid initial memory address - src=0x%08X, dst=0x%08X", src_addr, dst_addr);
+                return 0;
+            }
             
+            // Limit the count to a reasonable value to prevent infinite loops
+            count = std::min(count, 256u);  // Reduced from 1024 to 256 for safety
+            
+            // Validate the entire memory range before starting
             for (u32 i = 0; i < count; i++) {
-                // Validate memory addresses before access
-                if (!IsValidMemoryAddress(src_addr) || !IsValidMemoryAddress(dst_addr)) {
-                    LOG_ERROR(Core_ARM11, "Memory copy: Invalid memory address - src=0x%08X, dst=0x%08X", src_addr, dst_addr);
-                    fprintf(stderr, "ERROR: Memory copy: Invalid memory address - src=0x%08X, dst=0x%08X\n", src_addr, dst_addr);
-                    break;
+                u32 curr_src = src_addr + (data.memory_copy.increment ? i * 4 : 0);
+                u32 curr_dst = dst_addr + (data.memory_copy.increment ? i * 4 : 0);
+                
+                if (!IsValidMemoryAddress(curr_src) || !IsValidMemoryAddress(curr_dst)) {
+                    LOG_ERROR(Core_ARM11, "Memory copy: Invalid memory range - src=0x%08X, dst=0x%08X at offset %u", 
+                              curr_src, curr_dst, i);
+                    return 0;
                 }
-                
-                // Read from source
-                u32 value = cpu->memory.Read32(src_addr);
-                
-                // Write to destination
-                cpu->memory.Write32(dst_addr, value);
-                
-                // Update addresses if incrementing
-                if (data.memory_copy.increment) {
-                    src_addr += 4;
-                    dst_addr += 4;
+            }
+            
+            // Now perform the actual copy
+            try {
+                for (u32 i = 0; i < count; i++) {
+                    // Read from source
+                    u32 value = cpu->memory.Read32(src_addr);
+                    
+                    // Write to destination
+                    cpu->memory.Write32(dst_addr, value);
+                    
+                    // Update addresses if incrementing
+                    if (data.memory_copy.increment) {
+                        src_addr += 4;
+                        dst_addr += 4;
+                    }
+                    
+                    executed_instructions++;
                 }
-                
-                executed_instructions++;
+            } catch (...) {
+                LOG_ERROR(Core_ARM11, "Memory copy: Exception during memory operation");
+                return executed_instructions;
             }
             
             // Update registers
@@ -133,26 +184,42 @@ unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
             u32 dst_addr = cpu->Reg[data.memory_fill.dst_reg];
             u32 count = cpu->Reg[data.memory_fill.count_reg];
             
-            // Limit the count to a reasonable value to prevent infinite loops
-            count = std::min(count, 1024u);
+            // Validate initial memory address
+            if (!IsValidMemoryAddress(dst_addr)) {
+                LOG_ERROR(Core_ARM11, "Memory fill: Invalid initial memory address - dst=0x%08X", dst_addr);
+                return 0;
+            }
             
+            // Limit the count to a reasonable value to prevent infinite loops
+            count = std::min(count, 256u);  // Reduced from 1024 to 256 for safety
+            
+            // Validate the entire memory range before starting
             for (u32 i = 0; i < count; i++) {
-                // Validate memory address before writing
-                if (!IsValidMemoryAddress(dst_addr)) {
-                    LOG_ERROR(Core_ARM11, "Memory fill: Invalid memory address - dst=0x%08X", dst_addr);
-                    fprintf(stderr, "ERROR: Memory fill: Invalid memory address - dst=0x%08X\n", dst_addr);
-                    break;
+                u32 curr_dst = dst_addr + (data.memory_fill.increment ? i * 4 : 0);
+                
+                if (!IsValidMemoryAddress(curr_dst)) {
+                    LOG_ERROR(Core_ARM11, "Memory fill: Invalid memory range - dst=0x%08X at offset %u", 
+                              curr_dst, i);
+                    return 0;
                 }
-                
-                // Write value to destination
-                cpu->memory.Write32(dst_addr, value);
-                
-                // Update address if incrementing
-                if (data.memory_fill.increment) {
-                    dst_addr += 4;
+            }
+            
+            // Now perform the actual fill
+            try {
+                for (u32 i = 0; i < count; i++) {
+                    // Write value to destination
+                    cpu->memory.Write32(dst_addr, value);
+                    
+                    // Update address if incrementing
+                    if (data.memory_fill.increment) {
+                        dst_addr += 4;
+                    }
+                    
+                    executed_instructions++;
                 }
-                
-                executed_instructions++;
+            } catch (...) {
+                LOG_ERROR(Core_ARM11, "Memory fill: Exception during memory operation");
+                return executed_instructions;
             }
             
             // Update registers
@@ -215,6 +282,29 @@ unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
               executed_instructions, cpu->Reg[15]);
     
     return executed_instructions;
+    } catch (const std::exception& e) {
+        LOG_ERROR(Core_ARM11, "Exception during specialized block execution at 0x%08X: %s", start_address, e.what());
+        profiler.EndTiming("SpecializedBlockExecution");
+        
+        // Set PC to a safe value to avoid getting stuck
+        cpu->Reg[15] = end_address;
+        
+        // Mark this block as problematic to avoid using it again
+        type = BlockType::UNKNOWN;
+        
+        return 0;
+    } catch (...) {
+        LOG_ERROR(Core_ARM11, "Unknown exception during specialized block execution at 0x%08X", start_address);
+        profiler.EndTiming("SpecializedBlockExecution");
+        
+        // Set PC to a safe value to avoid getting stuck
+        cpu->Reg[15] = end_address;
+        
+        // Mark this block as problematic to avoid using it again
+        type = BlockType::UNKNOWN;
+        
+        return 0;
+    }
 }
 
 // Find or create a specialized block for the given address
@@ -238,6 +328,12 @@ ARMSpecializedCache::SpecializedBlock* ARMSpecializedCache::FindOrCreateBlock(AR
     // Analyze the instructions to determine the block type
     block.type = AnalyzeInstructions(cpu, address, block);
     
+    // If the block type is UNKNOWN, don't add it to the cache
+    if (block.type == BlockType::UNKNOWN) {
+        LOG_WARNING(Core_ARM11, "Not creating specialized block for UNKNOWN block type at 0x%08X", address);
+        return nullptr;
+    }
+    
     // Create specialized handlers based on the block type
     switch (block.type) {
         case BlockType::MEMORY_COPY:
@@ -249,7 +345,13 @@ ARMSpecializedCache::SpecializedBlock* ARMSpecializedCache::FindOrCreateBlock(AR
         case BlockType::ARITHMETIC:
             CreateArithmeticHandler(cpu, block);
             break;
-        // Add more specialized handlers as needed
+        case BlockType::BRANCH_HEAVY:
+        case BlockType::SEQUENTIAL:
+            // These types don't need special handlers
+            break;
+        default:
+            LOG_WARNING(Core_ARM11, "Unhandled block type %d at 0x%08X", static_cast<int>(block.type), address);
+            return nullptr;
     }
     
     // Ensure end_address is properly set to avoid infinite loops
@@ -260,9 +362,20 @@ ARMSpecializedCache::SpecializedBlock* ARMSpecializedCache::FindOrCreateBlock(AR
                   block.end_address, block.start_address);
     }
     
+    // Validate the block before adding it to the cache
+    if (block.instruction_count == 0) {
+        LOG_WARNING(Core_ARM11, "Not adding block with zero instructions at 0x%08X", address);
+        return nullptr;
+    }
+    
     // Add the block to the cache
-    auto [iter, inserted] = blocks.emplace(address, std::move(block));
-    return &iter->second;
+    try {
+        auto [iter, inserted] = blocks.emplace(address, std::move(block));
+        return &iter->second;
+    } catch (...) {
+        LOG_ERROR(Core_ARM11, "Exception adding block to cache at 0x%08X", address);
+        return nullptr;
+    }
 }
 
 // Execute a specialized block
@@ -275,6 +388,28 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
     // Check if address is valid
     if (!IsValidMemoryAddress(address)) {
         LOG_ERROR(Core_ARM11, "Invalid memory address in ExecuteBlock: 0x%08X", address);
+        return 0;
+    }
+    
+    // Check if the address is aligned
+    if ((address & 0x3) != 0) {
+        LOG_ERROR(Core_ARM11, "Unaligned memory address in ExecuteBlock: 0x%08X", address);
+        return 0;
+    }
+    
+    // Perform additional validation - check if we can read the instruction at this address
+    try {
+        // Try to read the instruction at the address
+        u32 instruction = cpu->memory.Read32(address);
+        
+        // If the instruction is all zeros or all ones, it's likely invalid
+        if (instruction == 0 || instruction == 0xFFFFFFFF) {
+            LOG_WARNING(Core_ARM11, "Suspicious instruction value at 0x%08X: 0x%08X", address, instruction);
+            return 0;
+        }
+    } catch (...) {
+        // If reading fails for any reason, don't use the specialized cache
+        LOG_ERROR(Core_ARM11, "Failed to read instruction at 0x%08X", address);
         return 0;
     }
     
@@ -292,12 +427,24 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
     // Find or create a specialized block
     SpecializedBlock* block = FindOrCreateBlock(cpu, address);
     
+    // If we couldn't create a block, return 0
+    if (block == nullptr) {
+        LOG_WARNING(Core_ARM11, "Failed to create specialized block for address 0x%08X", address);
+        return 0;
+    }
+    
     // Log block details
 //    LOG_TRACE(Core_ARM11, "Block type=%d, instruction_count=%d, start=0x%08X, end=0x%08X",
 //              static_cast<int>(block->type), block->instruction_count, block->start_address, block->end_address);
     
     // Execute the block
-    unsigned result = block->Execute(cpu);
+    unsigned result = 0;
+    try {
+        result = block->Execute(cpu);
+    } catch (...) {
+        LOG_ERROR(Core_ARM11, "Exception during block execution at 0x%08X", address);
+        return 0;
+    }
     
     // Check if PC was updated
     if (cpu->Reg[15] == original_pc) {
@@ -351,23 +498,74 @@ ARMSpecializedCache::BlockType ARMSpecializedCache::AnalyzeInstructions(ARMul_St
     
     // Analyze up to MAX_SPECIALIZED_BLOCK_SIZE instructions
     u32 address = start_address;
+    
+    // First, validate the entire memory range we'll be analyzing
+    // This prevents us from trying to read from invalid memory addresses
+    const int max_instructions_to_check = MAX_SPECIALIZED_BLOCK_SIZE;
+    int valid_instruction_count = 0;
+    
+    for (int i = 0; i < max_instructions_to_check; i++) {
+        u32 check_addr = (start_address + (i * 4)) & 0xFFFFFFFC;
+        if (!IsValidMemoryAddress(check_addr)) {
+            // If we can't read this far ahead, limit our analysis to what we've validated
+            LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Memory range limit at 0x%08X (offset %d)", check_addr, i);
+            break;
+        }
+        valid_instruction_count++;
+    }
+    
+    // If we don't have enough valid instructions, don't create a specialized block
+    if (valid_instruction_count < 2) { // Need at least 2 instructions to be worth specializing
+        LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Not enough valid instructions at 0x%08X (count=%d)", start_address, valid_instruction_count);
+        return BlockType::UNKNOWN;
+    }
+    
+    // Now analyze the instructions
     for (int i = 0; i < MAX_SPECIALIZED_BLOCK_SIZE; i++) {
         // Validate memory address before reading
         u32 aligned_addr = address & 0xFFFFFFFC;
         if (!IsValidMemoryAddress(aligned_addr)) {
+            // We should never reach here due to the pre-validation above
             LOG_ERROR(Core_ARM11, "AnalyzeInstructions: Invalid memory address: 0x%08X", aligned_addr);
-            fprintf(stderr, "ERROR: AnalyzeInstructions: Invalid memory address: 0x%08X\n", aligned_addr);
             break;
         }
         
-        // Read the instruction
-        u32 instr = cpu->memory.Read32(aligned_addr);
+        // Read the instruction safely
+        u32 instr;
+        try {
+            instr = cpu->memory.Read32(aligned_addr);
+            
+            // Check for suspicious instruction values that might indicate invalid memory
+            if (instr == 0 || instr == 0xFFFFFFFF) {
+                LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Suspicious instruction value 0x%08X at 0x%08X", instr, aligned_addr);
+                if (i == 0) { // If this is the first instruction, don't create a specialized block
+                    return BlockType::UNKNOWN;
+                }
+                break;
+            }
+        } catch (...) {
+            LOG_ERROR(Core_ARM11, "AnalyzeInstructions: Exception reading instruction at 0x%08X", aligned_addr);
+            break;
+        }
         
         // Decode the instruction
         int idx = 0;
         ARMDecodeStatus status = DecodeARMInstruction(instr, &idx);
         if (status != ARMDecodeStatus::SUCCESS || idx < 0 || idx >= static_cast<int>(arm_instruction_trans_len)) {
             // Invalid instruction, stop analysis
+            LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Invalid instruction 0x%08X at 0x%08X", instr, aligned_addr);
+            if (i == 0) { // If this is the first instruction, don't create a specialized block
+                return BlockType::UNKNOWN;
+            }
+            break;
+        }
+        
+        // Verify that the instruction translator exists
+        if (arm_instruction_trans[idx] == nullptr) {
+            LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Null instruction translator for idx=%d at 0x%08X", idx, aligned_addr);
+            if (i == 0) { // If this is the first instruction, don't create a specialized block
+                return BlockType::UNKNOWN;
+            }
             break;
         }
         
@@ -389,14 +587,28 @@ ARMSpecializedCache::BlockType ARMSpecializedCache::AnalyzeInstructions(ARMul_St
         }
         
         // Check for branch instructions
-        arm_inst* inst_base = arm_instruction_trans[idx](instr, idx);
-        if (inst_base->br != TransExtData::NON_BRANCH) {
-            branch_count++;
-            
-            // Stop analysis at unconditional branches
-            if (inst_base->cond == ConditionCode::AL) {
+        arm_inst* inst_base = nullptr;
+        try {
+            inst_base = arm_instruction_trans[idx](instr, idx);
+            if (inst_base == nullptr) {
+                LOG_WARNING(Core_ARM11, "AnalyzeInstructions: Failed to translate instruction 0x%08X at 0x%08X", instr, aligned_addr);
                 break;
             }
+            
+            if (inst_base->br != TransExtData::NON_BRANCH) {
+                branch_count++;
+                
+                // Stop analysis at unconditional branches
+                if (inst_base->cond == ConditionCode::AL) {
+                    break;
+                }
+            }
+        } catch (...) {
+            LOG_ERROR(Core_ARM11, "AnalyzeInstructions: Exception during instruction translation at 0x%08X", aligned_addr);
+            if (i == 0) { // If this is the first instruction, don't create a specialized block
+                return BlockType::UNKNOWN;
+            }
+            break;
         }
         
         // Move to the next instruction
@@ -408,10 +620,12 @@ ARMSpecializedCache::BlockType ARMSpecializedCache::AnalyzeInstructions(ARMul_St
     
     // Ensure we have at least one instruction and the end address is greater than the start address
     if (block.instruction_count == 0 || block.end_address <= block.start_address) {
-        LOG_TRACE(Core_ARM11, "Block has no instructions or invalid end address, setting defaults");
+        LOG_WARNING(Core_ARM11, "Block has no instructions or invalid end address at 0x%08X", block.start_address);
         
-        // Ensure we have at least one instruction
-        block.instruction_count = std::max(1, block.instruction_count);
+        // If we have no instructions, this is not a valid block for specialization
+        if (block.instruction_count == 0) {
+            return BlockType::UNKNOWN;
+        }
         
         // Ensure end address is at least start_address + 4
         block.end_address = block.start_address + 4;

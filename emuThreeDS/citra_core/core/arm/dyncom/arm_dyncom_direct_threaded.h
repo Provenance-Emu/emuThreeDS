@@ -4,7 +4,7 @@
 #include "core/arm/skyeye_common/armstate.h"
 
 #ifndef USE_NEON
-#define USE_NEON 0
+#define USE_NEON 1
 #endif
 
 // Forward declarations
