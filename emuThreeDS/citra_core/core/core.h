@@ -116,6 +116,7 @@ private:
     static constexpr s32 adjustment_step_ = 5;
     static constexpr std::chrono::milliseconds adjustment_interval_{500}; // Adjust every 500ms
     static constexpr double target_fps_min_ = 50.0; // Target minimum FPS
+    static constexpr double target_fps_max_ = 65.0; // Target maximum FPS
 };
 
 class System {

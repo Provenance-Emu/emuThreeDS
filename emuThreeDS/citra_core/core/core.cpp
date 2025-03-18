@@ -148,7 +148,7 @@ void AutoCpuClockAdjuster::Update() {
                  emulation_speed, frametime * 1000.0);
     }
 
-    // Main decision logic
+    // Main decision logic - aim for FPS between target_fps_min_ and target_fps_max_
     if (current_fps < target_fps_min_ || critical_performance) {
         // Performance is poor, DECREASE CPU clock to improve emulation performance
         // This is counter-intuitive but in emulation can help achieve better FPS
@@ -158,20 +158,29 @@ void AutoCpuClockAdjuster::Update() {
             LOG_DEBUG(Core, "Auto CPU: Poor performance (FPS={:.1f}, Speed={:.2f}x), decreasing to {}%",
                      current_fps, emulation_speed, current_percentage_);
         }
+    } else if (current_fps > target_fps_max_) {
+        // FPS is too high, INCREASE CPU clock to slow down emulation
+        // This helps maintain a consistent experience and avoid timing issues
+        if (current_percentage_ < max_percentage_) {
+            // Only increase if we're not already at maximum
+            current_percentage_ = std::min(max_percentage_, current_percentage_ + current_step);
+            LOG_DEBUG(Core, "Auto CPU: FPS too high (FPS={:.1f} > {:.1f}), increasing to {}%",
+                     current_fps, target_fps_max_, current_percentage_);
+        }
     } else if (current_percentage_ < default_percentage) {
-        // Performance is good but we're underclocked - gradually move back toward default for better latency
+        // Performance is in target range but we're underclocked - gradually move back toward default for better latency
         current_percentage_ = std::min(default_percentage, current_percentage_ + adjustment_step_);
         LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
                  current_fps, emulation_speed, default_percentage);
     } else if (current_percentage_ > default_percentage) {
-        // We're overclocked, move back to default
+        // Performance is in target range but we're overclocked - gradually move back toward default
         current_percentage_ = std::max(default_percentage, current_percentage_ - adjustment_step_);
         LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
                  current_fps, emulation_speed, default_percentage);
     } else {
-        // We're at the default percentage and performance is acceptable
-        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), maintaining default {}%",
-                 current_fps, emulation_speed, default_percentage);
+        // We're at the default percentage and performance is in target range
+        LOG_DEBUG(Core, "Auto CPU: Optimal performance (FPS={:.1f}, target={:.1f}-{:.1f}), maintaining {}%",
+                 current_fps, target_fps_min_, target_fps_max_, default_percentage);
     }
 
     // Update the CPU clock percentage
