@@ -18,6 +18,10 @@
 #include "core/core_timing.h"
 #include "core/gdbstub/gdbstub.h"
 
+#ifndef USE_NEON
+#define USE_NEON 0
+#endif
+
 // Direct-threaded interpreter for ARM
 // This implementation uses a direct-threaded approach to improve performance
 // by reducing branch mispredictions in the main interpreter loop

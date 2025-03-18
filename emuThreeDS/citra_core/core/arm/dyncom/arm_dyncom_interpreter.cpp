@@ -8,6 +8,7 @@
 #include <cstdio>
 #include <cstring> // For std::memcpy
 #include <array>
+#include <unordered_map>
 #include "common/common_types.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
@@ -25,6 +26,10 @@
 #include "core/gdbstub/gdbstub.h"
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
+
+#ifndef USE_NEON
+#define USE_NEON 0
+#endif
 
 // Include ARM NEON headers for ARM64 optimizations
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
@@ -1172,9 +1177,18 @@ static int InterpreterTranslateInstructionBatch(const ARMul_State* cpu, const u3
             inst_bases[valid_count] = arm_instruction_trans[indices[i]](instrs[i], indices[i]);
             valid_count++;
         } else {
-            // Invalid index, log error
-            LOG_ERROR(Core_ARM11, "Invalid instruction index: %d for instruction: 0x%08X", 
-                      indices[i], instrs[i]);
+#if 0
+            // TEMPORARY: Log the actual instruction value to identify the issue
+            LOG_ERROR(Core_ARM11, "Unknown instruction: 0x%08X (index: %d)", instrs[i], indices[i]);
+            // We'll only log each unique instruction once to avoid excessive spam
+            static std::unordered_map<u32, bool> logged_instructions;
+            if (!logged_instructions[instrs[i]]) {
+                // Print more details about the instruction bits to help with analysis
+                LOG_ERROR(Core_ARM11, "Instruction analysis - bits[27:24]: 0x%X, bits[23:20]: 0x%X, bits[7:4]: 0x%X",
+                         (instrs[i] >> 24) & 0xF, (instrs[i] >> 20) & 0xF, (instrs[i] >> 4) & 0xF);
+                logged_instructions[instrs[i]] = true;
+            }
+#endif
         }
     }
     

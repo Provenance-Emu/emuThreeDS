@@ -28,8 +28,8 @@
 
 #include "common/common_types.h"
 
-#ifndef USE_NEON
-#define USE_NEON 1
+#ifndef USE_NEON_THUMB
+#define USE_NEON_THUMB 0
 #endif
 
 enum class ThumbDecodeStatus {
@@ -42,7 +42,7 @@ enum class ThumbDecodeStatus {
 // Translates a Thumb mode instruction into its ARM equivalent.
 ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u32* inst_size);
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
 #include <arm_neon.h>
 // Optimized version using ARM NEON intrinsics
 inline u32 GetThumbInstruction(u32 instr, u32 address) {

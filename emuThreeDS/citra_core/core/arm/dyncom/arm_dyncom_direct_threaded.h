@@ -3,10 +3,6 @@
 #include "common/common_types.h"
 #include "core/arm/skyeye_common/armstate.h"
 
-#ifndef USE_NEON
-#define USE_NEON 1
-#endif
-
 // Forward declarations
 class ARMSpecializedCache;
 

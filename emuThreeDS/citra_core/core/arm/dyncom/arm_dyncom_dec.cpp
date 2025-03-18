@@ -8,6 +8,10 @@
 #include <cstring>
 #include "common/logging/log.h"
 
+#ifndef USE_NEON
+#define USE_NEON 0
+#endif
+
 #ifdef __ARM_NEON && USE_NEON
 #include <arm_neon.h>
 #endif

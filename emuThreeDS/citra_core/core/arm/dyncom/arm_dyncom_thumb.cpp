@@ -11,7 +11,7 @@
 #include "core/arm/skyeye_common/armsupp.h"
 
 // Include ARM NEON headers for ARM64 optimizations
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
 #include <arm_neon.h>
 #endif
 
@@ -19,7 +19,7 @@
 // with the following Thumb instruction held in the high 16-bits.  Passing in two Thumb instructions
 // allows easier simulation of the special dual BL instruction.
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
 // Optimized helper function for extracting bit fields using NEON
 inline u32 ExtractBits_NEON(u32 value, int start, int end) {
     // Create a mask with 1s in the bit positions we want to extract
@@ -49,7 +49,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
     case 0:                                         // LSL
     case 1:                                         // LSR
     case 2:                                         // ASR
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
         // Optimized version using ARM NEON intrinsics
         {
             // Extract the different fields using NEON
@@ -87,7 +87,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
 
     case 3: // ADD/SUB
     {
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
         // Optimized version using ARM NEON intrinsics
         {
             static const u32 subset[4] = {
@@ -146,7 +146,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
     case 6: // ADD
     case 7: // SUB
     {
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
         // Optimized version using ARM NEON intrinsics
         {
             static const u32 subset[4] = {
@@ -230,7 +230,7 @@ ThumbDecodeStatus TranslateThumbInstruction(u32 addr, u32 instr, u32* ainstr, u3
                 {0xE1F00000, t_norm}   // MVNS Rd,Rs
             };
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON_THUMB
             // Optimized version using ARM NEON intrinsics
             {
                 // Extract the opcode index using NEON

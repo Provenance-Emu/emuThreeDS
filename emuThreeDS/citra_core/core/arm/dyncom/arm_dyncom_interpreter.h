@@ -4,10 +4,6 @@
 
 #pragma once
 
-#ifndef USE_NEON
-#define USE_NEON 1
-#endif
-
 struct ARMul_State;
 
 unsigned InterpreterMainLoop(ARMul_State* state);

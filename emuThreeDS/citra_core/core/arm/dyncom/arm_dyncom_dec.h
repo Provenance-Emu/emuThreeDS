@@ -6,10 +6,6 @@
 
 #include "common/common_types.h"
 
-#ifndef USE_NEON
-#define USE_NEON 1
-#endif
-
 enum class ARMDecodeStatus { SUCCESS, FAILURE };
 
 /**
