@@ -6,11 +6,21 @@
 #include <cstring>
 #include <memory>
 #include "core/arm/dyncom/arm_dyncom.h"
+#include "core/arm/dyncom/arm_dyncom_direct_threaded.h"
 #include "core/arm/dyncom/arm_dyncom_interpreter.h"
+#include "core/arm/dyncom/arm_dyncom_profiler.h"
 #include "core/arm/dyncom/arm_dyncom_trans.h"
+#include "core/arm/dyncom/arm_dyncom_specialized_cache.h"
 #include "core/arm/skyeye_common/armstate.h"
 #include "core/core.h"
 #include "core/core_timing.h"
+
+// Configuration option to enable/disable the direct-threaded interpreter
+// Enabled by default for better performance
+static bool use_direct_threaded_interpreter = false;
+
+// External declaration of the global specialized cache flag
+extern bool g_use_specialized_cache;
 
 class DynComThreadContext final : public ARM_Interface::ThreadContext {
 public:
@@ -155,11 +165,57 @@ void ARM_DynCom::SetCP15Register(CP15Register reg, u32 value) {
 
 void ARM_DynCom::ExecuteInstructions(u64 num_instructions) {
     state->NumInstrsToExecute = num_instructions;
-    unsigned ticks_executed = InterpreterMainLoop(state.get());
+
+    // Add debug logging
+    LOG_TRACE(Core_ARM11, "ARM_DynCom::ExecuteInstructions: num_instructions=%llu, PC=0x%08X, CPSR=0x%08X, TFlag=%d",
+              num_instructions, state->Reg[15], state->Cpsr, state->TFlag);
+
+    unsigned ticks_executed = 0;
+
+    if (use_direct_threaded_interpreter) {
+        // Use the direct-threaded interpreter for better performance
+        LOG_TRACE(Core_ARM11, "Using direct-threaded interpreter");
+        ticks_executed = DirectThreadedMainLoop(state.get());
+    } else {
+        // Fall back to the original interpreter
+        LOG_TRACE(Core_ARM11, "Using original interpreter");
+        ticks_executed = InterpreterMainLoop(state.get());
+    }
+
+    LOG_TRACE(Core_ARM11, "Executed %u ticks", ticks_executed);
+
     if (system != nullptr) {
         timer->AddTicks(ticks_executed);
     }
     state->ServeBreak();
+}
+
+// Function to toggle the direct-threaded interpreter
+void ARM_DynCom::SetUseDirectThreadedInterpreter(bool enabled) {
+    use_direct_threaded_interpreter = enabled;
+}
+
+// Reset the profiler
+void ARM_DynCom::ResetProfiler() {
+    ARMDyncomProfiler::GetInstance().Reset();
+}
+
+// Print profiler statistics
+void ARM_DynCom::PrintProfilerStats() {
+    ARMDyncomProfiler::GetInstance().PrintStats();
+}
+
+// Flag to enable/disable specialized cache
+bool g_use_specialized_cache = true;
+
+// Clear the specialized cache
+void ARM_DynCom::ClearSpecializedCache() {
+    GetGlobalSpecializedCache().Clear();
+}
+
+// Enable or disable the specialized cache
+void ARM_DynCom::EnableSpecializedCache(bool enabled) {
+    g_use_specialized_cache = enabled;
 }
 
 std::unique_ptr<ARM_Interface::ThreadContext> ARM_DynCom::NewContext() const {

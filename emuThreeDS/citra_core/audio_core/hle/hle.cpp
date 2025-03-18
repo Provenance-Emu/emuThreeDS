@@ -28,7 +28,9 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 
+#ifndef USE_NEON
 #define USE_NEON 1
+#endif
 
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include "audio_core/hle/mixer_neon.h"

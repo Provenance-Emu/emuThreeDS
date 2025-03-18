@@ -44,6 +44,17 @@ public:
     void SetCPSR(u32 cpsr) override;
     u32 GetCP15Register(CP15Register reg) const override;
     void SetCP15Register(CP15Register reg, u32 value) override;
+    
+    // Enable or disable the direct-threaded interpreter
+    void SetUseDirectThreadedInterpreter(bool enabled);
+    
+    // Profiling methods
+    void ResetProfiler();
+    void PrintProfilerStats();
+    
+    // Specialized cache methods
+    void ClearSpecializedCache();
+    void EnableSpecializedCache(bool enabled);
 
     std::unique_ptr<ThreadContext> NewContext() const override;
     void SaveContext(const std::unique_ptr<ThreadContext>& arg) override;

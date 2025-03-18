@@ -26,7 +26,7 @@
 #include "core/memory.h"
 
 // Include ARM NEON headers for ARM64 optimizations
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include <arm_neon.h>
 #endif
 
@@ -36,7 +36,7 @@
 #define glue(x, y) x##y
 #define DPO(s) glue(DataProcessingOperands, s)
 // Optimized rotation operations for ARM64
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 // Optimized 32-bit right rotation using NEON intrinsics
 inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
     // For small rotations, use the standard C implementation as it's more efficient
@@ -80,7 +80,7 @@ inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
 #define ROTATE_LEFT(n, i, l) ((n >> (l - i)) | (n << i))
 
 // Use optimized NEON implementations when available
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #define ROTATE_RIGHT_32(n, i) ROTATE_RIGHT_32_NEON(n, i)
 #define ROTATE_LEFT_32(n, i) ROTATE_LEFT_32_NEON(n, i)
 #else
@@ -154,7 +154,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         shifter_operand = rm;
@@ -212,7 +212,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         shifter_operand = 0;
@@ -270,7 +270,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         if (BIT(rm, 31) == 0)
@@ -334,7 +334,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         // special case represent RRX
@@ -411,7 +411,7 @@ static unsigned int DPO(RotateRightByRegister)(ARMul_State* cpu, unsigned int sh
 #define OFFSET_12 BITS(inst, 0, 11)
 
 static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Extract Rn field using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
@@ -451,7 +451,7 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
 }
 
 static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Extract Rn and Rm fields using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
@@ -921,7 +921,7 @@ shtop_fp_t GetShifterOp(unsigned int inst) {
 }
 
 get_addr_fp_t GetAddressingOp(unsigned int inst) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Create a vector with the instruction value
     uint32x2_t inst_vec = vdup_n_u32(inst);
@@ -1347,6 +1347,12 @@ MICROPROFILE_DEFINE(DynCom_Execute, "DynCom", "Execute", MP_RGB(255, 0, 0));
 
 unsigned InterpreterMainLoop(ARMul_State* cpu) {
     MICROPROFILE_SCOPE(DynCom_Execute);
+    
+    // Path prediction variables
+    static std::vector<std::pair<u32, std::size_t>>* current_path = nullptr;
+    static int current_path_index = 0;
+    static bool recording_path = false;
+    static std::vector<std::pair<u32, std::size_t>> current_recording_path;
 
     /// Nearest upcoming GDB code execution breakpoint, relative to the last dispatch's address.
     GDBStub::BreakpointAddress breakpoint_data;
@@ -1403,6 +1409,37 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
+    /* Path prediction: check if we can follow a cached path */                                     \
+    if (current_path && current_path_index < current_path->size() - 1) {                           \
+        /* Check if the next instruction in our path matches the current PC */                      \
+        current_path_index++;                                                                      \
+        if (cpu->Reg[15] == (*current_path)[current_path_index].first) {                           \
+            /* We can follow the path, use the cached instruction pointer */                        \
+            ptr = (*current_path)[current_path_index].second;                                      \
+            inst_base = (arm_inst*)&trans_cache_buf[ptr];                                         \
+            goto* InstLabel[inst_base->idx];                                                       \
+        } else {                                                                                   \
+            /* Path prediction failed, reset path following */                                      \
+            current_path = nullptr;                                                                \
+            current_path_index = 0;                                                                \
+        }                                                                                         \
+    }                                                                                             \
+    /* Record path if we're in recording mode */                                                   \
+    if (recording_path) {                                                                         \
+        /* Add the current instruction to the path if it's not a branch */                         \
+        if (inst_base->br == TransExtData::NON_BRANCH) {                                          \
+            current_recording_path.push_back({cpu->Reg[15], ptr});                                \
+            /* If we have enough instructions in the path, save it */                              \
+            if (current_recording_path.size() >= 8) {                                             \
+                u32 start_addr = current_recording_path[0].first;                                 \
+                cpu->path_cache[start_addr] = current_recording_path;                             \
+                recording_path = false;                                                           \
+            }                                                                                     \
+        } else {                                                                                  \
+            /* Stop recording if we hit a branch */                                                \
+            recording_path = false;                                                               \
+        }                                                                                         \
+    }                                                                                             \
     goto* InstLabel[inst_base->idx]
 #else
 #define GOTO_NEXT_INST                                                                             \
@@ -1410,6 +1447,37 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
+    /* Path prediction: check if we can follow a cached path */                                     \
+    if (current_path && current_path_index < current_path->size() - 1) {                           \
+        /* Check if the next instruction in our path matches the current PC */                      \
+        current_path_index++;                                                                      \
+        if (cpu->Reg[15] == (*current_path)[current_path_index].first) {                           \
+            /* We can follow the path, use the cached instruction pointer */                        \
+            ptr = (*current_path)[current_path_index].second;                                      \
+            inst_base = (arm_inst*)&trans_cache_buf[ptr];                                         \
+            /* Continue with the switch statement */                                                \
+        } else {                                                                                   \
+            /* Path prediction failed, reset path following */                                      \
+            current_path = nullptr;                                                                \
+            current_path_index = 0;                                                                \
+        }                                                                                         \
+    }                                                                                             \
+    /* Record path if we're in recording mode */                                                   \
+    if (recording_path) {                                                                         \
+        /* Add the current instruction to the path if it's not a branch */                         \
+        if (inst_base->br == TransExtData::NON_BRANCH) {                                          \
+            current_recording_path.push_back({cpu->Reg[15], ptr});                                \
+            /* If we have enough instructions in the path, save it */                              \
+            if (current_recording_path.size() >= 8) {                                             \
+                u32 start_addr = current_recording_path[0].first;                                 \
+                cpu->path_cache[start_addr] = current_recording_path;                             \
+                recording_path = false;                                                           \
+            }                                                                                     \
+        } else {                                                                                  \
+            /* Stop recording if we hit a branch */                                                \
+            recording_path = false;                                                               \
+        }                                                                                         \
+    }                                                                                             \
     switch (inst_base->idx) {                                                                      \
     case 0:                                                                                        \
         goto VMLA_INST;                                                                            \
@@ -2069,16 +2137,44 @@ DISPATCH : {
     else
         cpu->Reg[15] &= 0xfffffffc;
 
-    // Find the cached instruction cream, otherwise translate it...
-    auto itr = cpu->instruction_cache.find(cpu->Reg[15]);
-    if (itr != cpu->instruction_cache.end()) {
-        ptr = itr->second;
-    } else if (cpu->NumInstrsToExecute != 1) {
-        if (InterpreterTranslateBlock(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
-            goto END;
+    // First check if we have a cached path from this address
+    auto path_itr = cpu->path_cache.find(cpu->Reg[15]);
+    if (path_itr != cpu->path_cache.end() && !path_itr->second.empty()) {
+        // We have a cached path, increment the hit counter
+        cpu->path_hit_counter[cpu->Reg[15]]++;
+        
+        // Use the first instruction in the path
+        ptr = path_itr->second[0].second;
+        
+        // Store the path for potential execution in the next iterations
+        // This is used by the GOTO_NEXT_INST macro to check if we can follow the path
+        current_path = &path_itr->second;
+        current_path_index = 0;
     } else {
-        if (InterpreterTranslateSingle(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
-            goto END;
+        // Find the cached instruction cream, otherwise translate it...
+        auto itr = cpu->instruction_cache.find(cpu->Reg[15]);
+        if (itr != cpu->instruction_cache.end()) {
+            ptr = itr->second;
+            
+            // Start recording a new path if this address is frequently hit
+            auto hit_itr = cpu->path_hit_counter.find(cpu->Reg[15]);
+            if (hit_itr != cpu->path_hit_counter.end() && hit_itr->second > 10) {
+                // This address is frequently hit, start recording a path
+                recording_path = true;
+                current_recording_path.clear();
+                current_recording_path.push_back({cpu->Reg[15], ptr});
+            }
+        } else if (cpu->NumInstrsToExecute != 1) {
+            if (InterpreterTranslateBlock(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+                goto END;
+        } else {
+            if (InterpreterTranslateSingle(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+                goto END;
+        }
+        
+        // Reset path following
+        current_path = nullptr;
+        current_path_index = 0;
     }
 
 #ifndef ANDROID
