@@ -85,40 +85,93 @@ void AutoCpuClockAdjuster::Update() {
     }
     last_adjustment_time_ = now;
 
-    // Get current performance stats
+    // Get performance metrics from multiple sources
+    double current_fps = 0.0;
+    double renderer_fps = 0.0;
+    double system_fps = 0.0;
+    double game_fps = 0.0;
+    double frametime = 0.0;
+    double emulation_speed = 0.0;
+    
+    // Get metrics from PerfStats
     const auto perf_stats = system_.GetLastPerfStats();
-    double current_fps = perf_stats.game_fps;
-
-    // Corrected algorithm logic:
+    system_fps = perf_stats.system_fps;       // LCD VBlanks (screen refresh rate)
+    game_fps = perf_stats.game_fps;           // GSP frame submissions (GPU rendering)
+    frametime = perf_stats.frametime;         // Walltime per system frame in seconds
+    emulation_speed = perf_stats.emulation_speed; // Ratio of walltime / emulated time
+    
+    // Try to get FPS from renderer
+    try {
+        renderer_fps = static_cast<double>(system_.Renderer().GetCurrentFPS());
+    } catch (const std::exception& e) {
+        renderer_fps = 0.0; // Renderer not available
+    }
+    
+    // Choose the most appropriate FPS source
+    // Prioritize renderer FPS if available and valid
+    if (renderer_fps > 0.0) {
+        current_fps = renderer_fps;
+        LOG_DEBUG(Core, "Using Renderer FPS: {:.1f} (Frametime: {:.3f}ms, Speed: {:.2f}x)", 
+                 current_fps, frametime * 1000.0, emulation_speed);
+    } 
+    // Otherwise use game_fps (GPU frame submissions)
+    else if (game_fps > 0.0) {
+        current_fps = game_fps;
+        LOG_DEBUG(Core, "Using Game FPS: {:.1f} (System: {:.1f}, Frametime: {:.3f}ms, Speed: {:.2f}x)", 
+                 game_fps, system_fps, frametime * 1000.0, emulation_speed);
+    }
+    // Last resort: use system_fps (LCD VBlanks)
+    else {
+        current_fps = system_fps;
+        LOG_DEBUG(Core, "Using System FPS: {:.1f} (Frametime: {:.3f}ms, Speed: {:.2f}x)", 
+                 system_fps, frametime * 1000.0, emulation_speed);
+    }
+    
+    // Determine if we're in a critical performance state
+    // Critical = very low emulation speed or high frametime
+    bool critical_performance = (emulation_speed < 0.75) || (frametime > 0.025); // Below 75% speed or above 25ms frametime
+    
+    // Enhanced algorithm logic using multiple metrics:
     // 1. Always aim for auto_mode_max_percentage_ (default 100%) CPU clock to minimize input latency when possible
-    // 2. When FPS is below target, DECREASE CPU clock (counter-intuitive but helps in emulation)
-    // 3. If FPS is good, gradually move back toward auto_mode_max_percentage_
+    // 2. When performance is poor, DECREASE CPU clock (counter-intuitive but helps in emulation)
+    // 3. If performance is good, gradually move back toward auto_mode_max_percentage_
+    // 4. Use frametime and emulation_speed as additional indicators of performance
 
     const s32 default_percentage = auto_mode_max_percentage_; // Default target
+    
+    // Determine adjustment step size based on performance state
+    s32 current_step = adjustment_step_;
+    if (critical_performance) {
+        // Use larger steps when performance is critical
+        current_step = adjustment_step_ * 2;
+        LOG_DEBUG(Core, "Critical performance detected: Speed={:.2f}x, Frametime={:.1f}ms - Using larger step size", 
+                 emulation_speed, frametime * 1000.0);
+    }
 
-    if (current_fps < target_fps_min_) {
-        // FPS is too low, DECREASE CPU clock to improve emulation performance
+    // Main decision logic
+    if (current_fps < target_fps_min_ || critical_performance) {
+        // Performance is poor, DECREASE CPU clock to improve emulation performance
         // This is counter-intuitive but in emulation can help achieve better FPS
         if (current_percentage_ > min_percentage_) {
             // Only decrease if we're not already at minimum
-            current_percentage_ = std::max(min_percentage_, current_percentage_ - adjustment_step_);
-            LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} < {:.1f}, decreasing to {}%",
-                     current_fps, target_fps_min_, current_percentage_);
+            current_percentage_ = std::max(min_percentage_, current_percentage_ - current_step);
+            LOG_DEBUG(Core, "Auto CPU: Poor performance (FPS={:.1f}, Speed={:.2f}x), decreasing to {}%",
+                     current_fps, emulation_speed, current_percentage_);
         }
     } else if (current_percentage_ < default_percentage) {
-        // FPS is good but we're underclocked - gradually move back toward 100% for better latency
+        // Performance is good but we're underclocked - gradually move back toward default for better latency
         current_percentage_ = std::min(default_percentage, current_percentage_ + adjustment_step_);
-        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, adjusting toward default {}%",
-                 current_fps, target_fps_min_, default_percentage);
+        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
+                 current_fps, emulation_speed, default_percentage);
     } else if (current_percentage_ > default_percentage) {
-        // We're overclocked, move back to default 100%
+        // We're overclocked, move back to default
         current_percentage_ = std::max(default_percentage, current_percentage_ - adjustment_step_);
-        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, adjusting toward default {}%",
-                 current_fps, target_fps_min_, default_percentage);
+        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
+                 current_fps, emulation_speed, default_percentage);
     } else {
-        // We're at the default percentage and FPS is acceptable
-        LOG_DEBUG(Core, "Auto CPU: FPS {:.1f} >= {:.1f}, maintaining default {}%",
-                 current_fps, target_fps_min_, default_percentage);
+        // We're at the default percentage and performance is acceptable
+        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), maintaining default {}%",
+                 current_fps, emulation_speed, default_percentage);
     }
 
     // Update the CPU clock percentage
