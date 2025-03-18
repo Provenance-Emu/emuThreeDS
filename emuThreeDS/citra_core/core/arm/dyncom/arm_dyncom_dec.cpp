@@ -9,6 +9,9 @@
 #include <unordered_map>
 #include "common/logging/log.h"
 
+#ifdef __ARM_NEON
+#include <arm_neon.h>
+#endif
 
 namespace {
 struct InstructionSetEncodingItem {
@@ -447,7 +450,7 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 
 // Optimized instruction decoder using a hash-based approach for faster matching
 namespace {
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if defined(__ARM_NEON) || defined(__aarch64__)
     // ARM-optimized bit extraction function to replace the BITS macro
     inline u32 ExtractBits(u32 value, u32 start, u32 end) {
         u32 num_bits = end - start + 1;
@@ -471,7 +474,7 @@ namespace {
     bool lookup_table_initialized = false;
 
     // Extract key bits from instruction to use as a hash key
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if defined(__ARM_NEON) || defined(__aarch64__)
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
         // Optimized for ARM64 - simple shift and mask
@@ -600,12 +603,12 @@ namespace {
             if (extracted_bits != expected_value) {
                 return false;
             }
-            base += 3;
-            n--;
-        }
-
-        return true;
+        base += 3;
+        n--;
     }
+    
+    return true;
+}
 } // namespace
 
 ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
