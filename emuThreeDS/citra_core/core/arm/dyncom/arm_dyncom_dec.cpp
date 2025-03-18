@@ -8,6 +8,8 @@
 #include <cstring>
 #include "common/logging/log.h"
 
+#define USE_NEON 0
+
 #ifdef __ARM_NEON
 #include <arm_neon.h>
 #endif
@@ -449,7 +451,7 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 
 // Optimized instruction decoder using a hash-based approach for faster matching
 namespace {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // ARM-optimized bit extraction function to replace the BITS macro
     inline u32 ExtractBits(u32 value, u32 start, u32 end) {
         u32 num_bits = end - start + 1;
@@ -473,7 +475,7 @@ namespace {
     bool lookup_table_initialized = false;
 
     // Extract key bits from instruction to use as a hash key
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
         // Optimized for ARM64 - simple shift and mask
@@ -613,7 +615,7 @@ namespace {
 // SIMD-based batch decoding function for ARM instructions
 // This function decodes multiple ARM instructions in parallel using SIMD operations
 // Returns the number of successfully decoded instructions
-#ifdef __ARM_NEON
+#ifdef __ARM_NEON && USE_NEON
 int BatchDecodeARMInstructions(const u32* instrs, int* indices, int count) {
     // Initialize lookup table if needed
     if (!lookup_table_initialized) {
@@ -749,7 +751,7 @@ int BatchDecodeARMInstructions(const u32* instrs, int* indices, int count) {
 #endif
 
 // SIMD-optimized batch instruction matching
-#ifdef __ARM_NEON
+#ifdef __ARM_NEON && USE_NEON
 bool BatchCheckInstructionMatch(uint32x4_t instr_vec, const InstructionSetEncodingItem& pattern) {
     int n = pattern.attribute_value;
     if (n == 0) return true;  // Empty pattern always matches

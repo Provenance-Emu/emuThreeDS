@@ -25,8 +25,10 @@
 #include "core/hle/kernel/svc.h"
 #include "core/memory.h"
 
+#define USE_NEON 0
+
 // Include ARM NEON headers for ARM64 optimizations
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include <arm_neon.h>
 #endif
 
@@ -36,7 +38,7 @@
 #define glue(x, y) x##y
 #define DPO(s) glue(DataProcessingOperands, s)
 // Optimized rotation operations for ARM64
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 // Optimized 32-bit right rotation using NEON intrinsics
 inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
     // For small rotations, use the standard C implementation as it's more efficient
@@ -80,7 +82,7 @@ inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
 #define ROTATE_LEFT(n, i, l) ((n >> (l - i)) | (n << i))
 
 // Use optimized NEON implementations when available
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #define ROTATE_RIGHT_32(n, i) ROTATE_RIGHT_32_NEON(n, i)
 #define ROTATE_LEFT_32(n, i) ROTATE_LEFT_32_NEON(n, i)
 #else
@@ -154,7 +156,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         shifter_operand = rm;
@@ -212,7 +214,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         shifter_operand = 0;
@@ -270,7 +272,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         if (BIT(rm, 31) == 0)
@@ -334,7 +336,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
     
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
         // special case represent RRX
@@ -411,7 +413,7 @@ static unsigned int DPO(RotateRightByRegister)(ARMul_State* cpu, unsigned int sh
 #define OFFSET_12 BITS(inst, 0, 11)
 
 static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Extract Rn field using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
@@ -451,7 +453,7 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
 }
 
 static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Extract Rn and Rm fields using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
@@ -921,7 +923,7 @@ shtop_fp_t GetShifterOp(unsigned int inst) {
 }
 
 get_addr_fp_t GetAddressingOp(unsigned int inst) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
     // Optimized version using ARM NEON intrinsics
     // Create a vector with the instruction value
     uint32x2_t inst_vec = vdup_n_u32(inst);
