@@ -101,6 +101,8 @@ public:
      */
     s32 GetCurrentPercentage() const { return current_percentage_; }
 
+    static constexpr s32 auto_mode_max_percentage_ = 100; // Maximum for auto mode
+
 private:
     System& system_;
     bool enabled_ = false;
@@ -111,7 +113,6 @@ private:
     // Adjustment parameters
     static constexpr s32 min_percentage_ = 5;
     static constexpr s32 max_percentage_ = 400; // Maximum allowed by settings
-    static constexpr s32 auto_mode_max_percentage_ = 100; // Maximum for auto mode
     static constexpr s32 adjustment_step_ = 5;
     static constexpr std::chrono::milliseconds adjustment_interval_{500}; // Adjust every 500ms
     static constexpr double target_fps_min_ = 50.0; // Target minimum FPS
