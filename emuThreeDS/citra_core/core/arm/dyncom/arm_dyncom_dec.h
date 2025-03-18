@@ -6,6 +6,11 @@
 
 #include "common/common_types.h"
 
+// Enable parallel instruction decoding using thread pool
+#ifndef USE_PARALLEL_DECODE
+#define USE_PARALLEL_DECODE 0
+#endif
+
 enum class ARMDecodeStatus { SUCCESS, FAILURE };
 
 /**
