@@ -12,6 +12,7 @@
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "core/arm/dyncom/arm_dyncom_dec.h"
+#include "core/arm/dyncom/arm_dyncom_direct_threaded.h" // For IsValidMemoryAddress and GetGlobalSpecializedCache
 #include "core/arm/dyncom/arm_dyncom_interpreter.h"
 #include "core/arm/dyncom/arm_dyncom_run.h"
 #include "core/arm/dyncom/arm_dyncom_thumb.h"
@@ -29,6 +30,9 @@
 #if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include <arm_neon.h>
 #endif
+
+// External declaration of the global specialized cache flag
+extern bool g_use_specialized_cache;
 
 #define RM BITS(sht_oper, 0, 3)
 #define RS BITS(sht_oper, 8, 11)
@@ -1409,37 +1413,6 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
-    /* Path prediction: check if we can follow a cached path */                                     \
-    if (current_path && current_path_index < current_path->size() - 1) {                           \
-        /* Check if the next instruction in our path matches the current PC */                      \
-        current_path_index++;                                                                      \
-        if (cpu->Reg[15] == (*current_path)[current_path_index].first) {                           \
-            /* We can follow the path, use the cached instruction pointer */                        \
-            ptr = (*current_path)[current_path_index].second;                                      \
-            inst_base = (arm_inst*)&trans_cache_buf[ptr];                                         \
-            goto* InstLabel[inst_base->idx];                                                       \
-        } else {                                                                                   \
-            /* Path prediction failed, reset path following */                                      \
-            current_path = nullptr;                                                                \
-            current_path_index = 0;                                                                \
-        }                                                                                         \
-    }                                                                                             \
-    /* Record path if we're in recording mode */                                                   \
-    if (recording_path) {                                                                         \
-        /* Add the current instruction to the path if it's not a branch */                         \
-        if (inst_base->br == TransExtData::NON_BRANCH) {                                          \
-            current_recording_path.push_back({cpu->Reg[15], ptr});                                \
-            /* If we have enough instructions in the path, save it */                              \
-            if (current_recording_path.size() >= 8) {                                             \
-                u32 start_addr = current_recording_path[0].first;                                 \
-                cpu->path_cache[start_addr] = current_recording_path;                             \
-                recording_path = false;                                                           \
-            }                                                                                     \
-        } else {                                                                                  \
-            /* Stop recording if we hit a branch */                                                \
-            recording_path = false;                                                               \
-        }                                                                                         \
-    }                                                                                             \
     goto* InstLabel[inst_base->idx]
 #else
 #define GOTO_NEXT_INST                                                                             \
@@ -1447,37 +1420,37 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
     if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
-    /* Path prediction: check if we can follow a cached path */                                     \
-    if (current_path && current_path_index < current_path->size() - 1) {                           \
-        /* Check if the next instruction in our path matches the current PC */                      \
-        current_path_index++;                                                                      \
-        if (cpu->Reg[15] == (*current_path)[current_path_index].first) {                           \
-            /* We can follow the path, use the cached instruction pointer */                        \
-            ptr = (*current_path)[current_path_index].second;                                      \
-            inst_base = (arm_inst*)&trans_cache_buf[ptr];                                         \
-            /* Continue with the switch statement */                                                \
-        } else {                                                                                   \
-            /* Path prediction failed, reset path following */                                      \
-            current_path = nullptr;                                                                \
-            current_path_index = 0;                                                                \
-        }                                                                                         \
-    }                                                                                             \
-    /* Record path if we're in recording mode */                                                   \
-    if (recording_path) {                                                                         \
-        /* Add the current instruction to the path if it's not a branch */                         \
-        if (inst_base->br == TransExtData::NON_BRANCH) {                                          \
-            current_recording_path.push_back({cpu->Reg[15], ptr});                                \
-            /* If we have enough instructions in the path, save it */                              \
-            if (current_recording_path.size() >= 8) {                                             \
-                u32 start_addr = current_recording_path[0].first;                                 \
-                cpu->path_cache[start_addr] = current_recording_path;                             \
-                recording_path = false;                                                           \
-            }                                                                                     \
-        } else {                                                                                  \
-            /* Stop recording if we hit a branch */                                                \
-            recording_path = false;                                                               \
-        }                                                                                         \
-    }                                                                                             \
+/* Path prediction: check if we can follow a cached path */                                     \
+if (g_use_specialized_cache && current_path && current_path_index < current_path->size() - 1) {                           \
+    /* Check if the next instruction in our path matches the current PC */                      \
+    current_path_index++;                                                                      \
+    if (cpu->Reg[15] == (*current_path)[current_path_index].first) {                           \
+        /* We can follow the path, use the cached instruction pointer */                        \
+        ptr = (*current_path)[current_path_index].second;                                      \
+        inst_base = (arm_inst*)&trans_cache_buf[ptr];                                         \
+        /* Continue with the switch statement */                                                \
+    } else {                                                                                   \
+        /* Path prediction failed, reset path following */                                      \
+        current_path = nullptr;                                                                \
+        current_path_index = 0;                                                                \
+    }                                                                                         \
+}                                                                                             \
+/* Record path if we're in recording mode */                                                   \
+if (g_use_specialized_cache && recording_path) {                                                                         \
+    /* Add the current instruction to the path if it's not a branch */                         \
+    if (inst_base->br == TransExtData::NON_BRANCH) {                                          \
+        current_recording_path.push_back({cpu->Reg[15], ptr});                                \
+        /* If we have enough instructions in the path, save it */                              \
+        if (current_recording_path.size() >= 8) {                                             \
+            u32 start_addr = current_recording_path[0].first;                                 \
+            cpu->path_cache[start_addr] = current_recording_path;                             \
+            recording_path = false;                                                           \
+        }                                                                                     \
+    } else {                                                                                  \
+        /* Stop recording if we hit a branch */                                                \
+        recording_path = false;                                                               \
+    }                                                                                         \
+}                                                                                             \
     switch (inst_base->idx) {                                                                      \
     case 0:                                                                                        \
         goto VMLA_INST;                                                                            \
@@ -2137,6 +2110,7 @@ DISPATCH : {
     else
         cpu->Reg[15] &= 0xfffffffc;
 
+#if USE_SPECIALZIED_CACHE
     // First check if we have a cached path from this address
     auto path_itr = cpu->path_cache.find(cpu->Reg[15]);
     if (path_itr != cpu->path_cache.end() && !path_itr->second.empty()) {
@@ -2176,6 +2150,19 @@ DISPATCH : {
         current_path = nullptr;
         current_path_index = 0;
     }
+#else
+    // Find the cached instruction cream, otherwise translate it...
+    auto itr = cpu->instruction_cache.find(cpu->Reg[15]);
+    if (itr != cpu->instruction_cache.end()) {
+        ptr = itr->second;
+    } else if (cpu->NumInstrsToExecute != 1) {
+        if (InterpreterTranslateBlock(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+            goto END;
+    } else {
+        if (InterpreterTranslateSingle(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+            goto END;
+    }
+#endif
 
 #ifndef ANDROID
     // Find breakpoint if one exists within the block

@@ -8,9 +8,17 @@
 // Memory validation function
 extern bool IsValidMemoryAddress(u32 address);
 
+#if DEBUG
+#define PrintCPUState(cpu) _PrintCPUState(cpu)
+#define DumpMemory(cpu, address, num_words) _DumpMemory(cpu, address, num_words)
+#else
+#define PrintCPUState(cpu)
+#define DumpMemory(cpu, address, num_words)
+#endif
+
 // Helper function to print CPU register state for debugging
-void PrintCPUState(ARMul_State* cpu) {
-    fprintf(stderr, "CPU State: PC=0x%08X, CPSR=0x%08X, TFlag=%d\n", 
+void _PrintCPUState(ARMul_State* cpu) {
+    fprintf(stderr, "CPU State: PC=0x%08X, CPSR=0x%08X, TFlag=%d\n",
             cpu->Reg[15], cpu->Cpsr, cpu->TFlag);
     
     // Print general purpose registers
@@ -32,7 +40,7 @@ void PrintCPUState(ARMul_State* cpu) {
 // which has the complete 3DS memory map validation
 
 // Helper function to dump memory at a given address
-void DumpMemory(ARMul_State* cpu, u32 address, int num_words) {
+void _DumpMemory(ARMul_State* cpu, u32 address, int num_words) {
     fprintf(stderr, "Memory dump at 0x%08X:\n", address);
     
     for (int i = 0; i < num_words; i++) {
@@ -205,8 +213,6 @@ unsigned ARMSpecializedCache::SpecializedBlock::Execute(ARMul_State* cpu) {
     // Add debug logging for the end of execution
     LOG_TRACE(Core_ARM11, "SpecializedBlock::Execute completed, executed=%u, PC after=0x%08X", 
               executed_instructions, cpu->Reg[15]);
-    fprintf(stderr, "SpecializedBlock::Execute completed, executed=%u, PC after=0x%08X\n", 
-            executed_instructions, cpu->Reg[15]);
     
     return executed_instructions;
 }
@@ -252,8 +258,6 @@ ARMSpecializedCache::SpecializedBlock* ARMSpecializedCache::FindOrCreateBlock(AR
         block.end_address = block.start_address + 4;
         LOG_TRACE(Core_ARM11, "Setting default end_address=0x%08X for block at 0x%08X",
                   block.end_address, block.start_address);
-        fprintf(stderr, "Setting default end_address=0x%08X for block at 0x%08X\n", 
-                block.end_address, block.start_address);
     }
     
     // Add the block to the cache
@@ -267,12 +271,10 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
     
     // Add debug logging
     LOG_TRACE(Core_ARM11, "ARMSpecializedCache::ExecuteBlock at address=0x%08X", address);
-    fprintf(stderr, "ARMSpecializedCache::ExecuteBlock at address=0x%08X\n", address);
     
     // Check if address is valid
     if (!IsValidMemoryAddress(address)) {
         LOG_ERROR(Core_ARM11, "Invalid memory address in ExecuteBlock: 0x%08X", address);
-        fprintf(stderr, "ERROR: Invalid memory address in ExecuteBlock: 0x%08X\n", address);
         return 0;
     }
     
@@ -281,8 +283,8 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
 //    PrintCPUState(cpu);
     
     // Dump memory at the current PC
-    fprintf(stderr, "Memory at PC before execution:\n");
-    DumpMemory(cpu, address, 8); // Dump 8 words (32 bytes)
+//    fprintf(stderr, "Memory at PC before execution:\n");
+//    DumpMemory(cpu, address, 8); // Dump 8 words (32 bytes)
     
     // Store the original PC for comparison
     u32 original_pc = cpu->Reg[15];
@@ -291,9 +293,8 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
     SpecializedBlock* block = FindOrCreateBlock(cpu, address);
     
     // Log block details
-    LOG_TRACE(Core_ARM11, "Block type=%d, instruction_count=%d, start=0x%08X, end=0x%08X",
-              static_cast<int>(block->type), block->instruction_count, block->start_address, block->end_address);
-    fprintf(stderr, "Block type=%d, instruction_count=%d\n", static_cast<int>(block->type), block->instruction_count);
+//    LOG_TRACE(Core_ARM11, "Block type=%d, instruction_count=%d, start=0x%08X, end=0x%08X",
+//              static_cast<int>(block->type), block->instruction_count, block->start_address, block->end_address);
     
     // Execute the block
     unsigned result = block->Execute(cpu);
@@ -301,24 +302,22 @@ unsigned ARMSpecializedCache::ExecuteBlock(ARMul_State* cpu, u32 address) {
     // Check if PC was updated
     if (cpu->Reg[15] == original_pc) {
         // PC wasn't updated, force it to advance
-        LOG_TRACE(Core_ARM11, "PC wasn't updated by specialized block execution, forcing advance");
-        fprintf(stderr, "PC wasn't updated by specialized block execution, forcing advance\n");
+        LOG_WARNING(Core_ARM11, "PC wasn't updated by specialized block execution, forcing advance");
         
         // Force PC to advance by at least 4 bytes (one instruction)
         cpu->Reg[15] = original_pc + 4;
     }
     
     // Log execution result
-    LOG_TRACE(Core_ARM11, "Block execution result=%u, new PC=0x%08X", result, cpu->Reg[15]);
-    fprintf(stderr, "Block execution result=%u, new PC=0x%08X\n", result, cpu->Reg[15]);
-    
-    // Print CPU state after execution
+//    LOG_TRACE(Core_ARM11, "Block execution result=%u, new PC=0x%08X", result, cpu->Reg[15]);
+//    
+//    // Print CPU state after execution
 //    fprintf(stderr, "CPU state after specialized block execution:\n");
 //    PrintCPUState(cpu);
-    
-    // Dump memory at the new PC
-    fprintf(stderr, "Memory at new PC after execution:\n");
-    DumpMemory(cpu, cpu->Reg[15], 8); // Dump 8 words (32 bytes)
+//    
+//    // Dump memory at the new PC
+//    fprintf(stderr, "Memory at new PC after execution:\n");
+//    DumpMemory(cpu, cpu->Reg[15], 8); // Dump 8 words (32 bytes)
     
     return result;
 }
@@ -410,7 +409,6 @@ ARMSpecializedCache::BlockType ARMSpecializedCache::AnalyzeInstructions(ARMul_St
     // Ensure we have at least one instruction and the end address is greater than the start address
     if (block.instruction_count == 0 || block.end_address <= block.start_address) {
         LOG_TRACE(Core_ARM11, "Block has no instructions or invalid end address, setting defaults");
-        fprintf(stderr, "Block has no instructions or invalid end address, setting defaults\n");
         
         // Ensure we have at least one instruction
         block.instruction_count = std::max(1, block.instruction_count);
@@ -421,8 +419,6 @@ ARMSpecializedCache::BlockType ARMSpecializedCache::AnalyzeInstructions(ARMul_St
     
     LOG_TRACE(Core_ARM11, "Analyzed block at 0x%08X, type=%d, instruction_count=%d, end_address=0x%08X",
               block.start_address, static_cast<int>(block.type), block.instruction_count, block.end_address);
-    fprintf(stderr, "Analyzed block at 0x%08X, type=%d, instruction_count=%d, end_address=0x%08X\n",
-            block.start_address, static_cast<int>(block.type), block.instruction_count, block.end_address);
     
     // Determine block type based on instruction mix
     if (load_count > 0 && store_count > 0 && load_count + store_count > block.instruction_count / 2) {

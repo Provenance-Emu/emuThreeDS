@@ -4,6 +4,9 @@
 
 #pragma once
 
+// Enable specialized cache for both threaded and non-threaded interpreters
+#define USE_SPECIALIZED_CACHE 0
+
 #include <memory>
 #include "common/common_types.h"
 #include "core/arm/arm_interface.h"

@@ -99,6 +99,13 @@ void ARM_DynCom::Step() {
 void ARM_DynCom::ClearInstructionCache() {
     state->instruction_cache.clear();
     trans_cache_buf_top = 0;
+    
+#if USE_SPECIALIZED_CACHE
+    if (g_use_specialized_cache) {
+        // Also clear the specialized cache
+        GetGlobalSpecializedCache().Clear();
+    }
+#endif
 }
 
 void ARM_DynCom::InvalidateCacheRange(u32, std::size_t) {
@@ -171,7 +178,31 @@ void ARM_DynCom::ExecuteInstructions(u64 num_instructions) {
               num_instructions, state->Reg[15], state->Cpsr, state->TFlag);
 
     unsigned ticks_executed = 0;
+    
+#if USE_SPECIALIZED_CACHE
+    // Try to use the specialized cache first if it's enabled
+    // This works regardless of which interpreter is used
+    if (g_use_specialized_cache) {
+        u32 pc = state->Reg[15];
+        
+        // Check if the current PC is valid
+        if (IsValidMemoryAddress(pc)) {
+            // Get the global specialized cache
+            auto& specialized_cache = GetGlobalSpecializedCache();
+            
+            // Try to execute a specialized block
+            ticks_executed = specialized_cache.ExecuteBlock(state.get(), pc);
+            
+            // If we successfully executed a specialized block, we're done
+            if (ticks_executed > 0) {
+                LOG_TRACE(Core_ARM11, "Used specialized cache for execution at PC=0x%08X", pc);
+                goto execution_complete;
+            }
+        }
+    }
+#endif
 
+    // If specialized cache didn't work, use the appropriate interpreter
     if (use_direct_threaded_interpreter) {
         // Use the direct-threaded interpreter for better performance
         LOG_TRACE(Core_ARM11, "Using direct-threaded interpreter");
@@ -181,6 +212,10 @@ void ARM_DynCom::ExecuteInstructions(u64 num_instructions) {
         LOG_TRACE(Core_ARM11, "Using original interpreter");
         ticks_executed = InterpreterMainLoop(state.get());
     }
+    
+#if USE_SPECIALIZED_CACHE
+execution_complete:
+#endif
 
     LOG_TRACE(Core_ARM11, "Executed %u ticks", ticks_executed);
 
@@ -205,8 +240,13 @@ void ARM_DynCom::PrintProfilerStats() {
     ARMDyncomProfiler::GetInstance().PrintStats();
 }
 
+
 // Flag to enable/disable specialized cache
+#if USE_SPECIALIZED_CACHE
 bool g_use_specialized_cache = true;
+#else
+bool g_use_specialized_cache = false;
+#endif
 
 // Clear the specialized cache
 void ARM_DynCom::ClearSpecializedCache() {

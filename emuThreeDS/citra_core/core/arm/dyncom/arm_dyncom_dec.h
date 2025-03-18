@@ -10,10 +10,6 @@
 #define USE_NEON 1
 #endif
 
-// Define to enable/disable specialized cache
-// Set to 0 to disable specialized cache and use only the interpreter
-#define USE_SPECIALIZED_CACHE 0
-
 enum class ARMDecodeStatus { SUCCESS, FAILURE };
 
 /**
