@@ -289,10 +289,10 @@ std::tuple<Common::Vec4<u8>, Common::Vec4<u8>> ComputeFragmentsColors(
 
         if (!lighting.IsShadowDisabled(num)) {
             if (lighting.config0.shadow_primary) {
-                diffuse = diffuse * shadow.xyz();
+                diffuse = Common::SafeMultiply(diffuse, shadow.xyz());
             }
             if (lighting.config0.shadow_secondary) {
-                specular = specular * shadow.xyz();
+                specular = Common::SafeMultiply(specular, shadow.xyz());
             }
         }
 

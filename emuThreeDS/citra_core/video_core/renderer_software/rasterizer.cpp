@@ -13,7 +13,7 @@
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/quaternion.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/hw/gpu.h"
 #include "core/memory.h"
 #include "video_core/debug_utils/debug_utils.h"

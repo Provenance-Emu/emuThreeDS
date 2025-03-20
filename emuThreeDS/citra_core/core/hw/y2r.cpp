@@ -9,7 +9,7 @@
 #include "common/assert.h"
 #include "common/color.h"
 #include "common/common_types.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/core.h"
 #include "core/hle/service/y2r_u.h"
 #include "core/hw/y2r.h"

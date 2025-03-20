@@ -9,7 +9,7 @@
 #include <boost/serialization/split_member.hpp>
 #include "common/bit_field.h"
 #include "common/common_types.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/memory.h"
 #include "video_core/geometry_pipeline.h"
 #include "video_core/primitive_assembly.h"

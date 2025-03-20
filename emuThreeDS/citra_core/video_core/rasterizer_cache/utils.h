@@ -8,7 +8,7 @@
 #include "common/hash.h"
 #include "common/math_util.h"
 #include "common/slot_vector.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/regs_texturing.h"
 
 namespace VideoCore {

@@ -10,7 +10,7 @@
 #include "common/bit_field.h"
 #include "common/common_funcs.h"
 #include "common/common_types.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 
 namespace Pica {
 

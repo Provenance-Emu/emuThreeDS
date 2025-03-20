@@ -10,7 +10,7 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/hle/service/gsp/gsp.h"
 #include "core/hw/gpu.h"
 #include "core/memory.h"

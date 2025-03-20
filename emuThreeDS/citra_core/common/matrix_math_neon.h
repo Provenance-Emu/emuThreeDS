@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "common/math_util.h"
 #include "video_core/geometry_culling.h"
 

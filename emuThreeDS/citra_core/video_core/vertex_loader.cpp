@@ -4,7 +4,7 @@
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/memory.h"
 #include "video_core/debug_utils/debug_utils.h"
 #include "video_core/pica_state.h"

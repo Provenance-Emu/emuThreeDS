@@ -10,7 +10,7 @@
 #include "common/math_util.h"
 #include "common/quaternion.h"
 #include "common/thread.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "input_common/motion_emu.h"
 
 namespace InputCommon {

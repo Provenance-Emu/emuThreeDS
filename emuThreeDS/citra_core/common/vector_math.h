@@ -35,7 +35,14 @@
 #include <type_traits>
 #include <boost/serialization/access.hpp>
 
+// Check for ARM NEON support
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#define CITRA_USE_NEON 1
+#include <arm_neon.h>
+#endif
+
 namespace Common {
+
 
 template <typename T>
 class Vec2;
@@ -43,6 +50,36 @@ template <typename T>
 class Vec3;
 template <typename T>
 class Vec4;
+
+// Forward declare NEON namespace for ARM NEON optimized functions
+#ifdef CITRA_USE_NEON
+namespace NEON {
+// Forward declarations for NEON optimized functions
+inline float Dot3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline float Dot4(const Vec4<float>& vec1, const Vec4<float>& vec2);
+inline float Dot2(const Vec2<float>& vec1, const Vec2<float>& vec2);
+inline Vec3<float> Cross3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline Vec3<float> Multiply3(const Vec3<float>& vec, float scalar);
+inline Vec4<float> Multiply4(const Vec4<float>& vec, float scalar);
+inline float Length3(const Vec3<float>& vec);
+inline float Length2_3(const Vec3<float>& vec);
+inline Vec3<float> Add3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline Vec3<float> Subtract3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline Vec3<float> Multiply3Scalar(const Vec3<float>& vec, float scalar);
+inline Vec3<float> Multiply3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline Vec3<float> Divide3(const Vec3<float>& vec, float scalar);
+inline bool Equals3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline bool NotEquals3(const Vec3<float>& vec1, const Vec3<float>& vec2);
+inline Vec3<float> Lerp3(const Vec3<float>& start, const Vec3<float>& end, float t);
+inline Vec3<float> BilinearInterp3(const Vec3<float>& x00, const Vec3<float>& x01, const Vec3<float>& x10, const Vec3<float>& x11, float s, float t);
+inline Vec3<float> BilinearInterp3Fast(const Vec3<float>& x00, const Vec3<float>& x01, const Vec3<float>& x10, const Vec3<float>& x11, float s, float t);
+inline Vec4<float> Add4(const Vec4<float>& vec1, const Vec4<float>& vec2);
+inline Vec4<float> Subtract4(const Vec4<float>& vec1, const Vec4<float>& vec2);
+inline Vec4<float> Multiply4Scalar(const Vec4<float>& vec, float scalar);
+inline Vec4<float> Multiply4(const Vec4<float>& vec1, const Vec4<float>& vec2);
+inline Vec4<float> Divide4(const Vec4<float>& vec, float scalar);
+}
+#endif
 
 template <typename T>
 class Vec2 {
@@ -247,8 +284,16 @@ public:
         return Vec3(f, f, f);
     }
 
-    [[nodiscard]] constexpr Vec3<decltype(T{} + T{})> operator+(const Vec3& other) const {
+    [[nodiscard]] Vec3<decltype(T{} + T{})> operator+(const Vec3& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Add3(*this, other);
+        } else {
+            return {x + other.x, y + other.y, z + other.z};
+        }
+#else
         return {x + other.x, y + other.y, z + other.z};
+#endif
     }
 
     constexpr Vec3& operator+=(const Vec3& other) {
@@ -258,8 +303,16 @@ public:
         return *this;
     }
 
-    [[nodiscard]] constexpr Vec3<decltype(T{} - T{})> operator-(const Vec3& other) const {
+    [[nodiscard]] Vec3<decltype(T{} - T{})> operator-(const Vec3& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Subtract3(*this, other);
+        } else {
+            return {x - other.x, y - other.y, z - other.z};
+        }
+#else
         return {x - other.x, y - other.y, z - other.z};
+#endif
     }
 
     constexpr Vec3& operator-=(const Vec3& other) {
@@ -275,12 +328,28 @@ public:
     }
 
     [[nodiscard]] constexpr Vec3<decltype(T{} * T{})> operator*(const Vec3& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Multiply3(*this, other);
+        } else {
+            return {x * other.x, y * other.y, z * other.z};
+        }
+#else
         return {x * other.x, y * other.y, z * other.z};
+#endif
     }
 
     template <typename V>
     [[nodiscard]] constexpr Vec3<decltype(T{} * V{})> operator*(const V& f) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float> && std::is_same_v<V, float>) {
+            return NEON::Multiply3Scalar(*this, f);
+        } else {
+            return {x * f, y * f, z * f};
+        }
+#else
         return {x * f, y * f, z * f};
+#endif
     }
 
     template <typename V>
@@ -290,7 +359,15 @@ public:
     }
     template <typename V>
     [[nodiscard]] constexpr Vec3<decltype(T{} / V{})> operator/(const V& f) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float> && std::is_same_v<V, float>) {
+            return NEON::Divide3(*this, f);
+        } else {
+            return {x / f, y / f, z / f};
+        }
+#else
         return {x / f, y / f, z / f};
+#endif
     }
 
     template <typename V>
@@ -423,20 +500,46 @@ template <typename T, typename V>
 
 template <>
 inline float Vec3<float>::Length() const {
+#ifdef CITRA_USE_NEON
+    return NEON::Length3(*this);
+#else
     return std::sqrt(x * x + y * y + z * z);
+#endif
 }
 
+#ifdef CITRA_USE_NEON
+template <>
+inline Vec3<float> Vec3<float>::Normalized() const {
+    float length = Length();
+    if (length > 0.0f) {
+        return *this / length;
+    }
+    return *this;
+}
+#else
 template <>
 inline Vec3<float> Vec3<float>::Normalized() const {
     return *this / Length();
 }
+#endif
 
+#ifdef CITRA_USE_NEON
+template <>
+inline float Vec3<float>::Normalize() {
+    float length = Length();
+    if (length > 0.0f) {
+        *this /= length;
+    }
+    return length;
+}
+#else
 template <>
 inline float Vec3<float>::Normalize() {
     float length = Length();
     *this /= length;
     return length;
 }
+#endif
 
 using Vec3f = Vec3<float>;
 using Vec3i = Vec3<int>;
@@ -481,8 +584,16 @@ public:
         return Vec4(f, f, f, f);
     }
 
-    [[nodiscard]] constexpr Vec4<decltype(T{} + T{})> operator+(const Vec4& other) const {
+    [[nodiscard]] Vec4<decltype(T{} + T{})> operator+(const Vec4& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Add4(*this, other);
+        } else {
+            return {x + other.x, y + other.y, z + other.z, w + other.w};
+        }
+#else
         return {x + other.x, y + other.y, z + other.z, w + other.w};
+#endif
     }
 
     constexpr Vec4& operator+=(const Vec4& other) {
@@ -493,8 +604,16 @@ public:
         return *this;
     }
 
-    [[nodiscard]] constexpr Vec4<decltype(T{} - T{})> operator-(const Vec4& other) const {
+    [[nodiscard]] Vec4<decltype(T{} - T{})> operator-(const Vec4& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Subtract4(*this, other);
+        } else {
+            return {x - other.x, y - other.y, z - other.z, w - other.w};
+        }
+#else
         return {x - other.x, y - other.y, z - other.z, w - other.w};
+#endif
     }
 
     constexpr Vec4& operator-=(const Vec4& other) {
@@ -510,13 +629,29 @@ public:
         return {-x, -y, -z, -w};
     }
 
-    [[nodiscard]] constexpr Vec4<decltype(T{} * T{})> operator*(const Vec4& other) const {
+    [[nodiscard]] Vec4<decltype(T{} * T{})> operator*(const Vec4& other) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float>) {
+            return NEON::Multiply4(*this, other);
+        } else {
+            return {x * other.x, y * other.y, z * other.z, w * other.w};
+        }
+#else
         return {x * other.x, y * other.y, z * other.z, w * other.w};
+#endif
     }
 
     template <typename V>
-    [[nodiscard]] constexpr Vec4<decltype(T{} * V{})> operator*(const V& f) const {
+    [[nodiscard]] Vec4<decltype(T{} * V{})> operator*(const V& f) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float> && std::is_same_v<V, float>) {
+            return NEON::Multiply4Scalar(*this, f);
+        } else {
+            return {x * f, y * f, z * f, w * f};
+        }
+#else
         return {x * f, y * f, z * f, w * f};
+#endif
     }
 
     template <typename V>
@@ -526,8 +661,16 @@ public:
     }
 
     template <typename V>
-    [[nodiscard]] constexpr Vec4<decltype(T{} / V{})> operator/(const V& f) const {
+    [[nodiscard]] Vec4<decltype(T{} / V{})> operator/(const V& f) const {
+#if defined(CITRA_USE_NEON)
+        if constexpr (std::is_same_v<T, float> && std::is_same_v<V, float>) {
+            return NEON::Divide4(*this, f);
+        } else {
+            return {x / f, y / f, z / f, w / f};
+        }
+#else
         return {x / f, y / f, z / f, w / f};
+#endif
     }
 
     template <typename V>
@@ -547,6 +690,11 @@ public:
     [[nodiscard]] constexpr T Length2() const {
         return x * x + y * y + z * z + w * w;
     }
+
+    // Only implemented for T=float
+    [[nodiscard]] float Length() const;
+    [[nodiscard]] Vec4 Normalized() const;
+    float Normalize(); // returns the previous length, which is often useful
 
     [[nodiscard]] constexpr T& operator[](std::size_t i) {
         return *((&x) + i);
@@ -669,17 +817,37 @@ using Vec4u = Vec4<unsigned int>;
 
 template <typename T>
 constexpr decltype(T{} * T{} + T{} * T{}) Dot(const Vec2<T>& a, const Vec2<T>& b) {
+#if defined(CITRA_USE_NEON)
+    return NEON::Dot2(a, b);
+#else
     return a.x * b.x + a.y * b.y;
+#endif
 }
 
 template <typename T>
 [[nodiscard]] constexpr decltype(T{} * T{} + T{} * T{}) Dot(const Vec3<T>& a, const Vec3<T>& b) {
+#if defined(CITRA_USE_NEON)
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Dot3(a, b);
+    } else {
+        return a.x * b.x + a.y * b.y + a.z * b.z;
+    }
+#else
     return a.x * b.x + a.y * b.y + a.z * b.z;
+#endif
 }
 
 template <typename T>
 [[nodiscard]] constexpr decltype(T{} * T{} + T{} * T{}) Dot(const Vec4<T>& a, const Vec4<T>& b) {
+#if defined(CITRA_USE_NEON)
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Dot4(a, b);
+    } else {
+        return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    }
+#else
     return a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+#endif
 }
 
 template <typename T>
@@ -692,7 +860,20 @@ template <typename T>
 template <typename X>
 [[nodiscard]] constexpr decltype(X{} * float{} + X{} * float{})
     Lerp(const X& begin, const X& end, const float t) {
+#if defined(CITRA_USE_NEON)
+    if constexpr (std::is_same_v<X, Vec3f>) {
+        return NEON::Lerp3(begin, end, t);
+    } else if constexpr (std::is_same_v<X, Vec4f>) {
+        Vec4f result;
+        result.x = begin.x * (1.0f - t) + end.x * t;
+        result.y = begin.y * (1.0f - t) + end.y * t;
+        result.z = begin.z * (1.0f - t) + end.z * t;
+        result.w = begin.w * (1.0f - t) + end.w * t;
+        return result;
+    }
+#else
     return begin * (1.f - t) + end * t;
+#endif
 }
 
 // linear interpolation via int: 0=begin, base=end
@@ -707,10 +888,40 @@ template <typename X, int base>
 // interpolation.
 template <typename X>
 [[nodiscard]] constexpr auto BilinearInterp(const X& x00, const X& x01, const X& x10, const X& x11,
-                                            const float s, const float t) {
+                                             const float s, const float t) {
+#if defined(CITRA_USE_NEON)
+    if constexpr (std::is_same_v<X, Vec3f>) {
+        return NEON::BilinearInterp3Fast(x00, x01, x10, x11, s, t);
+    } else if constexpr (std::is_same_v<X, Vec4f>) {
+        Vec4f y0;
+        y0.x = x00.x * (1.0f - s) + x01.x * s;
+        y0.y = x00.y * (1.0f - s) + x01.y * s;
+        y0.z = x00.z * (1.0f - s) + x01.z * s;
+        y0.w = x00.w * (1.0f - s) + x01.w * s;
+
+        Vec4f y1;
+        y1.x = x10.x * (1.0f - s) + x11.x * s;
+        y1.y = x10.y * (1.0f - s) + x11.y * s;
+        y1.z = x10.z * (1.0f - s) + x11.z * s;
+        y1.w = x10.w * (1.0f - s) + x11.w * s;
+
+        Vec4f result;
+        result.x = y0.x * (1.0f - t) + y1.x * t;
+        result.y = y0.y * (1.0f - t) + y1.y * t;
+        result.z = y0.z * (1.0f - t) + y1.z * t;
+        result.w = y0.w * (1.0f - t) + y1.w * t;
+
+        return result;
+    } else if constexpr (std::is_same_v<X, float>) {
+        float y0 = x00 * (1.0f - s) + x01 * s;
+        float y1 = x10 * (1.0f - s) + x11 * s;
+        return y0 * (1.0f - t) + y1 * t;
+    }
+#else
     auto y0 = Lerp(x00, x01, s);
     auto y1 = Lerp(x10, x11, s);
     return Lerp(y0, y1, t);
+#endif
 }
 
 // Utility vector factories
@@ -770,6 +981,374 @@ template <typename T>
 template <typename T>
 [[nodiscard]] constexpr Vec4<T> MakeVec(const T& x, const Vec3<T>& yzw) {
     return MakeVec(x, yzw[0], yzw[1], yzw[2]);
+}
+
+// Vec4<float> specializations
+template <>
+inline float Vec4<float>::Length() const {
+#if defined(CITRA_USE_NEON)
+    return std::sqrt(x * x + y * y + z * z + w * w);
+#else
+    return std::sqrt(x * x + y * y + z * z + w * w);
+#endif
+}
+
+#ifdef CITRA_USE_NEON
+template <>
+inline Vec4<float> Vec4<float>::Normalized() const {
+    float length = Length();
+    if (length > 0.0f) {
+        return *this / length;
+    }
+    return *this;
+}
+#else
+template <>
+inline Vec4<float> Vec4<float>::Normalized() const {
+    return *this / Length();
+}
+#endif
+
+#ifdef CITRA_USE_NEON
+template <>
+inline float Vec4<float>::Normalize() {
+    float length = Length();
+    if (length > 0.0f) {
+        *this /= length;
+    }
+    return length;
+}
+#else
+template <>
+inline float Vec4<float>::Normalize() {
+    float length = Length();
+    *this /= length;
+    return length;
+}
+#endif
+
+// Specialized implementations for Vec3f and Vec4f using NEON optimizations
+
+// Vec3f specialized implementations
+// Removed ambiguous global operator+ and operator- for Vec3f
+// Use the member operators from Vec3 class template instead
+
+// Removed ambiguous global operator* for Vec3f
+// Use the member operators from Vec3 class template instead
+
+// Removed ambiguous global operator/ for Vec3f
+// Use the member operators from Vec3 class template instead
+
+// NEON-optimized operator== is now handled in the Vec3 class template
+
+// NEON-optimized operator!= is now handled in the Vec3 class template
+
+#ifdef CITRA_USE_NEON
+inline float Dot(const Vec3f& a, const Vec3f& b) {
+    return NEON::Dot3(a, b);
+}
+#endif
+
+// Vec4f specialized implementations
+// Removed ambiguous operator+ for Vec4f
+
+// Removed ambiguous global operators for Vec4f
+// Use the member operators from Vec4 class template instead
+
+// NEON-optimized equality operator for Vec4f is handled in the class definition
+
+// NEON-optimized inequality operator for Vec4f is handled in the class definition
+
+#ifdef CITRA_USE_NEON
+inline float Dot(const Vec4f& a, const Vec4f& b) {
+    return NEON::Dot4(a, b);
+}
+#endif
+
+// Specialized Lerp for Vec3f
+inline Vec3f Lerp(const Vec3f& begin, const Vec3f& end, float t) {
+#ifdef CITRA_USE_NEON
+    return NEON::Lerp3(begin, end, t);
+#else
+    return begin * (1.0f - t) + end * t;
+#endif
+}
+
+// NEON-optimized Lerp for Vec4f is handled in the template specialization
+
+// Specialized BilinearInterp for Vec3f
+inline Vec3f BilinearInterp(const Vec3f& x00, const Vec3f& x01, const Vec3f& x10, const Vec3f& x11,
+                           float s, float t) {
+#ifdef CITRA_USE_NEON
+    return NEON::BilinearInterp3Fast(x00, x01, x10, x11, s, t);
+#else
+    return Lerp(Lerp(x00, x01, s), Lerp(x10, x11, s), t);
+#endif
+}
+
+// Specialized BilinearInterp for Vec4f
+inline Vec4f BilinearInterp(const Vec4f& x00, const Vec4f& x01, const Vec4f& x10, const Vec4f& x11,
+                           float s, float t) {
+#ifdef CITRA_USE_NEON
+    Vec4f y0;
+    y0.x = x00.x * (1.0f - s) + x01.x * s;
+    y0.y = x00.y * (1.0f - s) + x01.y * s;
+    y0.z = x00.z * (1.0f - s) + x01.z * s;
+    y0.w = x00.w * (1.0f - s) + x01.w * s;
+
+    Vec4f y1;
+    y1.x = x10.x * (1.0f - s) + x11.x * s;
+    y1.y = x10.y * (1.0f - s) + x11.y * s;
+    y1.z = x10.z * (1.0f - s) + x11.z * s;
+    y1.w = x10.w * (1.0f - s) + x11.w * s;
+
+    Vec4f result;
+    result.x = y0.x * (1.0f - t) + y1.x * t;
+    result.y = y0.y * (1.0f - t) + y1.y * t;
+    result.z = y0.z * (1.0f - t) + y1.z * t;
+    result.w = y0.w * (1.0f - t) + y1.w * t;
+
+    return result;
+#else
+    return Lerp(Lerp(x00, x01, s), Lerp(x10, x11, s), t);
+#endif
+}
+
+#ifdef CITRA_USE_NEON
+// Add the missing NEON functions
+
+/**
+ * Multiplies a 3D vector by a scalar using NEON intrinsics
+ * @param vec Vector to scale
+ * @param scalar Scalar value to multiply by
+ * @return Scaled vector
+ */
+inline Vec3f NEON::Multiply3(const Vec3f& vec, float scalar) {
+    // Load vector components into NEON register
+    float32x4_t v = vdupq_n_f32(0.0f);
+    v = vsetq_lane_f32(vec.x, v, 0);
+    v = vsetq_lane_f32(vec.y, v, 1);
+    v = vsetq_lane_f32(vec.z, v, 2);
+
+    // Create scalar register with all lanes set to scalar value
+    float32x4_t s = vdupq_n_f32(scalar);
+
+    // Multiply vector by scalar
+    float32x4_t result = vmulq_f32(v, s);
+
+    // Extract results
+    Vec3f scaled;
+    scaled.x = vgetq_lane_f32(result, 0);
+    scaled.y = vgetq_lane_f32(result, 1);
+    scaled.z = vgetq_lane_f32(result, 2);
+
+    return scaled;
+}
+
+/**
+ * Performs a fast dot product between two 4D vectors using NEON intrinsics
+ * @param vec1 First vector
+ * @param vec2 Second vector
+ * @return Dot product result
+ */
+inline float NEON::Dot4(const Vec4f& vec1, const Vec4f& vec2) {
+    // Load vector components into NEON registers
+    float32x4_t v1 = vdupq_n_f32(0.0f);
+    float32x4_t v2 = vdupq_n_f32(0.0f);
+
+    v1 = vsetq_lane_f32(vec1.x, v1, 0);
+    v1 = vsetq_lane_f32(vec1.y, v1, 1);
+    v1 = vsetq_lane_f32(vec1.z, v1, 2);
+    v1 = vsetq_lane_f32(vec1.w, v1, 3);
+
+    v2 = vsetq_lane_f32(vec2.x, v2, 0);
+    v2 = vsetq_lane_f32(vec2.y, v2, 1);
+    v2 = vsetq_lane_f32(vec2.z, v2, 2);
+    v2 = vsetq_lane_f32(vec2.w, v2, 3);
+
+    // Multiply vectors component-wise
+    float32x4_t mul = vmulq_f32(v1, v2);
+
+    // Sum components horizontally
+    float32x2_t sum = vpadd_f32(vget_low_f32(mul), vget_high_f32(mul));
+    sum = vpadd_f32(sum, sum);
+
+    // Extract result
+    return vget_lane_f32(sum, 0);
+}
+
+#endif // CITRA_USE_NEON
+
+// Helper functions to safely use optimized operations
+
+/**
+ * Safely adds two vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec3<T> SafeAdd(const Vec3<T>& a, const Vec3<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Add3(a, b);
+    }
+#endif
+    return a + b;
+}
+
+/**
+ * Safely adds a vector to another vector (in-place) with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline void SafeAddAssign(Vec3<T>& a, const Vec3<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        a = NEON::Add3(a, b);
+        return;
+    }
+#endif
+    a += b;
+}
+
+/**
+ * Safely subtracts two vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec3<T> SafeSubtract(const Vec3<T>& a, const Vec3<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Subtract3(a, b);
+    }
+#endif
+    return a - b;
+}
+
+/**
+ * Safely multiplies a vector by a scalar with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec3<T> SafeMultiply(const Vec3<T>& a, T scalar) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Multiply3Scalar(a, scalar);
+    }
+#endif
+    return a * scalar;
+}
+
+/**
+ * Safely multiplies two vectors component-wise with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec3<T> SafeMultiply(const Vec3<T>& a, const Vec3<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Multiply3(a, b);
+    }
+#endif
+    return {a.x * b.x, a.y * b.y, a.z * b.z};
+}
+
+/**
+ * Safely calculates the dot product of two vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline auto SafeDot(const Vec3<T>& a, const Vec3<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Dot3(a, b);
+    }
+#endif
+    return Dot(a, b);
+}
+
+/**
+ * Safely adds two 4D vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec4<T> SafeAdd(const Vec4<T>& a, const Vec4<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Add4(a, b);
+    }
+#endif
+    return a + b;
+}
+
+/**
+ * Safely adds a vector to another vector (in-place) with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline void SafeAddAssign(Vec4<T>& a, const Vec4<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        a = NEON::Add4(a, b);
+        return;
+    }
+#endif
+    a += b;
+}
+
+/**
+ * Safely subtracts two 4D vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec4<T> SafeSubtract(const Vec4<T>& a, const Vec4<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Subtract4(a, b);
+    }
+#endif
+    return a - b;
+}
+
+/**
+ * Safely calculates the dot product of two 4D vectors with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline T SafeDot(const Vec4<T>& a, const Vec4<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Dot4(a, b);
+    }
+#endif
+    return Dot(a, b);
+}
+
+/**
+ * Safely multiplies a 4D vector by a scalar with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec4<T> SafeMultiply(const Vec4<T>& a, T scalar) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Multiply4Scalar(a, scalar);
+    }
+#endif
+    return a * scalar;
+}
+
+/**
+ * Safely multiplies two 4D vectors component-wise with proper type checking
+ * Uses NEON optimization when available for float vectors
+ */
+template <typename T>
+inline Vec4<T> SafeMultiply(const Vec4<T>& a, const Vec4<T>& b) {
+#ifdef CITRA_USE_NEON
+    if constexpr (std::is_same_v<T, float>) {
+        return NEON::Multiply4(a, b);
+    }
+#endif
+    return {a.x * b.x, a.y * b.y, a.z * b.z, a.w * b.w};
 }
 
 } // namespace Common

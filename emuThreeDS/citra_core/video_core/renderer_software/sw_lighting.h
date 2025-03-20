@@ -6,7 +6,7 @@
 
 #include <tuple>
 #include "common/quaternion.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/pica_state.h"
 
 namespace Pica {

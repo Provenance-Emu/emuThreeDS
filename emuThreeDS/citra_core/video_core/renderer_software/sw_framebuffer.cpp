@@ -7,7 +7,7 @@
 #include "common/color.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "core/hw/gpu.h"
 #include "core/memory.h"
 #include "video_core/pica_state.h"

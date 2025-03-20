@@ -5,7 +5,7 @@
 #pragma once
 
 #include <array>
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/pica_types.h"
 
 // Define our own matrix types since Common::Mat4x4 is not available

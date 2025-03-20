@@ -9,7 +9,7 @@
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/pica_state.h"
 #include "video_core/pica_types.h"
 #include "video_core/renderer_software/rasterizer.h"
@@ -97,7 +97,9 @@ void ProcessTriangle(const OutputVertex& v0, const OutputVertex& v1, const Outpu
     static_vector<Vertex, MAX_VERTICES> buffer_b;
 
     auto FlipQuaternionIfOpposite = [](auto& a, const auto& b) {
-        if (Common::Dot(a, b) < float24::Zero())
+        // Use Common::Dot for quaternions
+        auto dot_product = Common::Dot(a, b);
+        if (dot_product < float24::Zero())
             a = a * float24::FromFloat32(-1.0f);
     };
 

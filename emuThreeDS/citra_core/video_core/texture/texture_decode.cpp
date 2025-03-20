@@ -7,7 +7,7 @@
 #include "common/logging/log.h"
 #include "common/math_util.h"
 #include "common/swap.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/regs_texturing.h"
 #include "video_core/texture/etc1.h"
 #include "video_core/texture/texture_decode.h"

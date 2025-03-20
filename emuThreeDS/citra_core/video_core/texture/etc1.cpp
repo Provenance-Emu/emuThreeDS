@@ -7,7 +7,7 @@
 #include "common/bit_field.h"
 #include "common/color.h"
 #include "common/common_types.h"
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/texture/etc1.h"
 
 namespace Pica::Texture {

@@ -197,7 +197,10 @@ Common::Vec4<u8> ProcTex(float u, float v, const TexturingRegs& regs, const Stat
         const float frac = index - index_int;
         const auto color_value = state.color_table[index_int].ToVector().Cast<float>();
         const auto color_diff = state.color_diff_table[index_int].ToVector().Cast<float>();
-        final_color = (color_value + frac * color_diff).Cast<u8>();
+        // Use optimized operations with proper type checking
+        Common::Vec4f scaled_diff = Common::SafeMultiply(color_diff, frac);
+        Common::Vec4f result = Common::SafeAdd(color_value, scaled_diff);
+        final_color = result.Cast<u8>();
         break;
     }
     case ProcTexFilter::Nearest:
