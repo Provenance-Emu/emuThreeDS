@@ -4,6 +4,8 @@
 
 #include <limits>
 
+#define USE_GEOMETRY_CULLING 1
+
 // Use ARM NEON intrinsics for ARM64 platforms
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
@@ -111,7 +113,7 @@ RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::Shader::Output
 RasterizerAccelerated::RasterizerAccelerated(Memory::MemorySystem& memory_)
     : memory{memory_}, regs{Pica::g_state.regs} {
     uniform_block_data.lighting_lut_dirty.fill(true);
-
+#if USE_GEOMETRY_CULLING
     // Initialize frustum planes for culling
     // In a real implementation, these would be calculated from the view-projection matrix
     // For now, we'll use a default frustum that's updated when needed
@@ -120,6 +122,7 @@ RasterizerAccelerated::RasterizerAccelerated(Memory::MemorySystem& memory_)
 
     // Initialize culling statistics
     culling_stats.Reset();
+#endif
 }
 
 /**
@@ -150,6 +153,7 @@ static bool AreQuaternionsOpposite(Common::Vec4<Pica::float24> qa, Common::Vec4<
 void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
                                          const Pica::Shader::OutputVertex& v1,
                                          const Pica::Shader::OutputVertex& v2) {
+#if USE_GEOMETRY_CULLING
     // Update culling statistics
     culling_state.stats.triangles_drawn++;
 
@@ -291,6 +295,7 @@ void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
         }
 #endif
     }
+#endif // USE_GEOMETRY_CULLING
 
     // If we reach here, the triangle passed all culling tests
     vertex_batch.emplace_back(v0, false);
@@ -353,6 +358,7 @@ void RasterizerAccelerated::SyncEntireState() {
         SyncTevConstColor(index, tev_stages[index]);
     }
 
+#if USE_GEOMETRY_CULLING
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Extract view and projection matrices from the uniform state
     Pica::Matrix4x4 view_matrix = {};
@@ -671,8 +677,8 @@ void RasterizerAccelerated::SyncEntireState() {
     // Update camera position from view matrix inverse translation
     camera_position = {-view_matrix.r[3][0], -view_matrix.r[3][1], -view_matrix.r[3][2]};
     camera_dirty = false;
-#endif
-
+#endif // USE_NEON
+#endif // USE_GEOMETRY_CULLING
     SyncGlobalAmbient();
     for (unsigned light_index = 0; light_index < 8; light_index++) {
         SyncLightSpecular0(light_index);
@@ -693,12 +699,13 @@ void RasterizerAccelerated::SyncEntireState() {
     for (unsigned tex_index = 0; tex_index < 3; tex_index++) {
         SyncTextureLodBias(tex_index);
     }
-
+#if USE_GEOMETRY_CULLING
     // Reset culling statistics
     culling_stats.Reset();
     culling_state.stats.triangles_drawn = 0;
     culling_state.stats.triangles_culled = 0;
     culling_state.stats.triangles_backface = 0;
+#endif
 }
 
 void RasterizerAccelerated::NotifyPicaRegisterChanged(u32 id) {
