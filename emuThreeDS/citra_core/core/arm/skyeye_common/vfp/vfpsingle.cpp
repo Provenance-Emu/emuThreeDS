@@ -59,6 +59,22 @@
 #include "core/arm/skyeye_common/vfp/vfp.h"
 #include "core/arm/skyeye_common/vfp/vfp_helper.h"
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+
+// Union for type-punning between float and u32
+union float_u32_union {
+    float f;
+    u32 v;
+};
+
+// Union for type-punning between double and u64
+union double_u64_union {
+    double d;
+    u64 v;
+};
+#endif
+
 static struct vfp_single vfp_single_default_qnan = {
     255,
     0,
@@ -990,6 +1006,36 @@ static u32 vfp_single_fnmsc(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr
  * sd = sn * sm
  */
 static u32 vfp_single_fmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    s32 neon_n = vfp_get_float(state, sn);
+    float_u32_union fn, fm;
+    
+    // Convert raw bits to float
+    fn.v = neon_n;
+    fm.v = m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
+                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
+                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
+                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point multiplication
+        float32x2_t vn = vdup_n_f32(fn.f);
+        float32x2_t vm = vdup_n_f32(fm.f);
+        float32x2_t result = vmul_f32(vn, vm);
+        float_u32_union fr;
+        fr.f = vget_lane_f32(result, 0);
+        
+        // Store the result
+        vfp_put_float(state, fr.v, sd);
+        return 0;
+    }
+#endif
+    // Fallback to standard implementation for special cases
     struct vfp_single vsd, vsn, vsm;
     u32 exceptions = 0;
     s32 n = vfp_get_float(state, sn);
@@ -1012,6 +1058,37 @@ static u32 vfp_single_fmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
  * sd = -(sn * sm)
  */
 static u32 vfp_single_fnmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    s32 neon_n = vfp_get_float(state, sn);
+    float_u32_union fn, fm;
+    
+    // Convert raw bits to float
+    fn.v = neon_n;
+    fm.v = m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
+                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
+                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
+                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point multiplication with negation
+        float32x2_t vn = vdup_n_f32(fn.f);
+        float32x2_t vm = vdup_n_f32(fm.f);
+        float32x2_t result = vmul_f32(vn, vm);
+        // Negate the result
+        result = vneg_f32(result);
+        float_u32_union fr;
+        fr.f = vget_lane_f32(result, 0);
+        
+        // Store the result
+        vfp_put_float(state, fr.v, sd);
+        return 0;
+    }
+#endif
     struct vfp_single vsd, vsn, vsm;
     u32 exceptions = 0;
     s32 n = vfp_get_float(state, sn);
@@ -1035,6 +1112,36 @@ static u32 vfp_single_fnmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr
  * sd = sn + sm
  */
 static u32 vfp_single_fadd(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    s32 neon_n = vfp_get_float(state, sn);
+    float_u32_union fn, fm;
+    
+    // Convert raw bits to float
+    fn.v = neon_n;
+    fm.v = m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
+                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
+                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
+                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point addition
+        float32x2_t vn = vdup_n_f32(fn.f);
+        float32x2_t vm = vdup_n_f32(fm.f);
+        float32x2_t result = vadd_f32(vn, vm);
+        float_u32_union fr;
+        fr.f = vget_lane_f32(result, 0);
+        
+        // Store the result
+        vfp_put_float(state, fr.v, sd);
+        return 0;
+    }
+#endif
+    // Fallback to standard implementation for special cases
     struct vfp_single vsd, vsn, vsm;
     u32 exceptions = 0;
     s32 n = vfp_get_float(state, sn);
@@ -1061,6 +1168,35 @@ static u32 vfp_single_fadd(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
  * sd = sn - sm
  */
 static u32 vfp_single_fsub(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    s32 neon_n = vfp_get_float(state, sn);
+    float_u32_union fn, fm;
+    
+    // Convert raw bits to float
+    fn.v = neon_n;
+    fm.v = m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
+                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
+                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
+                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point subtraction
+        float32x2_t vn = vdup_n_f32(fn.f);
+        float32x2_t vm = vdup_n_f32(fm.f);
+        float32x2_t result = vsub_f32(vn, vm);
+        float_u32_union fr;
+        fr.f = vget_lane_f32(result, 0);
+        
+        // Store the result
+        vfp_put_float(state, fr.v, sd);
+        return 0;
+    }
+#endif
     LOG_TRACE(Core_ARM11, "s{} = {:08x}", sn, sd);
     /*
      * Subtraction is addition with one sign inverted. Unpack the second operand to perform FTZ if
@@ -1085,6 +1221,35 @@ static u32 vfp_single_fsub(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
  * sd = sn / sm
  */
 static u32 vfp_single_fdiv(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    s32 neon_n = vfp_get_float(state, sn);
+    float_u32_union fn, fm;
+    
+    // Convert raw bits to float
+    fn.v = neon_n;
+    fm.v = m;
+    
+    // Check for special cases (NaN, infinity, denormals, zero)
+    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
+                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
+                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
+                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point division
+        float32x2_t vn = vdup_n_f32(fn.f);
+        float32x2_t vm = vdup_n_f32(fm.f);
+        float32x2_t result = vdiv_f32(vn, vm);
+        float_u32_union fr;
+        fr.f = vget_lane_f32(result, 0);
+        
+        // Store the result
+        vfp_put_float(state, fr.v, sd);
+        return 0;
+    }
+#endif
     struct vfp_single vsd, vsn, vsm;
     u32 exceptions = 0;
     s32 n = vfp_get_float(state, sn);
