@@ -12,7 +12,7 @@
 
 ARMul_State::ARMul_State(Core::System* system, Memory::MemorySystem& memory,
                          PrivilegeMode initial_mode)
-    : system(system), memory(memory) {
+    : system(system), memory(memory), block_cache(std::make_unique<Core::BlockCache>()), next_block_address(0) {
     Reset();
     ChangePrivilegeMode(initial_mode);
 }
@@ -124,6 +124,13 @@ void ARMul_State::Reset() {
 
     NumInstrs = 0;
     Emulate = RUN;
+    
+    // Reset block cache and related state
+    if (block_cache) {
+        block_cache->Clear();
+    }
+    next_block_address = 0;
+    instruction_cache.clear();
 }
 
 // Resets certain MPCore CP15 values to their ARM-defined reset values.
@@ -236,6 +243,11 @@ void ARMul_State::WriteMemory8(u32 address, u8 data) {
     CheckMemoryBreakpoint(address, GDBStub::BreakpointType::Write);
 
     memory.Write8(address, data);
+    
+    // Invalidate any blocks that might contain this address
+    if (block_cache) {
+        block_cache->InvalidateRange(address, 1);
+    }
 }
 
 void ARMul_State::WriteMemory16(u32 address, u16 data) {
@@ -245,6 +257,11 @@ void ARMul_State::WriteMemory16(u32 address, u16 data) {
         data = Common::swap16(data);
 
     memory.Write16(address, data);
+    
+    // Invalidate any blocks that might contain this address
+    if (block_cache) {
+        block_cache->InvalidateRange(address, 2);
+    }
 }
 
 void ARMul_State::WriteMemory32(u32 address, u32 data) {
@@ -254,6 +271,13 @@ void ARMul_State::WriteMemory32(u32 address, u32 data) {
         data = Common::swap32(data);
 
     memory.Write32(address, data);
+    
+    // Invalidate any blocks that might contain this address
+    // This is necessary because the memory we're writing to might contain code
+    // that has been cached in our block cache
+    if (block_cache) {
+        block_cache->InvalidateRange(address, 4);
+    }
 }
 
 void ARMul_State::WriteMemory64(u32 address, u64 data) {
@@ -263,6 +287,11 @@ void ARMul_State::WriteMemory64(u32 address, u64 data) {
         data = Common::swap64(data);
 
     memory.Write64(address, data);
+    
+    // Invalidate any blocks that might contain this address
+    if (block_cache) {
+        block_cache->InvalidateRange(address, 8);
+    }
 }
 
 // Reads from the CP15 registers. Used with implementation of the MRC instruction.

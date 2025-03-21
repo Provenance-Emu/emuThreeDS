@@ -73,6 +73,9 @@ ARM_DynCom::ARM_DynCom(Core::System* system, Memory::MemorySystem& memory,
                        std::shared_ptr<Core::Timing::Timer> timer)
     : ARM_Interface(id, timer), system(system) {
     state = std::make_unique<ARMul_State>(system, memory, initial_mode);
+    
+    // Register with the memory system for cache invalidation notifications
+    RegisterWithMemorySystem(memory);
 }
 
 ARM_DynCom::~ARM_DynCom() {}
@@ -190,4 +193,12 @@ void ARM_DynCom::LoadContext(const std::unique_ptr<ThreadContext>& arg) {
 
 void ARM_DynCom::PrepareReschedule() {
     state->NumInstrsToExecute = 0;
+}
+
+void ARM_DynCom::RegisterWithMemorySystem(Memory::MemorySystem& memory_system) {
+    // Register a callback with the memory system to invalidate the block cache when memory is modified
+    memory_system.RegisterWriteCallback([this](VAddr addr, std::size_t size) {
+        // Invalidate any blocks that might contain this address
+        this->InvalidateCacheRange(addr, size);
+    });
 }

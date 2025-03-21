@@ -18,8 +18,10 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <unordered_map>
 #include "common/common_types.h"
+#include "core/arm/dyncom/arm_dyncom_block.h"
 #include "core/arm/skyeye_common/arm_regformat.h"
 #include "core/gdbstub/gdbstub.h"
 
@@ -255,6 +257,12 @@ public:
     // TODO(bunnei): Move this cache to a better place - it should be per codeset (likely per
     // process for our purposes), not per ARMul_State (which tracks CPU core state).
     std::unordered_map<u32, std::size_t> instruction_cache;
+    
+    // Block-based optimization cache
+    std::unique_ptr<Core::BlockCache> block_cache;
+    
+    // Next block address for direct block chaining
+    u32 next_block_address;
 
 private:
     void ResetMPCoreCP15Registers();

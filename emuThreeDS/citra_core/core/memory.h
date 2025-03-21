@@ -285,6 +285,12 @@ void RasterizerClearAll(bool flush);
  */
 void RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode);
 
+// Forward declaration for the callback type
+class ARM_Interface;
+
+// Callback type for memory write notifications
+using MemoryWriteCallback = std::function<void(VAddr, std::size_t)>;
+
 class MemorySystem {
 public:
     MemorySystem();
@@ -604,10 +610,35 @@ public:
 
     /// Unregisters page table for rasterizer cache marking
     void UnregisterPageTable(std::shared_ptr<PageTable> page_table);
+    
+    /**
+     * Registers a callback for memory write notifications.
+     * This is used by CPU cores to invalidate their instruction caches when memory is modified.
+     * @param callback The callback function to register
+     * @return A handle that can be used to unregister the callback
+     */
+    std::size_t RegisterWriteCallback(MemoryWriteCallback callback);
+
+    /**
+     * Unregisters a previously registered memory write callback.
+     * @param handle The handle returned by RegisterWriteCallback
+     */
+    void UnregisterWriteCallback(std::size_t handle);
+    
+    /**
+     * Notifies all registered callbacks about a memory write.
+     * @param addr The virtual address that was written to
+     * @param size The size of the write in bytes
+     */
+    void NotifyWriteCallbacks(VAddr addr, std::size_t size);
 
     void SetDSP(AudioCore::DspInterface& dsp);
 
 private:
+    // Callbacks for memory write notifications
+    std::vector<MemoryWriteCallback> write_callbacks;
+    std::size_t next_callback_handle = 0;
+    
     template <typename T>
     T Read(const VAddr vaddr);
 

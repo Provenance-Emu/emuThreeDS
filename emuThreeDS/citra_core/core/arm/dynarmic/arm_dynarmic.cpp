@@ -180,6 +180,9 @@ ARM_Dynarmic::ARM_Dynarmic(Core::System* system_, Memory::MemorySystem& memory_,
       cb(std::make_unique<DynarmicUserCallbacks>(*this)),
       exclusive_monitor{dynamic_cast<Core::DynarmicExclusiveMonitor&>(exclusive_monitor_)} {
     SetPageTable(memory.GetCurrentPageTable());
+    
+    // Register with the memory system for cache invalidation notifications
+    RegisterWithMemorySystem(memory);
 }
 
 ARM_Dynarmic::~ARM_Dynarmic() = default;
@@ -378,4 +381,12 @@ std::unique_ptr<Dynarmic::A32::Jit> ARM_Dynarmic::MakeJit() {
 
 void ARM_Dynarmic::PurgeState() {
     ClearInstructionCache();
+}
+
+void ARM_Dynarmic::RegisterWithMemorySystem(Memory::MemorySystem& memory_system) {
+    // Register a callback with the memory system to invalidate the block cache when memory is modified
+    memory_system.RegisterWriteCallback([this](Memory::VAddr addr, std::size_t size) {
+        // Invalidate any blocks that might contain this address
+        this->InvalidateCacheRange(addr, size);
+    });
 }
