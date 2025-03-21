@@ -277,9 +277,8 @@ public:
     std::shared_ptr<BackingMem> vram_mem;
     std::shared_ptr<BackingMem> n3ds_extra_ram_mem;
     std::shared_ptr<BackingMem> dsp_mem;
-    MemorySystem* memory_system;
 
-    Impl(MemorySystem* memory_system_);
+    Impl();
 
     const u8* GetPtr(Region r) const {
         switch (r) {
@@ -435,16 +434,12 @@ public:
 #else
                 std::memcpy(dest_ptr, src_buffer, copy_amount);
 #endif
-                // Notify callbacks about the write
-                memory_system->NotifyWriteCallbacks(current_vaddr, copy_amount);
                 break;
             }
             case PageType::Special: {
                 MMIORegionPointer handler = GetMMIOHandler(page_table, current_vaddr);
                 DEBUG_ASSERT(handler);
                 handler->WriteBlock(current_vaddr, src_buffer, copy_amount);
-                // Notify callbacks about the write
-                memory_system->NotifyWriteCallbacks(current_vaddr, copy_amount);
                 break;
             }
             case PageType::RasterizerCachedMemory: {
@@ -457,8 +452,6 @@ public:
 #else
                 std::memcpy(GetPointerForRasterizerCache(current_vaddr), src_buffer, copy_amount);
 #endif
-                // Notify callbacks about the write
-                memory_system->NotifyWriteCallbacks(current_vaddr, copy_amount);
                 break;
             }
             default:
@@ -540,14 +533,13 @@ private:
     friend class boost::serialization::access;
 };
 
-MemorySystem::Impl::Impl(MemorySystem* memory_system_)
-    : memory_system(memory_system_),
-      fcram_mem(std::make_shared<BackingMemImpl<Region::FCRAM>>(*this)),
+MemorySystem::Impl::Impl()
+    : fcram_mem(std::make_shared<BackingMemImpl<Region::FCRAM>>(*this)),
       vram_mem(std::make_shared<BackingMemImpl<Region::VRAM>>(*this)),
       n3ds_extra_ram_mem(std::make_shared<BackingMemImpl<Region::N3DS>>(*this)),
       dsp_mem(std::make_shared<BackingMemImpl<Region::DSP>>(*this)) {}
 
-MemorySystem::MemorySystem() : impl(std::make_unique<Impl>(this)) {}
+MemorySystem::MemorySystem() : impl(std::make_unique<Impl>()) {}
 MemorySystem::~MemorySystem() = default;
 
 template <class Archive>
@@ -630,27 +622,6 @@ void MemorySystem::UnregisterPageTable(std::shared_ptr<PageTable> page_table) {
     }
 }
 
-std::size_t MemorySystem::RegisterWriteCallback(MemoryWriteCallback callback) {
-    std::size_t handle = next_callback_handle++;
-    write_callbacks.push_back(std::move(callback));
-    return handle;
-}
-
-void MemorySystem::UnregisterWriteCallback(std::size_t handle) {
-    // This is a simple implementation that doesn't actually use the handle
-    // In a more complex implementation, we would store the handle with each callback
-    // and remove the specific callback associated with the handle
-    if (!write_callbacks.empty()) {
-        write_callbacks.pop_back();
-    }
-}
-
-void MemorySystem::NotifyWriteCallbacks(VAddr addr, std::size_t size) {
-    for (const auto& callback : write_callbacks) {
-        callback(addr, size);
-    }
-}
-
 template <typename T>
 T ReadMMIO(MMIORegionPointer mmio_handler, VAddr addr);
 
@@ -714,9 +685,6 @@ void MemorySystem::Write(const VAddr vaddr, const T data) {
     if (page_pointer) {
         // NOTE: Avoid adding any extra logic to this fast-path block
         std::memcpy(&page_pointer[vaddr & CITRA_PAGE_MASK], &data, sizeof(T));
-        
-        // Notify callbacks about the write
-        this->NotifyWriteCallbacks(vaddr, sizeof(T));
         return;
     }
 
@@ -746,18 +714,10 @@ void MemorySystem::Write(const VAddr vaddr, const T data) {
     case PageType::RasterizerCachedMemory: {
         RasterizerFlushVirtualRegion(vaddr, sizeof(T), FlushMode::Invalidate);
         std::memcpy(GetPointerForRasterizerCache(vaddr), &data, sizeof(T));
-        
-        // Notify callbacks about the write
-        this->NotifyWriteCallbacks(vaddr, sizeof(T));
         break;
     }
     case PageType::Special:
         WriteMMIO<T>(impl->GetMMIOHandler(*impl->current_page_table, vaddr), vaddr, data);
-        
-        // Notify callbacks about the write
-        // Note: For MMIO, we're not sure if the write actually modified memory that could contain code
-        // But it's better to be safe and notify the callbacks anyway
-        this->NotifyWriteCallbacks(vaddr, sizeof(T));
         break;
     default:
         UNREACHABLE();
@@ -1174,16 +1134,12 @@ void MemorySystem::ZeroBlock(const Kernel::Process& process, const VAddr dest_ad
 #else
             std::memset(dest_ptr, 0, copy_amount);
 #endif
-            // Notify callbacks about the write
-            this->NotifyWriteCallbacks(current_vaddr, copy_amount);
             break;
         }
         case PageType::Special: {
             MMIORegionPointer handler = impl->GetMMIOHandler(page_table, current_vaddr);
             DEBUG_ASSERT(handler);
             handler->WriteBlock(current_vaddr, zeros.data(), copy_amount);
-            // Notify callbacks about the write
-            this->NotifyWriteCallbacks(current_vaddr, copy_amount);
             break;
         }
         case PageType::RasterizerCachedMemory: {
@@ -1194,8 +1150,6 @@ void MemorySystem::ZeroBlock(const Kernel::Process& process, const VAddr dest_ad
 #else
             std::memset(GetPointerForRasterizerCache(current_vaddr), 0, copy_amount);
 #endif
-            // Notify callbacks about the write
-            this->NotifyWriteCallbacks(current_vaddr, copy_amount);
             break;
         }
         default:

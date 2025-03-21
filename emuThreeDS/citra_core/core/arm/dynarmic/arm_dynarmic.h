@@ -58,12 +58,6 @@ public:
     void ClearExclusiveState() override;
     void SetPageTable(const std::shared_ptr<Memory::PageTable>& page_table) override;
     void PurgeState() override;
-    
-    /**
-     * Register this CPU core with the memory system for cache invalidation notifications
-     * @param memory_system The memory system to register with
-     */
-    void RegisterWithMemorySystem(Memory::MemorySystem& memory_system) override;
 
 protected:
     std::shared_ptr<Memory::PageTable> GetPageTable() const override;
