@@ -2029,6 +2029,38 @@ ADD_INST : {
 
         u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple addition without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct addition using NEON
+            uint32x2_t v_rn = vdup_n_u32(rn_val);
+            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t result = vadd_u32(v_rn, v_op);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            bool carry;
+            bool overflow;
+            RD = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Cpsr & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                cpu->CFlag = carry;
+                cpu->VFlag = overflow;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(add_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         bool carry;
         bool overflow;
         RD = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
@@ -2049,6 +2081,7 @@ ADD_INST : {
             INC_PC(sizeof(add_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(add_inst));
@@ -2065,6 +2098,35 @@ AND_INST : {
         if (inst_cream->Rn == 15)
             lop += 2 * cpu->GetInstructionSize();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple AND without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct AND using NEON
+            uint32x2_t v_lop = vdup_n_u32(lop);
+            uint32x2_t v_rop = vdup_n_u32(rop);
+            uint32x2_t result = vand_u32(v_lop, v_rop);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            RD = lop & rop;
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Cpsr & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(and_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = lop & rop;
 
         if (inst_cream->S && (inst_cream->Rd == 15)) {
@@ -2082,6 +2144,7 @@ AND_INST : {
             INC_PC(sizeof(and_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(and_inst));
@@ -2110,6 +2173,35 @@ BIC_INST : {
             lop += 2 * cpu->GetInstructionSize();
         }
         u32 rop = SHIFTER_OPERAND;
+        
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple BIC without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct BIC using NEON
+            uint32x2_t v_lop = vdup_n_u32(lop);
+            uint32x2_t v_rop = vdup_n_u32(~rop);  // Invert bits first
+            uint32x2_t result = vand_u32(v_lop, v_rop);  // AND with inverted operand
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            RD = lop & (~rop);
+            if ((inst_cream->S) && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(bic_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = lop & (~rop);
         if ((inst_cream->S) && (inst_cream->Rd == 15)) {
             if (cpu->CurrentModeHasSPSR()) {
@@ -2126,6 +2218,7 @@ BIC_INST : {
             INC_PC(sizeof(bic_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(bic_inst));
@@ -2235,6 +2328,24 @@ CMN_INST : {
         if (inst_cream->Rn == 15)
             rn_val += 2 * cpu->GetInstructionSize();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // CMN always needs to update flags, so we can't use a simple NEON addition
+        // But we can use NEON to calculate the result and then update flags
+        uint32x2_t v_rn = vdup_n_u32(rn_val);
+        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
+        uint32x2_t v_result = vadd_u32(v_rn, v_op2);  // NEON addition
+        u32 result = vget_lane_u32(v_result, 0);
+        
+        // We still need to calculate carry and overflow flags
+        bool carry;
+        bool overflow;
+        AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
+        
+        UPDATE_NFLAG(result);
+        UPDATE_ZFLAG(result);
+        cpu->CFlag = carry;
+        cpu->VFlag = overflow;
+#else
         bool carry;
         bool overflow;
         u32 result = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
@@ -2243,6 +2354,7 @@ CMN_INST : {
         UPDATE_ZFLAG(result);
         cpu->CFlag = carry;
         cpu->VFlag = overflow;
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(cmn_inst));
@@ -2257,6 +2369,24 @@ CMP_INST : {
         if (inst_cream->Rn == 15)
             rn_val += 2 * cpu->GetInstructionSize();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // CMP always needs to update flags, so we can't use a simple NEON subtraction
+        // But we can use NEON to calculate the result and then update flags
+        uint32x2_t v_rn = vdup_n_u32(rn_val);
+        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
+        uint32x2_t v_result = vsub_u32(v_rn, v_op2);  // NEON subtraction
+        u32 result = vget_lane_u32(v_result, 0);
+        
+        // We still need to calculate carry and overflow flags
+        bool carry;
+        bool overflow;
+        AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
+        
+        UPDATE_NFLAG(result);
+        UPDATE_ZFLAG(result);
+        cpu->CFlag = carry;
+        cpu->VFlag = overflow;
+#else
         bool carry;
         bool overflow;
         u32 result = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
@@ -2265,6 +2395,7 @@ CMP_INST : {
         UPDATE_ZFLAG(result);
         cpu->CFlag = carry;
         cpu->VFlag = overflow;
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(cmp_inst));
@@ -2326,6 +2457,35 @@ EOR_INST : {
             lop += 2 * cpu->GetInstructionSize();
         }
         u32 rop = SHIFTER_OPERAND;
+        
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple XOR without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct XOR using NEON
+            uint32x2_t v_lop = vdup_n_u32(lop);
+            uint32x2_t v_rop = vdup_n_u32(rop);
+            uint32x2_t result = veor_u32(v_lop, v_rop);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            RD = lop ^ rop;
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(eor_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = lop ^ rop;
         if (inst_cream->S && (inst_cream->Rd == 15)) {
             if (cpu->CurrentModeHasSPSR()) {
@@ -2342,6 +2502,7 @@ EOR_INST : {
             INC_PC(sizeof(eor_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(eor_inst));
@@ -2362,6 +2523,128 @@ LDM_INST : {
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
         unsigned int inst = inst_cream->inst;
+
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for loading multiple consecutive registers when memory is aligned
+        // IMPORTANT: Always use ReadMemory32 for actual memory access to ensure memory protection
+        if (!BIT(inst, 22) && (addr & 0x3) == 0) {
+            // Find consecutive registers to load with NEON
+            int i = 0;
+            while (i < 16) {
+                // Skip registers that aren't being loaded
+                if (!BIT(inst, i)) {
+                    i++;
+                    continue;
+                }
+                
+                // Count consecutive registers
+                int start_reg = i;
+                int consecutive_count = 1;
+                i++;
+                
+                while (i < 16 && BIT(inst, i) && consecutive_count < 4) {
+                    consecutive_count++;
+                    i++;
+                }
+                
+                // Use ReadMemory32 for each register but optimize with NEON for processing
+                if (consecutive_count >= 2) {
+                    if (consecutive_count == 4) {
+                        // Load 4 registers
+                        uint32_t values[4];
+                        
+                        // Read memory safely using ReadMemory32 - NEVER access memory directly
+                        for (int j = 0; j < 4; j++) {
+                            values[j] = cpu->ReadMemory32(addr + (j * 4));
+                        }
+                        
+                        // Use NEON to process values if needed (only for local processing, not memory access)
+                        uint32x4_t loaded = vld1q_u32(values);
+                        
+                        // Handle PC specially if it's in the group
+                        if (start_reg + 3 >= 15) {
+                            for (int j = 0; j < consecutive_count; j++) {
+                                unsigned int ret = values[j];
+                                if (start_reg + j == 15) {
+                                    cpu->TFlag = ret & 0x1;
+                                    ret &= 0xFFFFFFFE;
+                                }
+                                cpu->Reg[start_reg + j] = ret;
+                            }
+                        } else {
+                            // Regular registers - can use NEON to process if needed
+                            cpu->Reg[start_reg] = values[0];
+                            cpu->Reg[start_reg+1] = values[1];
+                            cpu->Reg[start_reg+2] = values[2];
+                            cpu->Reg[start_reg+3] = values[3];
+                        }
+                        addr += 16; // 4 registers * 4 bytes
+                    } else if (consecutive_count == 3) {
+                        // Load 3 registers
+                        uint32_t values[3];
+                        
+                        // Read memory safely using ReadMemory32 - NEVER access memory directly
+                        for (int j = 0; j < 3; j++) {
+                            values[j] = cpu->ReadMemory32(addr + (j * 4));
+                        }
+                        
+                        // Handle PC specially if it's in the group
+                        if (start_reg + 2 >= 15) {
+                            for (int j = 0; j < 3; j++) {
+                                if (start_reg + j == 15) {
+                                    cpu->TFlag = values[j] & 0x1;
+                                    values[j] &= 0xFFFFFFFE;
+                                }
+                                cpu->Reg[start_reg + j] = values[j];
+                            }
+                        } else {
+                            // Regular registers
+                            cpu->Reg[start_reg] = values[0];
+                            cpu->Reg[start_reg+1] = values[1];
+                            cpu->Reg[start_reg+2] = values[2];
+                        }
+                        addr += 12; // 3 registers * 4 bytes
+                    } else { // consecutive_count == 2
+                        // Load 2 registers
+                        uint32_t values[2];
+                        
+                        // Read memory safely using ReadMemory32 - NEVER access memory directly
+                        for (int j = 0; j < 2; j++) {
+                            values[j] = cpu->ReadMemory32(addr + (j * 4));
+                        }
+                        
+                        // Handle PC specially if it's in the group
+                        if (start_reg + 1 >= 15) {
+                            for (int j = 0; j < 2; j++) {
+                                if (start_reg + j == 15) {
+                                    cpu->TFlag = values[j] & 0x1;
+                                    values[j] &= 0xFFFFFFFE;
+                                }
+                                cpu->Reg[start_reg + j] = values[j];
+                            }
+                        } else {
+                            // Regular registers
+                            cpu->Reg[start_reg] = values[0];
+                            cpu->Reg[start_reg+1] = values[1];
+                        }
+                        addr += 8; // 2 registers * 4 bytes
+                    }
+                } else {
+                    // Single register - use normal path
+                    unsigned int ret = cpu->ReadMemory32(addr);
+                    
+                    // For armv5t, should enter thumb when bits[0] is non-zero.
+                    if (start_reg == 15) {
+                        cpu->TFlag = ret & 0x1;
+                        ret &= 0xFFFFFFFE;
+                    }
+                    
+                    cpu->Reg[start_reg] = ret;
+                    addr += 4;
+                }
+            }
+        } else
+#endif
         if (BIT(inst, 22) && !BIT(inst, 15)) {
             for (int i = 0; i < 13; i++) {
                 if (BIT(inst, i)) {
@@ -2735,6 +3018,32 @@ MOV_INST : {
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mov_inst* inst_cream = (mov_inst*)inst_base->component;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // For MOV, we don't actually need NEON for the operation itself since it's just assignment
+        // But we can still optimize the common case to avoid unnecessary branches and flag updates
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct assignment for the common case (no flags, not PC)
+            RD = SHIFTER_OPERAND;
+        } else {
+            // Handle the cases with flags or PC as destination
+            RD = SHIFTER_OPERAND;
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(mov_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = SHIFTER_OPERAND;
         if (inst_cream->S && (inst_cream->Rd == 15)) {
             if (cpu->CurrentModeHasSPSR()) {
@@ -2751,6 +3060,7 @@ MOV_INST : {
             INC_PC(sizeof(mov_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mov_inst));
@@ -2858,6 +3168,22 @@ MUL_INST : {
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mul_inst* inst_cream = (mul_inst*)inst_base->component;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Use NEON intrinsics for multiplication
+        uint32_t rm_val = RM;
+        uint32_t rs_val = RS;
+        
+        // Fast path using NEON vmul
+        uint32x2_t v_rm = vdup_n_u32(rm_val);
+        uint32x2_t v_rs = vdup_n_u32(rs_val);
+        uint32x2_t result = vmul_u32(v_rm, v_rs);
+        RD = vget_lane_u32(result, 0);
+        
+        if (inst_cream->S) {
+            UPDATE_NFLAG(RD);
+            UPDATE_ZFLAG(RD);
+        }
+#else
         u64 rm = RM;
         u64 rs = RS;
         RD = static_cast<u32>((rm * rs) & 0xffffffff);
@@ -2865,6 +3191,7 @@ MUL_INST : {
             UPDATE_NFLAG(RD);
             UPDATE_ZFLAG(RD);
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mul_inst));
@@ -2875,6 +3202,34 @@ MVN_INST : {
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mvn_inst* const inst_cream = (mvn_inst*)inst_base->component;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple MVN without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct MVN using NEON
+            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t result = vmvn_u32(v_op);  // Bitwise NOT
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            RD = ~SHIFTER_OPERAND;
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(mvn_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = ~SHIFTER_OPERAND;
 
         if (inst_cream->S && (inst_cream->Rd == 15)) {
@@ -2892,6 +3247,7 @@ MVN_INST : {
             INC_PC(sizeof(mvn_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mvn_inst));
@@ -2908,6 +3264,35 @@ ORR_INST : {
         if (inst_cream->Rn == 15)
             lop += 2 * cpu->GetInstructionSize();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple OR without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct OR using NEON
+            uint32x2_t v_lop = vdup_n_u32(lop);
+            uint32x2_t v_rop = vdup_n_u32(rop);
+            uint32x2_t result = vorr_u32(v_lop, v_rop);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            RD = lop | rop;
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(orr_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         RD = lop | rop;
 
         if (inst_cream->S && (inst_cream->Rd == 15)) {
@@ -2925,6 +3310,7 @@ ORR_INST : {
             INC_PC(sizeof(orr_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(orr_inst));
@@ -3160,6 +3546,38 @@ RSB_INST : {
         if (inst_cream->Rn == 15)
             rn_val += 2 * cpu->GetInstructionSize();
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple RSB without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // RSB is OP2 - OP1, which is equivalent to OP2 + (~OP1 + 1)
+            uint32x2_t v_rn = vdup_n_u32(rn_val);
+            uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t result = vsub_u32(v_op2, v_rn);  // NEON subtraction
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            bool carry;
+            bool overflow;
+            RD = AddWithCarry(~rn_val, SHIFTER_OPERAND, 1, &carry, &overflow);
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                cpu->CFlag = carry;
+                cpu->VFlag = overflow;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(rsb_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         bool carry;
         bool overflow;
         RD = AddWithCarry(~rn_val, SHIFTER_OPERAND, 1, &carry, &overflow);
@@ -3180,6 +3598,7 @@ RSB_INST : {
             INC_PC(sizeof(rsb_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(rsb_inst));
@@ -3887,6 +4306,106 @@ STM_INST : {
         unsigned int old_RN = cpu->Reg[Rn];
 
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
+        
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for storing multiple consecutive registers when memory is aligned
+        // IMPORTANT: Always use WriteMemory32 for actual memory access to ensure memory protection
+        if (BIT(inst_cream->inst, 22) != 1 && (addr & 0x3) == 0) {
+            // Find consecutive registers to store with NEON
+            unsigned int i = 0;
+            while (i < 15) { // Don't include PC in NEON optimization
+                // Skip registers that aren't being stored
+                if (!BIT(inst_cream->inst, i)) {
+                    i++;
+                    continue;
+                }
+                
+                // Count consecutive registers
+                unsigned int start_reg = i;
+                unsigned int consecutive_count = 1;
+                i++;
+                
+                while (i < 15 && BIT(inst_cream->inst, i) && consecutive_count < 4) {
+                    consecutive_count++;
+                    i++;
+                }
+                
+                // Use NEON to prepare values, but ALWAYS use WriteMemory32 for actual memory access
+                // NEVER use direct memory access with NEON intrinsics (vst1q_u32, etc.) as it bypasses memory protection
+                if (consecutive_count >= 2) {
+                    if (consecutive_count == 4) {
+                        // Store 4 registers at once
+                        uint32_t value_array[4];
+                        
+                        // Handle Rn specially if it's in the group
+                        for (unsigned int j = 0; j < consecutive_count; j++) {
+                            if (start_reg + j == Rn) {
+                                value_array[j] = old_RN;
+                            } else {
+                                value_array[j] = cpu->Reg[start_reg + j];
+                            }
+                        }
+                        
+                        // IMPORTANT: Use WriteMemory32 for each value to ensure memory protection
+                        // This is critical to prevent crashes due to invalid memory access
+                        for (unsigned int j = 0; j < 4; j++) {
+                            cpu->WriteMemory32(addr + (j * 4), value_array[j]);
+                        }
+                        addr += 16; // 4 registers * 4 bytes
+                    } else if (consecutive_count == 3) {
+                        // Store 3 registers
+                        uint32_t value_array[3];
+                        
+                        // Handle Rn specially if it's in the group
+                        for (unsigned int j = 0; j < consecutive_count; j++) {
+                            if (start_reg + j == Rn) {
+                                value_array[j] = old_RN;
+                            } else {
+                                value_array[j] = cpu->Reg[start_reg + j];
+                            }
+                        }
+                        
+                        // Use WriteMemory32 for each value to ensure memory protection
+                        for (unsigned int j = 0; j < 3; j++) {
+                            cpu->WriteMemory32(addr + (j * 4), value_array[j]);
+                        }
+                        addr += 12; // 3 registers * 4 bytes
+                    } else { // consecutive_count == 2
+                        // Store 2 registers
+                        uint32_t value_array[2];
+                        
+                        // Handle Rn specially if it's in the group
+                        for (unsigned int j = 0; j < consecutive_count; j++) {
+                            if (start_reg + j == Rn) {
+                                value_array[j] = old_RN;
+                            } else {
+                                value_array[j] = cpu->Reg[start_reg + j];
+                            }
+                        }
+                        
+                        // Use WriteMemory32 for each value to ensure memory protection
+                        for (unsigned int j = 0; j < 2; j++) {
+                            cpu->WriteMemory32(addr + (j * 4), value_array[j]);
+                        }
+                        addr += 8; // 2 registers * 4 bytes
+                    }
+                } else {
+                    // Single register - use normal path
+                    if (start_reg == Rn) {
+                        cpu->WriteMemory32(addr, old_RN);
+                    } else {
+                        cpu->WriteMemory32(addr, cpu->Reg[start_reg]);
+                    }
+                    addr += 4;
+                }
+            }
+            
+            // Handle PC separately
+            if (BIT(inst_cream->inst, 15)) {
+                cpu->WriteMemory32(addr, cpu->Reg[15] + 8);
+            }
+        } else
+#endif
         if (BIT(inst_cream->inst, 22) == 1) {
             for (int i = 0; i < 13; i++) {
                 if (BIT(inst_cream->inst, i)) {
@@ -4163,6 +4682,38 @@ SUB_INST : {
 
         u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Fast path for simple subtraction without flags (most common case)
+        if (!inst_cream->S && inst_cream->Rd != 15) {
+            // Direct subtraction using NEON
+            uint32x2_t v_rn = vdup_n_u32(rn_val);
+            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t result = vsub_u32(v_rn, v_op);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Use the regular path for cases that need flag updates or PC changes
+            bool carry;
+            bool overflow;
+            RD = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
+
+            if (inst_cream->S && (inst_cream->Rd == 15)) {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else if (inst_cream->S) {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                cpu->CFlag = carry;
+                cpu->VFlag = overflow;
+            }
+            if (inst_cream->Rd == 15) {
+                INC_PC(sizeof(sub_inst));
+                goto DISPATCH;
+            }
+        }
+#else
         bool carry;
         bool overflow;
         RD = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
@@ -4183,6 +4734,7 @@ SUB_INST : {
             INC_PC(sizeof(sub_inst));
             goto DISPATCH;
         }
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(sub_inst));
@@ -4308,11 +4860,23 @@ TEQ_INST : {
         if (inst_cream->Rn == 15)
             lop += cpu->GetInstructionSize() * 2;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // TEQ always updates flags, but we can use NEON for the XOR operation
+        uint32x2_t v_lop = vdup_n_u32(lop);
+        uint32x2_t v_rop = vdup_n_u32(rop);
+        uint32x2_t v_result = veor_u32(v_lop, v_rop);  // NEON XOR
+        u32 result = vget_lane_u32(v_result, 0);
+        
+        UPDATE_NFLAG(result);
+        UPDATE_ZFLAG(result);
+        UPDATE_CFLAG_WITH_SC;
+#else
         u32 result = lop ^ rop;
 
         UPDATE_NFLAG(result);
         UPDATE_ZFLAG(result);
         UPDATE_CFLAG_WITH_SC;
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(teq_inst));
@@ -4329,11 +4893,23 @@ TST_INST : {
         if (inst_cream->Rn == 15)
             lop += cpu->GetInstructionSize() * 2;
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // TST always updates flags, but we can use NEON for the AND operation
+        uint32x2_t v_lop = vdup_n_u32(lop);
+        uint32x2_t v_rop = vdup_n_u32(rop);
+        uint32x2_t v_result = vand_u32(v_lop, v_rop);  // NEON AND
+        u32 result = vget_lane_u32(v_result, 0);
+        
+        UPDATE_NFLAG(result);
+        UPDATE_ZFLAG(result);
+        UPDATE_CFLAG_WITH_SC;
+#else
         u32 result = lop & rop;
 
         UPDATE_NFLAG(result);
         UPDATE_ZFLAG(result);
         UPDATE_CFLAG_WITH_SC;
+#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(tst_inst));
