@@ -775,6 +775,31 @@ static void MLnS(RegisterPostIndexed)(ARMul_State* cpu, unsigned int inst,
 }
 
 static void LdnStM(DecrementBefore)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    unsigned int Rn = BITS(inst, 16, 19);
+    unsigned int i = BITS(inst, 0, 15);
+    
+    // Use NEON intrinsics to count bits more efficiently
+    // This is faster than the bit-by-bit counting loop
+    int count = 0;
+    
+#if defined(__aarch64__)
+    // Use the dedicated instruction on ARM64
+    count = __builtin_popcount(i);
+#else
+    // For older ARM with NEON, use vector operations
+    uint8x8_t input = vcreate_u8(i);
+    uint8x8_t cnt = vcnt_u8(input);
+    uint16x4_t sum = vpaddl_u8(cnt);
+    uint32x2_t sum2 = vpaddl_u16(sum);
+    count = vget_lane_u32(sum2, 0);
+#endif
+    
+    virt_addr = CHECK_READ_REG15_WA(cpu, Rn) - count * 4;
+    
+    if (CondPassed(cpu, BITS(inst, 28, 31)) && BIT(inst, 21))
+        cpu->Reg[Rn] -= count * 4;
+#else
     unsigned int Rn = BITS(inst, 16, 19);
     unsigned int i = BITS(inst, 0, 15);
     int count = 0;
@@ -789,6 +814,7 @@ static void LdnStM(DecrementBefore)(ARMul_State* cpu, unsigned int inst, unsigne
 
     if (CondPassed(cpu, BITS(inst, 28, 31)) && BIT(inst, 21))
         cpu->Reg[Rn] -= count * 4;
+#endif
 }
 
 static void LdnStM(IncrementBefore)(ARMul_State* cpu, unsigned int inst, unsigned int& virt_addr) {
