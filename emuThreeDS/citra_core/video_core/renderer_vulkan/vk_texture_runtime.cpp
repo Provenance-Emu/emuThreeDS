@@ -529,7 +529,7 @@ void TextureRuntime::ClearTextureWithRenderpass(Surface& surface,
 }
 
 bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
-                                  const VideoCore::TextureCopy& copy) {
+                                   std::span<const VideoCore::TextureCopy> copies) {
     renderpass_cache.EndRendering();
 
     const RecordParams params = {
@@ -542,8 +542,9 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
         .dst_image = dest.Image(),
     };
 
-    scheduler.Record([params, copy](vk::CommandBuffer cmdbuf) {
-        const vk::ImageCopy image_copy = {
+    boost::container::small_vector<vk::ImageCopy, 2> vk_copies;
+    std::ranges::transform(copies, std::back_inserter(vk_copies), [&](const auto& copy) {
+        return vk::ImageCopy{
             .srcSubresource{
                 .aspectMask = params.aspect,
                 .mipLevel = copy.src_level,
@@ -562,7 +563,9 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                           0},
             .extent = {copy.extent.width, copy.extent.height, 1},
         };
+    });
 
+    scheduler.Record([params, copies = std::move(vk_copies)](vk::CommandBuffer cmdbuf) {
         const bool self_copy = params.src_image == params.dst_image;
         const vk::ImageLayout new_src_layout =
             self_copy ? vk::ImageLayout::eGeneral : vk::ImageLayout::eTransferSrcOptimal;
@@ -580,8 +583,8 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                 .image = params.src_image,
                 .subresourceRange{
                     .aspectMask = params.aspect,
-                    .baseMipLevel = copy.src_level,
-                    .levelCount = 1,
+                    .baseMipLevel = 0,
+                    .levelCount = VK_REMAINING_MIP_LEVELS,
                     .baseArrayLayer = 0,
                     .layerCount = VK_REMAINING_ARRAY_LAYERS,
                 },
@@ -596,8 +599,8 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                 .image = params.dst_image,
                 .subresourceRange{
                     .aspectMask = params.aspect,
-                    .baseMipLevel = copy.dst_level,
-                    .levelCount = 1,
+                    .baseMipLevel = 0,
+                    .levelCount = VK_REMAINING_MIP_LEVELS,
                     .baseArrayLayer = 0,
                     .layerCount = VK_REMAINING_ARRAY_LAYERS,
                 },
@@ -614,8 +617,8 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                 .image = params.src_image,
                 .subresourceRange{
                     .aspectMask = params.aspect,
-                    .baseMipLevel = copy.src_level,
-                    .levelCount = 1,
+                    .baseMipLevel = 0,
+                    .levelCount = VK_REMAINING_MIP_LEVELS,
                     .baseArrayLayer = 0,
                     .layerCount = VK_REMAINING_ARRAY_LAYERS,
                 },
@@ -630,8 +633,8 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                 .image = params.dst_image,
                 .subresourceRange{
                     .aspectMask = params.aspect,
-                    .baseMipLevel = copy.dst_level,
-                    .levelCount = 1,
+                    .baseMipLevel = 0,
+                    .levelCount = VK_REMAINING_MIP_LEVELS,
                     .baseArrayLayer = 0,
                     .layerCount = VK_REMAINING_ARRAY_LAYERS,
                 },
@@ -642,7 +645,7 @@ bool TextureRuntime::CopyTextures(Surface& source, Surface& dest,
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
 
         cmdbuf.copyImage(params.src_image, new_src_layout, params.dst_image, new_dst_layout,
-                         image_copy);
+                         copies);
 
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer, params.pipeline_flags,
                                vk::DependencyFlagBits::eByRegion, {}, {}, post_barriers);
