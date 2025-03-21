@@ -43,54 +43,44 @@ u8 ARMul_UnsignedAbsoluteDifference(u8 left, u8 right) {
 u32 AddWithCarry(u32 left, u32 right, u32 carry_in, bool* carry_out_occurred,
                  bool* overflow_occurred) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM intrinsics for more efficient addition with carry
-    uint32x2_t v_left = vdup_n_u32(left);
-    uint32x2_t v_right = vdup_n_u32(right);
+    u32 result;
+    u32 carry_out = 0;
+    u32 overflow = 0;
     
-    // First add left and right
-    uint32x2_t v_result = vadd_u32(v_left, v_right);
-    
-    // Check for carry from first addition
-    uint32x2_t v_carry = vclt_u32(v_result, v_left);  // result < left means carry occurred
-    uint32_t first_carry = vget_lane_u32(v_carry, 0);
-    
-    // Add carry_in if needed
-    if (carry_in) {
-        uint32x2_t v_carry_in = vdup_n_u32(1);
-        uint32x2_t v_prev_result = v_result;
-        v_result = vadd_u32(v_result, v_carry_in);
+    // Use direct ARM64 assembly for the most efficient implementation
+    // This uses the adds/adcs instructions which set the carry and overflow flags
+    __asm__ volatile(
+        "mov w3, %w[carry_in]\n"    // Move carry_in to w3 register
+        "cmp w3, #0\n"             // Compare carry_in with 0
+        "cset w3, ne\n"            // Set w3 to 1 if carry_in != 0, otherwise 0
         
-        // Check for additional carry from adding carry_in
-        uint32x2_t v_second_carry = vclt_u32(v_result, v_prev_result);
-        uint32_t second_carry = vget_lane_u32(v_second_carry, 0);
+        "adds %w[result], %w[left], %w[right]\n"  // result = left + right, set flags
+        "cset w4, cs\n"            // Set w4 to 1 if carry set (CS), otherwise 0
+        "cset w5, vs\n"            // Set w5 to 1 if overflow set (VS), otherwise 0
         
-        // Combine carries
-        first_carry = first_carry | second_carry;
-    }
-    
-    uint32_t result = vget_lane_u32(v_result, 0);
+        "cmp w3, #0\n"             // Check if we need to add carry_in
+        "beq 1f\n"                 // Skip adding carry if w3 == 0
+        
+        "adds %w[result], %w[result], #1\n"  // result += 1, set flags
+        "cset w3, cs\n"            // Set w3 to 1 if carry set (CS), otherwise 0
+        "orr w4, w4, w3\n"         // Combine carries: w4 |= w3
+        "cset w3, vs\n"            // Set w3 to 1 if overflow set (VS), otherwise 0
+        "orr w5, w5, w3\n"         // Combine overflows: w5 |= w3
+        
+        "1:\n"                     // Label for skipping carry addition
+        "mov %w[carry_out], w4\n"   // Store final carry result
+        "mov %w[overflow], w5\n"    // Store final overflow result
+        
+        : [result] "=r" (result), [carry_out] "=r" (carry_out), [overflow] "=r" (overflow)
+        : [left] "r" (left), [right] "r" (right), [carry_in] "r" (carry_in)
+        : "w3", "w4", "w5", "cc"  // Clobbered registers and condition codes
+    );
     
     if (carry_out_occurred)
-        *carry_out_occurred = (first_carry != 0);
+        *carry_out_occurred = (carry_out != 0);
     
-    if (overflow_occurred) {
-        // Check for signed overflow: result has different sign than both inputs
-        // when inputs have the same sign
-        int32x2_t v_left_s = vreinterpret_s32_u32(v_left);
-        int32x2_t v_right_s = vreinterpret_s32_u32(v_right);
-        int32x2_t v_result_s = vreinterpret_s32_u32(v_result);
-        
-        // Check if left and right have the same sign
-        uint32x2_t v_same_sign = vceq_s32(vshr_n_s32(v_left_s, 31), vshr_n_s32(v_right_s, 31));
-        
-        // Check if result has different sign than left
-        uint32x2_t v_diff_sign = vceq_s32(vshr_n_s32(v_left_s, 31), vshr_n_s32(v_result_s, 31));
-        v_diff_sign = vmvn_u32(v_diff_sign);  // Invert to get different sign
-        
-        // Overflow occurred if inputs have same sign but result has different sign
-        uint32x2_t v_overflow = vand_u32(v_same_sign, v_diff_sign);
-        *overflow_occurred = vget_lane_u32(v_overflow, 0) != 0;
-    }
+    if (overflow_occurred)
+        *overflow_occurred = (overflow != 0);
     
     return result;
 #else
@@ -131,7 +121,8 @@ bool ARMul_AddOverflowQ(u32 a, u32 b) {
 // 8-bit signed saturated addition
 u8 ARMul_SignedSaturatedAdd8(u8 left, u8 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON intrinsics for saturated addition
+    // Use ARM NEON intrinsics for signed saturated addition
+    // We use NEON intrinsics as they're more portable across ARM compilers
     int8x8_t v_left = vdup_n_s8((s8)left);
     int8x8_t v_right = vdup_n_s8((s8)right);
     int8x8_t result = vqadd_s8(v_left, v_right);
@@ -154,7 +145,8 @@ u8 ARMul_SignedSaturatedAdd8(u8 left, u8 right) {
 // 8-bit signed saturated subtraction
 u8 ARMul_SignedSaturatedSub8(u8 left, u8 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON intrinsics for saturated subtraction
+    // Use ARM NEON intrinsics for signed saturated subtraction
+    // We use NEON intrinsics as they're more portable across ARM compilers
     int8x8_t v_left = vdup_n_s8((s8)left);
     int8x8_t v_right = vdup_n_s8((s8)right);
     int8x8_t result = vqsub_s8(v_left, v_right);
@@ -177,7 +169,8 @@ u8 ARMul_SignedSaturatedSub8(u8 left, u8 right) {
 // 16-bit signed saturated addition
 u16 ARMul_SignedSaturatedAdd16(u16 left, u16 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON intrinsics for saturated addition
+    // Use ARM NEON intrinsics for signed saturated addition
+    // We use NEON intrinsics as they're more portable across ARM compilers
     int16x4_t v_left = vdup_n_s16((s16)left);
     int16x4_t v_right = vdup_n_s16((s16)right);
     int16x4_t result = vqadd_s16(v_left, v_right);
@@ -200,7 +193,8 @@ u16 ARMul_SignedSaturatedAdd16(u16 left, u16 right) {
 // 16-bit signed saturated subtraction
 u16 ARMul_SignedSaturatedSub16(u16 left, u16 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM NEON intrinsics for saturated subtraction
+    // Use ARM NEON intrinsics for signed saturated subtraction
+    // We use NEON intrinsics as they're more portable across ARM compilers
     int16x4_t v_left = vdup_n_s16((s16)left);
     int16x4_t v_right = vdup_n_s16((s16)right);
     int16x4_t result = vqsub_s16(v_left, v_right);
@@ -224,6 +218,7 @@ u16 ARMul_SignedSaturatedSub16(u16 left, u16 right) {
 u8 ARMul_UnsignedSaturatedAdd8(u8 left, u8 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Use ARM NEON intrinsics for unsigned saturated addition
+    // We use NEON intrinsics as they're more portable across ARM compilers
     uint8x8_t v_left = vdup_n_u8(left);
     uint8x8_t v_right = vdup_n_u8(right);
     uint8x8_t result = vqadd_u8(v_left, v_right);
@@ -243,6 +238,7 @@ u8 ARMul_UnsignedSaturatedAdd8(u8 left, u8 right) {
 u16 ARMul_UnsignedSaturatedAdd16(u16 left, u16 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Use ARM NEON intrinsics for unsigned saturated addition
+    // We use NEON intrinsics as they're more portable across ARM compilers
     uint16x4_t v_left = vdup_n_u16(left);
     uint16x4_t v_right = vdup_n_u16(right);
     uint16x4_t result = vqadd_u16(v_left, v_right);
@@ -262,6 +258,7 @@ u16 ARMul_UnsignedSaturatedAdd16(u16 left, u16 right) {
 u8 ARMul_UnsignedSaturatedSub8(u8 left, u8 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Use ARM NEON intrinsics for unsigned saturated subtraction
+    // We use NEON intrinsics as they're more portable across ARM compilers
     uint8x8_t v_left = vdup_n_u8(left);
     uint8x8_t v_right = vdup_n_u8(right);
     uint8x8_t result = vqsub_u8(v_left, v_right);
@@ -279,6 +276,7 @@ u8 ARMul_UnsignedSaturatedSub8(u8 left, u8 right) {
 u16 ARMul_UnsignedSaturatedSub16(u16 left, u16 right) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Use ARM NEON intrinsics for unsigned saturated subtraction
+    // We use NEON intrinsics as they're more portable across ARM compilers
     uint16x4_t v_left = vdup_n_u16(left);
     uint16x4_t v_right = vdup_n_u16(right);
     uint16x4_t result = vqsub_u16(v_left, v_right);
@@ -295,13 +293,12 @@ u16 ARMul_UnsignedSaturatedSub16(u16 left, u16 right) {
 // Signed saturation.
 u32 ARMul_SignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM64 intrinsics for more efficient saturation
+    // Use a more portable approach with NEON intrinsics
     const u32 max = (1 << shift) - 1;
     const s32 min = -(1 << shift);
     s32 result;
     bool sat = false;
     
-    // Use ARM64 assembly for efficient saturation check
     if (value > (s32)max) {
         result = max;
         sat = true;
@@ -337,7 +334,7 @@ u32 ARMul_SignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
 // Unsigned saturation
 u32 ARMul_UnsignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
-    // Use ARM64 intrinsics for more efficient saturation
+    // Use a more portable approach
     const u32 max = (1 << shift) - 1;
     u32 result;
     bool sat = false;
