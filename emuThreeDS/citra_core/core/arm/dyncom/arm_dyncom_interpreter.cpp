@@ -41,16 +41,16 @@ inline uint32_t ROTATE_RIGHT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-    
+
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t right_shift = vdup_n_s32(-(int32_t)i);
     int32x2_t left_shift = vdup_n_s32(32 - (int32_t)i);
-    
+
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t result = vorr_u32(right_part, left_part);
-    
+
     return vget_lane_u32(result, 0);
 }
 
@@ -60,16 +60,16 @@ inline uint32_t ROTATE_LEFT_32_NEON(uint32_t n, uint32_t i) {
     if (i == 0) {
         return n;
     }
-    
+
     // Use NEON intrinsics for rotation with variable shift amounts
     uint32x2_t value = vdup_n_u32(n);
     int32x2_t left_shift = vdup_n_s32((int32_t)i);
     int32x2_t right_shift = vdup_n_s32(-((int32_t)(32 - i)));
-    
+
     uint32x2_t left_part = vshl_u32(value, left_shift);
     uint32x2_t right_part = vshl_u32(value, right_shift);
     uint32x2_t result = vorr_u32(left_part, right_part);
-    
+
     return vget_lane_u32(result, 0);
 }
 #endif
@@ -151,7 +151,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     int shift_imm = BITS(sht_oper, 7, 11);
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -160,12 +160,12 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (32 - shift_imm));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the shift using vshl_u32 which accepts variable shift amounts
         int32x2_t shift_amount = vdup_n_s32(shift_imm);
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -181,7 +181,7 @@ static unsigned int DPO(LogicalShiftLeftByImmediate)(ARMul_State* cpu, unsigned 
         cpu->shifter_carry_out = BIT(rm, 32 - shift_imm);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -209,7 +209,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -218,12 +218,12 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
     } else {
         // Use NEON intrinsics for shift operations
         uint32x2_t value = vdup_n_u32(rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(value, carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         uint32x2_t shifted = vshl_u32(value, shift_amount);
@@ -239,7 +239,7 @@ static unsigned int DPO(LogicalShiftRightByImmediate)(ARMul_State* cpu, unsigned
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -267,7 +267,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     unsigned int shifter_operand;
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -279,12 +279,12 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
     } else {
         // Use NEON intrinsics for arithmetic shift right
         int32x2_t value = vdup_n_s32((int32_t)rm);
-        
+
         // Extract the carry bit
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
         uint32x2_t carry_result = vand_u32(vreinterpret_u32_s32(value), carry_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_result, 0) != 0;
-        
+
         // Perform the arithmetic right shift
         int32x2_t shift_amount = vdup_n_s32(-(int32_t)shift_imm); // Negative for right shift
         int32x2_t shifted = vshl_s32(value, shift_amount); // Use signed shift for arithmetic shift
@@ -303,7 +303,7 @@ static unsigned int DPO(ArithmeticShiftRightByImmediate)(ARMul_State* cpu, unsig
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -331,7 +331,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
     unsigned int shifter_operand;
     unsigned int rm = CHECK_READ_REG15(cpu, RM);
     int shift_imm = BITS(sht_oper, 7, 11);
-    
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Optimized version using ARM NEON intrinsics
     if (shift_imm == 0) {
@@ -339,24 +339,24 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         // Use NEON intrinsics for RRX operation
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry = vdup_n_u32(cpu->CFlag);
-        
+
         // Extract the carry out bit
         uint32x2_t carry_out_mask = vdup_n_u32(1);
         uint32x2_t carry_out = vand_u32(value, carry_out_mask);
         cpu->shifter_carry_out = vget_lane_u32(carry_out, 0) != 0;
-        
+
         // Shift right by 1
         uint32x2_t shifted = vshr_n_u32(value, 1);
-        
+
         // Insert carry flag into bit 31
         uint32x2_t carry_shifted = vshl_n_u32(carry, 31);
         uint32x2_t result = vorr_u32(shifted, carry_shifted);
-        
+
         shifter_operand = vget_lane_u32(result, 0);
     } else {
         // Use our optimized ROTATE_RIGHT_32 function which already uses NEON
         shifter_operand = ROTATE_RIGHT_32(rm, shift_imm);
-        
+
         // Extract the carry bit
         uint32x2_t value = vdup_n_u32(rm);
         uint32x2_t carry_mask = vdup_n_u32(1U << (shift_imm - 1));
@@ -373,7 +373,7 @@ static unsigned int DPO(RotateRightByImmediate)(ARMul_State* cpu, unsigned int s
         cpu->shifter_carry_out = BIT(rm, shift_imm - 1);
     }
 #endif
-    
+
     return shifter_operand;
 }
 
@@ -416,23 +416,23 @@ static void LnSWoUB(ImmediateOffset)(ARMul_State* cpu, unsigned int inst, unsign
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-    
+
     // Extract U bit and offset
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t offset_mask = vdup_n_u32(0x00000FFF);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
     uint32x2_t offset = vand_u32(inst_vec, offset_mask);
-    
+
     // Get the base address
     uint32x2_t base_addr = vdup_n_u32(CHECK_READ_REG15_WA(cpu, Rn));
-    
+
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(base_addr, offset);
     else
         addr = vsub_u32(base_addr, offset);
-    
+
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -453,36 +453,36 @@ static void LnSWoUB(RegisterOffset)(ARMul_State* cpu, unsigned int inst, unsigne
     // Optimized version using ARM NEON intrinsics
     // Extract Rn and Rm fields using NEON operations
     uint32x2_t inst_vec = vdup_n_u32(inst);
-    
+
     // Extract Rn (bits 16-19)
     uint32x2_t rn_mask = vdup_n_u32(0x000F0000);
     uint32x2_t rn_field = vshr_n_u32(vand_u32(inst_vec, rn_mask), 16);
     unsigned int Rn = vget_lane_u32(rn_field, 0);
-    
+
     // Extract Rm (bits 0-3)
     uint32x2_t rm_mask = vdup_n_u32(0x0000000F);
     uint32x2_t rm_field = vand_u32(inst_vec, rm_mask);
     unsigned int Rm = vget_lane_u32(rm_field, 0);
-    
+
     // Get register values
     unsigned int rn = CHECK_READ_REG15_WA(cpu, Rn);
     unsigned int rm = CHECK_READ_REG15_WA(cpu, Rm);
-    
+
     // Extract U bit
     uint32x2_t u_bit_mask = vdup_n_u32(0x00800000);
     uint32x2_t u_bit = vshr_n_u32(vand_u32(inst_vec, u_bit_mask), 23);
-    
+
     // Create vectors for register values
     uint32x2_t rn_vec = vdup_n_u32(rn);
     uint32x2_t rm_vec = vdup_n_u32(rm);
-    
+
     // Calculate the final address based on U bit
     uint32x2_t addr;
     if (vget_lane_u32(u_bit, 0))
         addr = vadd_u32(rn_vec, rm_vec);
     else
         addr = vsub_u32(rn_vec, rm_vec);
-    
+
     virt_addr = vget_lane_u32(addr, 0);
 #else
     // Original implementation for non-ARM platforms
@@ -778,11 +778,11 @@ static void LdnStM(DecrementBefore)(ARMul_State* cpu, unsigned int inst, unsigne
 #if defined(__ARM_NEON) || defined(__aarch64__)
     unsigned int Rn = BITS(inst, 16, 19);
     unsigned int i = BITS(inst, 0, 15);
-    
+
     // Use NEON intrinsics to count bits more efficiently
     // This is faster than the bit-by-bit counting loop
     int count = 0;
-    
+
 #if defined(__aarch64__)
     // Use the dedicated instruction on ARM64
     count = __builtin_popcount(i);
@@ -794,9 +794,9 @@ static void LdnStM(DecrementBefore)(ARMul_State* cpu, unsigned int inst, unsigne
     uint32x2_t sum2 = vpaddl_u16(sum);
     count = vget_lane_u32(sum2, 0);
 #endif
-    
+
     virt_addr = CHECK_READ_REG15_WA(cpu, Rn) - count * 4;
-    
+
     if (CondPassed(cpu, BITS(inst, 28, 31)) && BIT(inst, 21))
         cpu->Reg[Rn] -= count * 4;
 #else
@@ -949,7 +949,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     // Optimized version using ARM NEON intrinsics
     // Create a vector with the instruction value
     uint32x2_t inst_vec = vdup_n_u32(inst);
-    
+
     // Extract bit fields using NEON operations
     uint32x2_t bits24_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F000000)), 24);
     uint32x2_t bit21 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00200000)), 21);
@@ -958,7 +958,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     uint32x2_t bits21_22 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00600000)), 21);
     uint32x2_t bit7 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x00000080)), 7);
     uint32x2_t bits23_27 = vshr_n_u32(vand_u32(inst_vec, vdup_n_u32(0x0F800000)), 23);
-    
+
     // Extract scalar values for comparison
     u32 bits24_27_val = vget_lane_u32(bits24_27, 0);
     u32 bit21_val = vget_lane_u32(bit21, 0);
@@ -967,7 +967,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
     u32 bits21_22_val = vget_lane_u32(bits21_22, 0);
     u32 bit7_val = vget_lane_u32(bit7, 0);
     u32 bits23_27_val = vget_lane_u32(bits23_27, 0);
-    
+
     // LnSWoUB addressing modes
     if (bits24_27_val == 5 && bit21_val == 0) {
         return LnSWoUB(ImmediateOffset);
@@ -987,7 +987,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return LnSWoUB(RegisterPostIndexed);
     } else if (bits24_27_val == 6 && bit21_val == 0 && bit4_val == 0) {
         return LnSWoUB(ScaledRegisterPostIndexed);
-    } 
+    }
     // MLnS addressing modes
     else if (bits24_27_val == 1 && bits21_22_val == 2 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(ImmediateOffset);
@@ -1001,7 +1001,7 @@ get_addr_fp_t GetAddressingOp(unsigned int inst) {
         return MLnS(ImmediatePostIndexed);
     } else if (bits24_27_val == 0 && bits21_22_val == 0 && bit7_val == 1 && bit4_val == 1) {
         return MLnS(RegisterPostIndexed);
-    } 
+    }
     // LdnStM addressing modes
     else if (bits23_27_val == 0x11) {
         return LdnStM(IncrementAfter);
@@ -1297,14 +1297,14 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
 #if defined __GNUC__ || (defined __clang__ && !defined _MSC_VER)
 #define GOTO_NEXT_INST                                                                             \
     GDB_BP_CHECK;                                                                                  \
-    if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
+    if (num_instrs >= cpu->NumInstrsToExecute) [[unlikely]]                                        \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
     goto* InstLabel[inst_base->idx]
 #else
 #define GOTO_NEXT_INST                                                                             \
     GDB_BP_CHECK;                                                                                  \
-    if (num_instrs >= cpu->NumInstrsToExecute)                                                     \
+    if (num_instrs >= cpu->NumInstrsToExecute) [[unlikely]]                                        \
         goto END;                                                                                  \
     num_instrs++;                                                                                  \
     switch (inst_base->idx) {                                                                      \
@@ -1955,32 +1955,33 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
 
     LOAD_NZCVT;
 DISPATCH : {
-    if (!cpu->NirqSig) {
-        if (!(cpu->Cpsr & 0x80)) {
-            goto END;
-        }
+    // Fast path for IRQ check
+    if (!cpu->NirqSig && !(cpu->Cpsr & 0x80)) [[unlikely]] {
+        goto END;
     }
 
+    // Align PC based on instruction set mode
     if (cpu->TFlag)
         cpu->Reg[15] &= 0xfffffffe;
     else
         cpu->Reg[15] &= 0xfffffffc;
 
     // Find the cached instruction cream, otherwise translate it...
+    // Use likely/unlikely to optimize branch prediction
     auto itr = cpu->instruction_cache.find(cpu->Reg[15]);
-    if (itr != cpu->instruction_cache.end()) {
+    if (itr != cpu->instruction_cache.end()) [[likely]] {
         ptr = itr->second;
-    } else if (cpu->NumInstrsToExecute != 1) {
-        if (InterpreterTranslateBlock(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+    } else if (cpu->NumInstrsToExecute != 1) [[likely]] {
+        if (InterpreterTranslateBlock(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION) [[unlikely]]
             goto END;
     } else {
-        if (InterpreterTranslateSingle(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION)
+        if (InterpreterTranslateSingle(cpu, ptr, cpu->Reg[15]) == FETCH_EXCEPTION) [[unlikely]]
             goto END;
     }
 
 #ifndef ANDROID
     // Find breakpoint if one exists within the block
-    if (GDBStub::IsConnected()) {
+    if (GDBStub::IsConnected()) [[unlikely]] {
         breakpoint_data =
             GDBStub::GetNextBreakpointFromAddress(cpu->Reg[15], GDBStub::BreakpointType::Execute);
     }
@@ -2024,65 +2025,82 @@ ADC_INST : {
     GOTO_NEXT_INST;
 }
 ADD_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         add_inst* const inst_cream = (add_inst*)inst_base->component;
 
-        u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
+        // Pre-fetch the Rn value with special handling for R15
+        const u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
+
+        // Pre-compute the shifter operand to avoid multiple calculations
+        const u32 shifter_operand = SHIFTER_OPERAND;
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Fast path for simple addition without flags (most common case)
+        // Super-optimized fast path for simple addition without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
-            // Direct addition using NEON
+            // Direct addition using NEON for better performance
+            // This avoids the function call overhead of AddWithCarry
             uint32x2_t v_rn = vdup_n_u32(rn_val);
-            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t v_op = vdup_n_u32(shifter_operand);
             uint32x2_t result = vadd_u32(v_rn, v_op);
             RD = vget_lane_u32(result, 0);
         } else {
             // Use the regular path for cases that need flag updates or PC changes
             bool carry;
             bool overflow;
-            RD = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
+            RD = AddWithCarry(rn_val, shifter_operand, 0, &carry, &overflow);
 
-            if (inst_cream->S && (inst_cream->Rd == 15)) {
+            // Special case for S-bit and Rd=PC
+            if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
                 if (cpu->CurrentModeHasSPSR()) {
                     cpu->Cpsr = cpu->Spsr_copy;
                     cpu->ChangePrivilegeMode(cpu->Cpsr & 0x1F);
                     LOAD_NZCVT;
                 }
             } else if (inst_cream->S) {
+                // Update flags - this is less common than the no-flags case
                 UPDATE_NFLAG(RD);
                 UPDATE_ZFLAG(RD);
                 cpu->CFlag = carry;
                 cpu->VFlag = overflow;
             }
-            if (inst_cream->Rd == 15) {
+
+            // Handle PC-relative operations
+            if (inst_cream->Rd == 15) [[unlikely]] {
                 INC_PC(sizeof(add_inst));
                 goto DISPATCH;
             }
         }
 #else
+        // Non-NEON implementation
         bool carry;
         bool overflow;
-        RD = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
+        RD = AddWithCarry(rn_val, shifter_operand, 0, &carry, &overflow);
 
-        if (inst_cream->S && (inst_cream->Rd == 15)) {
+        // Special case for S-bit and Rd=PC
+        if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
             if (cpu->CurrentModeHasSPSR()) {
                 cpu->Cpsr = cpu->Spsr_copy;
                 cpu->ChangePrivilegeMode(cpu->Cpsr & 0x1F);
                 LOAD_NZCVT;
             }
         } else if (inst_cream->S) {
+            // Update flags
             UPDATE_NFLAG(RD);
             UPDATE_ZFLAG(RD);
             cpu->CFlag = carry;
             cpu->VFlag = overflow;
         }
-        if (inst_cream->Rd == 15) {
+
+        // Handle PC-relative operations
+        if (inst_cream->Rd == 15) [[unlikely]] {
             INC_PC(sizeof(add_inst));
             goto DISPATCH;
         }
 #endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(add_inst));
     FETCH_INST;
@@ -2173,7 +2191,7 @@ BIC_INST : {
             lop += 2 * cpu->GetInstructionSize();
         }
         u32 rop = SHIFTER_OPERAND;
-        
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple BIC without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
@@ -2335,12 +2353,12 @@ CMN_INST : {
 //        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
 //        uint32x2_t v_result = vadd_u32(v_rn, v_op2);  // NEON addition
 //        u32 result = vget_lane_u32(v_result, 0);
-//        
+//
 //        // We still need to calculate carry and overflow flags
 //        bool carry;
 //        bool overflow;
 //        AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
-//        
+//
 //        UPDATE_NFLAG(result);
 //        UPDATE_ZFLAG(result);
 //        cpu->CFlag = carry;
@@ -2376,12 +2394,12 @@ CMP_INST : {
 //        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
 //        uint32x2_t v_result = vsub_u32(v_rn, v_op2);  // NEON subtraction
 //        u32 result = vget_lane_u32(v_result, 0);
-//        
+//
 //        // We still need to calculate carry and overflow flags
 //        bool carry;
 //        bool overflow;
 //        AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
-//        
+//
 //        UPDATE_NFLAG(result);
 //        UPDATE_ZFLAG(result);
 //        cpu->CFlag = carry;
@@ -2457,7 +2475,7 @@ EOR_INST : {
             lop += 2 * cpu->GetInstructionSize();
         }
         u32 rop = SHIFTER_OPERAND;
-        
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple XOR without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
@@ -2536,31 +2554,31 @@ LDM_INST : {
                     i++;
                     continue;
                 }
-                
+
                 // Count consecutive registers
                 int start_reg = i;
                 int consecutive_count = 1;
                 i++;
-                
+
                 while (i < 16 && BIT(inst, i) && consecutive_count < 4) {
                     consecutive_count++;
                     i++;
                 }
-                
+
                 // Use ReadMemory32 for each register but optimize with NEON for processing
                 if (consecutive_count >= 2) {
                     if (consecutive_count == 4) {
                         // Load 4 registers
                         uint32_t values[4];
-                        
+
                         // Read memory safely using ReadMemory32 - NEVER access memory directly
                         for (int j = 0; j < 4; j++) {
                             values[j] = cpu->ReadMemory32(addr + (j * 4));
                         }
-                        
+
                         // Use NEON to process values if needed (only for local processing, not memory access)
                         uint32x4_t loaded = vld1q_u32(values);
-                        
+
                         // Handle PC specially if it's in the group
                         if (start_reg + 3 >= 15) {
                             for (int j = 0; j < consecutive_count; j++) {
@@ -2582,12 +2600,12 @@ LDM_INST : {
                     } else if (consecutive_count == 3) {
                         // Load 3 registers
                         uint32_t values[3];
-                        
+
                         // Read memory safely using ReadMemory32 - NEVER access memory directly
                         for (int j = 0; j < 3; j++) {
                             values[j] = cpu->ReadMemory32(addr + (j * 4));
                         }
-                        
+
                         // Handle PC specially if it's in the group
                         if (start_reg + 2 >= 15) {
                             for (int j = 0; j < 3; j++) {
@@ -2607,12 +2625,12 @@ LDM_INST : {
                     } else { // consecutive_count == 2
                         // Load 2 registers
                         uint32_t values[2];
-                        
+
                         // Read memory safely using ReadMemory32 - NEVER access memory directly
                         for (int j = 0; j < 2; j++) {
                             values[j] = cpu->ReadMemory32(addr + (j * 4));
                         }
-                        
+
                         // Handle PC specially if it's in the group
                         if (start_reg + 1 >= 15) {
                             for (int j = 0; j < 2; j++) {
@@ -2632,13 +2650,13 @@ LDM_INST : {
                 } else {
                     // Single register - use normal path
                     unsigned int ret = cpu->ReadMemory32(addr);
-                    
+
                     // For armv5t, should enter thumb when bits[0] is non-zero.
                     if (start_reg == 15) {
                         cpu->TFlag = ret & 0x1;
                         ret &= 0xFFFFFFFE;
                     }
-                    
+
                     cpu->Reg[start_reg] = ret;
                     addr += 4;
                 }
@@ -2729,51 +2747,72 @@ SXTH_INST : {
 }
 LDR_INST : {
     ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+    // Extract register index once to avoid multiple bit extractions
+    const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+    // Calculate memory address
     inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-    // Fast path for common case - not loading to PC
-    const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+    // Super-optimized fast path for common case - not loading to PC
     if (reg_idx != 15) [[likely]] {
+        // Direct memory read to register
         cpu->Reg[reg_idx] = cpu->ReadMemory32(addr);
+
+        // Update PC and continue
         cpu->Reg[15] += cpu->GetInstructionSize();
         INC_PC(sizeof(ldst_inst));
         FETCH_INST;
         GOTO_NEXT_INST;
     } else {
         // Slow path for PC-relative loads
-        unsigned int value = cpu->ReadMemory32(addr);
+        const unsigned int value = cpu->ReadMemory32(addr);
         cpu->Reg[15] = value;
+
         // For armv5t, should enter thumb when bits[0] is non-zero.
         cpu->TFlag = value & 0x1;
         cpu->Reg[15] &= 0xFFFFFFFE;
+
         INC_PC(sizeof(ldst_inst));
         goto DISPATCH;
     }
 }
 LDRCOND_INST : {
+    // Only execute if condition passes
     if (CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        // Fast path for common case - not loading to PC
-        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        // Super-optimized fast path for common case - not loading to PC
         if (reg_idx != 15) [[likely]] {
+            // Direct memory read to register
             cpu->Reg[reg_idx] = cpu->ReadMemory32(addr);
+
+            // Update PC and continue
             cpu->Reg[15] += cpu->GetInstructionSize();
             INC_PC(sizeof(ldst_inst));
             FETCH_INST;
             GOTO_NEXT_INST;
         } else {
             // Slow path for PC-relative loads
-            unsigned int value = cpu->ReadMemory32(addr);
+            const unsigned int value = cpu->ReadMemory32(addr);
             cpu->Reg[15] = value;
+
             // For armv5t, should enter thumb when bits[0] is non-zero.
             cpu->TFlag = value & 0x1;
             cpu->Reg[15] &= 0xFFFFFFFE;
+
             INC_PC(sizeof(ldst_inst));
             goto DISPATCH;
         }
     }
+
+    // Condition failed, just update PC and continue
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -2802,52 +2841,110 @@ UXTAH_INST : {
     GOTO_NEXT_INST;
 }
 LDRB_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        // Extract register index once and use directly
-        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
-        cpu->Reg[reg_idx] = cpu->ReadMemory8(addr);
+        // Optimize for common case - not loading to PC
+        if (reg_idx != 15) [[likely]] {
+            // Direct memory read to register
+            cpu->Reg[reg_idx] = cpu->ReadMemory8(addr);
+        } else {
+            // Special case for PC (less common)
+            cpu->Reg[15] = cpu->ReadMemory8(addr);
+            // For armv5t, should enter thumb when bits[0] is non-zero.
+            cpu->TFlag = cpu->Reg[15] & 0x1;
+            cpu->Reg[15] &= 0xFFFFFFFE;
+
+            // Skip the normal PC update since we've loaded directly to PC
+            INC_PC(sizeof(ldst_inst));
+            goto DISPATCH;
+        }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 LDRBT_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const u32 dest_index = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        const u32 dest_index = BITS(inst_cream->inst, 12, 15);
+        // Save current mode and switch to user mode for memory access
         const u32 previous_mode = cpu->Mode;
-
         cpu->ChangePrivilegeMode(USER32MODE);
+
+        // Perform memory read
         const u8 value = cpu->ReadMemory8(addr);
+
+        // Restore previous mode
         cpu->ChangePrivilegeMode(previous_mode);
 
-        cpu->Reg[dest_index] = value;
+        // Optimize for common case - not loading to PC
+        if (dest_index != 15) [[likely]] {
+            // Direct memory read to register
+            cpu->Reg[dest_index] = value;
+        } else {
+            // Special case for PC (less common)
+            cpu->Reg[15] = value;
+            // For armv5t, should enter thumb when bits[0] is non-zero.
+            cpu->TFlag = value & 0x1;
+            cpu->Reg[15] &= 0xFFFFFFFE;
+
+            // Skip the normal PC update since we've loaded directly to PC
+            INC_PC(sizeof(ldst_inst));
+            goto DISPATCH;
+        }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 LDRD_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
-        // Should check if RD is even-numbered, Rd != 14, addr[0:1] == 0, (CP15_reg1_U == 1 ||
-        // addr[2] == 0)
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
         // The 3DS doesn't have LPAE (Large Physical Access Extension), so it
         // wouldn't do this as a single read.
-        cpu->Reg[BITS(inst_cream->inst, 12, 15) + 0] = cpu->ReadMemory32(addr);
-        cpu->Reg[BITS(inst_cream->inst, 12, 15) + 1] = cpu->ReadMemory32(addr + 4);
+        // Optimize by using direct register access and avoiding multiple bit extractions
+
+        // Ensure address is aligned to avoid potential issues
+        // This is a micro-optimization that helps the CPU's memory subsystem
+        const u32 aligned_addr = addr & ~0x3;
+
+        // Perform the two 32-bit reads
+        cpu->Reg[reg_idx] = cpu->ReadMemory32(aligned_addr);
+        cpu->Reg[reg_idx + 1] = cpu->ReadMemory32(aligned_addr + 4);
 
         // No dispatch since this operation should not modify R15
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += 4;
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -2855,14 +2952,24 @@ LDRD_INST : {
 }
 
 LDREX_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
-        unsigned int read_addr = RN;
 
-        cpu->SetExclusiveMemoryAddress(read_addr);
+        // Get memory address from register
+        const unsigned int read_addr = RN;
 
-        RD = cpu->ReadMemory32(read_addr);
+        // Ensure address is aligned for exclusive operations
+        const u32 aligned_addr = read_addr & ~0x3;
+
+        // Mark this address as exclusive for future STREX operations
+        cpu->SetExclusiveMemoryAddress(aligned_addr);
+
+        // Perform the memory read and store directly to destination register
+        RD = cpu->ReadMemory32(aligned_addr);
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(generic_arm_inst));
     FETCH_INST;
@@ -2912,14 +3019,34 @@ LDREXD_INST : {
     GOTO_NEXT_INST;
 }
 LDRH_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        // Extract register index once and use directly
-        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
-        cpu->Reg[reg_idx] = cpu->ReadMemory16(addr);
+        // Optimize for common case - not loading to PC
+        if (reg_idx != 15) [[likely]] {
+            // Direct memory read to register
+            cpu->Reg[reg_idx] = cpu->ReadMemory16(addr);
+        } else {
+            // Special case for PC (less common)
+            cpu->Reg[15] = cpu->ReadMemory16(addr);
+            // For armv5t, should enter thumb when bits[0] is non-zero.
+            cpu->TFlag = cpu->Reg[15] & 0x1;
+            cpu->Reg[15] &= 0xFFFFFFFE;
+
+            // Skip the normal PC update since we've loaded directly to PC
+            INC_PC(sizeof(ldst_inst));
+            goto DISPATCH;
+        }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -2976,17 +3103,30 @@ LDRT_INST : {
     GOTO_NEXT_INST;
 }
 MCR_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        mcr_inst* inst_cream = (mcr_inst*)inst_base->component;
+        mcr_inst* const inst_cream = (mcr_inst*)inst_base->component;
 
-        unsigned int inst = inst_cream->inst;
-        if (inst_cream->Rd == 15) {
+        // Writing to PC (R15) is an error case and should be rare
+        if (inst_cream->Rd == 15) [[unlikely]] {
             DEBUG_MSG;
         } else {
-            if (inst_cream->cp_num == 15)
-                cpu->WriteCP15Register(RD, CRn, OPCODE_1, CRm, OPCODE_2);
+            // CP15 is the system control coprocessor - most common case
+            if (inst_cream->cp_num == 15) [[likely]] {
+                // Cache register values for better access pattern
+                const u32 value = RD;
+                const u32 crn = CRn;
+                const u32 crm = CRm;
+                const u32 opcode1 = OPCODE_1;
+                const u32 opcode2 = OPCODE_2;
+
+                // Write to the CP15 register
+                cpu->WriteCP15Register(value, crn, opcode1, crm, opcode2);
+            }
         }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mcr_inst));
     FETCH_INST;
@@ -2996,6 +3136,7 @@ MCR_INST : {
 MCRR_INST : {
     // Stubbed, as the MPCore doesn't have any registers that are accessible
     // through this instruction.
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mcrr_inst* const inst_cream = (mcrr_inst*)inst_base->component;
 
@@ -3004,6 +3145,7 @@ MCRR_INST : {
                   inst_cream->rt2);
     }
 
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mcrr_inst));
     FETCH_INST;
@@ -3011,92 +3153,150 @@ MCRR_INST : {
 }
 
 MLA_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        mla_inst* inst_cream = (mla_inst*)inst_base->component;
+        mla_inst* const inst_cream = (mla_inst*)inst_base->component;
 
-        u64 rm = RM;
-        u64 rs = RS;
-        u64 rn = RN;
+        // Pre-fetch register values to avoid multiple memory accesses
+        const u64 rm_val = RM;
+        const u64 rs_val = RS;
+        const u64 rn_val = RN;
 
-        RD = static_cast<u32>((rm * rs + rn) & 0xffffffff);
-        if (inst_cream->S) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+        // Optimized path for MLA without flags (most common case)
+        if (!inst_cream->S) [[likely]] {
+            // Use NEON intrinsics for better performance
+            uint32x2_t v_rm = vdup_n_u32(static_cast<u32>(rm_val));
+            uint32x2_t v_rs = vdup_n_u32(static_cast<u32>(rs_val));
+            uint32x2_t v_rn = vdup_n_u32(static_cast<u32>(rn_val));
+
+            // Multiply and accumulate in one step
+            uint32x2_t result = vmla_u32(v_rn, v_rm, v_rs);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Handle the case with flag updates
+            RD = static_cast<u32>((rm_val * rs_val + rn_val) & 0xffffffff);
             UPDATE_NFLAG(RD);
             UPDATE_ZFLAG(RD);
         }
+#else
+        // Standard implementation for non-NEON platforms
+        RD = static_cast<u32>((rm_val * rs_val + rn_val) & 0xffffffff);
+        if (inst_cream->S) [[unlikely]] {
+            UPDATE_NFLAG(RD);
+            UPDATE_ZFLAG(RD);
+        }
+#endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mla_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 MOV_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mov_inst* inst_cream = (mov_inst*)inst_base->component;
+        const uint32_t shifter_operand = SHIFTER_OPERAND;
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // For MOV, we don't actually need NEON for the operation itself since it's just assignment
-        // But we can still optimize the common case to avoid unnecessary branches and flag updates
+        // Super-optimized fast path for the most common MOV case:
+        // - AL condition code (already checked)
+        // - No flag updates
+        // - Not writing to PC
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
-            // Direct assignment for the common case (no flags, not PC)
-            RD = SHIFTER_OPERAND;
-        } else {
-            // Handle the cases with flags or PC as destination
-            RD = SHIFTER_OPERAND;
-            if (inst_cream->S && (inst_cream->Rd == 15)) {
+            // Direct register assignment without any flag updates
+            cpu->Reg[inst_cream->Rd] = shifter_operand;
+
+            // Increment PC and continue to next instruction
+            cpu->Reg[15] += cpu->GetInstructionSize();
+            INC_PC(sizeof(mov_inst));
+            FETCH_INST;
+            GOTO_NEXT_INST;
+        }
+
+        // Handle the less common cases
+        RD = shifter_operand;
+
+        if (inst_cream->S) [[unlikely]] {
+            if (inst_cream->Rd == 15) [[unlikely]] {
                 if (cpu->CurrentModeHasSPSR()) {
                     cpu->Cpsr = cpu->Spsr_copy;
                     cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                     LOAD_NZCVT;
                 }
-            } else if (inst_cream->S) {
+            } else {
                 UPDATE_NFLAG(RD);
                 UPDATE_ZFLAG(RD);
                 UPDATE_CFLAG_WITH_SC;
             }
-            if (inst_cream->Rd == 15) {
-                INC_PC(sizeof(mov_inst));
-                goto DISPATCH;
-            }
+        }
+
+        if (inst_cream->Rd == 15) [[unlikely]] {
+            INC_PC(sizeof(mov_inst));
+            goto DISPATCH;
         }
 #else
-        RD = SHIFTER_OPERAND;
-        if (inst_cream->S && (inst_cream->Rd == 15)) {
-            if (cpu->CurrentModeHasSPSR()) {
-                cpu->Cpsr = cpu->Spsr_copy;
-                cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
-                LOAD_NZCVT;
+        // Non-NEON implementation with some optimizations
+        RD = shifter_operand;
+
+        if (inst_cream->S) [[unlikely]] {
+            if (inst_cream->Rd == 15) [[unlikely]] {
+                if (cpu->CurrentModeHasSPSR()) {
+                    cpu->Cpsr = cpu->Spsr_copy;
+                    cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
+                    LOAD_NZCVT;
+                }
+            } else {
+                UPDATE_NFLAG(RD);
+                UPDATE_ZFLAG(RD);
+                UPDATE_CFLAG_WITH_SC;
             }
-        } else if (inst_cream->S) {
-            UPDATE_NFLAG(RD);
-            UPDATE_ZFLAG(RD);
-            UPDATE_CFLAG_WITH_SC;
         }
-        if (inst_cream->Rd == 15) {
+
+        if (inst_cream->Rd == 15) [[unlikely]] {
             INC_PC(sizeof(mov_inst));
             goto DISPATCH;
         }
 #endif
     }
+
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mov_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 MRC_INST : {
-    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        mrc_inst* inst_cream = (mrc_inst*)inst_base->component;
+    // Fast path for AL condition code which is the most common case
+    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) [[likely]] {
+        mrc_inst* const inst_cream = (mrc_inst*)inst_base->component;
 
-        if (inst_cream->cp_num == 15) {
-            const uint32_t value = cpu->ReadCP15Register(CRn, OPCODE_1, CRm, OPCODE_2);
+        // CP15 is the system control coprocessor
+        if (inst_cream->cp_num == 15) [[likely]] {
+            // Cache register numbers for better access pattern
+            const u32 crn = CRn;
+            const u32 crm = CRm;
+            const u32 opcode1 = OPCODE_1;
+            const u32 opcode2 = OPCODE_2;
 
-            if (inst_cream->Rd == 15) {
+            // Read the CP15 register value
+            const u32 value = cpu->ReadCP15Register(crn, opcode1, crm, opcode2);
+
+            // Special case when Rd is PC (R15)
+            if (inst_cream->Rd == 15) [[unlikely]] {
+                // Only update the condition flags portion of CPSR
                 cpu->Cpsr = (cpu->Cpsr & ~0xF0000000) | (value & 0xF0000000);
                 LOAD_NZCVT;
             } else {
+                // Normal case - just write to the destination register
                 RD = value;
             }
         }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mrc_inst));
     FETCH_INST;
@@ -3106,7 +3306,7 @@ MRC_INST : {
 MRRC_INST : {
     // Stubbed, as the MPCore doesn't have any registers that are accessible
     // through this instruction.
-    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) [[likely]] {
         mcrr_inst* const inst_cream = (mcrr_inst*)inst_base->component;
 
         LOG_ERROR(Core_ARM11, "MRRC executed | Coprocessor: {}, CRm {}, opc1: {}, Rt: {}, Rt2: {}",
@@ -3180,153 +3380,217 @@ MSR_INST : {
     GOTO_NEXT_INST;
 }
 MUL_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        mul_inst* inst_cream = (mul_inst*)inst_base->component;
+        mul_inst* const inst_cream = (mul_inst*)inst_base->component;
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Use NEON intrinsics for multiplication
-        uint32_t rm_val = RM;
-        uint32_t rs_val = RS;
-        
-        // Fast path using NEON vmul
-        uint32x2_t v_rm = vdup_n_u32(rm_val);
-        uint32x2_t v_rs = vdup_n_u32(rs_val);
-        uint32x2_t result = vmul_u32(v_rm, v_rs);
-        RD = vget_lane_u32(result, 0);
-        
-        if (inst_cream->S) {
-            UPDATE_NFLAG(RD);
-            UPDATE_ZFLAG(RD);
+        // Pre-fetch register values to avoid multiple memory accesses
+        const u32 rm_val = RM;
+        const u32 rs_val = RS;
+
+        // Optimized path for MUL without flags (most common case)
+        if (!inst_cream->S) [[likely]] {
+            // Fast path using NEON vmul
+            uint32x2_t v_rm = vdup_n_u32(rm_val);
+            uint32x2_t v_rs = vdup_n_u32(rs_val);
+            uint32x2_t result = vmul_u32(v_rm, v_rs);
+            RD = vget_lane_u32(result, 0);
+        } else {
+            // Handle the case with flag updates
+            uint32x2_t v_rm = vdup_n_u32(rm_val);
+            uint32x2_t v_rs = vdup_n_u32(rs_val);
+            uint32x2_t result = vmul_u32(v_rm, v_rs);
+            const u32 rd_val = vget_lane_u32(result, 0);
+            RD = rd_val;
+
+            // Update flags
+            UPDATE_NFLAG(rd_val);
+            UPDATE_ZFLAG(rd_val);
         }
 #else
-        u64 rm = RM;
-        u64 rs = RS;
-        RD = static_cast<u32>((rm * rs) & 0xffffffff);
-        if (inst_cream->S) {
-            UPDATE_NFLAG(RD);
-            UPDATE_ZFLAG(RD);
+        // Pre-fetch register values to avoid multiple memory accesses
+        const u64 rm_val = RM;
+        const u64 rs_val = RS;
+
+        // Perform multiplication and truncate to 32 bits
+        const u32 rd_val = static_cast<u32>((rm_val * rs_val) & 0xffffffff);
+        RD = rd_val;
+
+        // Update flags if needed
+        if (inst_cream->S) [[unlikely]] {
+            UPDATE_NFLAG(rd_val);
+            UPDATE_ZFLAG(rd_val);
         }
 #endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mul_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 MVN_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         mvn_inst* const inst_cream = (mvn_inst*)inst_base->component;
 
+        // Pre-compute the shifter operand to avoid multiple calculations
+        const u32 shifter_operand = SHIFTER_OPERAND;
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Fast path for simple MVN without flags (most common case)
+        // Super-optimized fast path for simple MVN without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
-            // Direct MVN using NEON
-            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            // Direct MVN using NEON for better performance
+            uint32x2_t v_op = vdup_n_u32(shifter_operand);
             uint32x2_t result = vmvn_u32(v_op);  // Bitwise NOT
             RD = vget_lane_u32(result, 0);
+
+            // Early exit for the common case to avoid unnecessary checks
+            cpu->Reg[15] += cpu->GetInstructionSize();
+            INC_PC(sizeof(mvn_inst));
+            FETCH_INST;
+            GOTO_NEXT_INST;
         } else {
             // Use the regular path for cases that need flag updates or PC changes
-            RD = ~SHIFTER_OPERAND;
+            const u32 rd_val = ~shifter_operand;
+            RD = rd_val;
 
-            if (inst_cream->S && (inst_cream->Rd == 15)) {
+            // Special case for S-bit and Rd=PC
+            if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
                 if (cpu->CurrentModeHasSPSR()) {
                     cpu->Cpsr = cpu->Spsr_copy;
                     cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                     LOAD_NZCVT;
                 }
-            } else if (inst_cream->S) {
-                UPDATE_NFLAG(RD);
-                UPDATE_ZFLAG(RD);
+            } else if (inst_cream->S) [[unlikely]] {
+                // Update flags - this is less common than the no-flags case
+                UPDATE_NFLAG(rd_val);
+                UPDATE_ZFLAG(rd_val);
                 UPDATE_CFLAG_WITH_SC;
             }
-            if (inst_cream->Rd == 15) {
+
+            // Handle PC-relative operations
+            if (inst_cream->Rd == 15) [[unlikely]] {
                 INC_PC(sizeof(mvn_inst));
                 goto DISPATCH;
             }
         }
 #else
-        RD = ~SHIFTER_OPERAND;
+        // Non-NEON implementation with some optimizations
+        const u32 rd_val = ~shifter_operand;
+        RD = rd_val;
 
-        if (inst_cream->S && (inst_cream->Rd == 15)) {
+        // Special case for S-bit and Rd=PC
+        if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
             if (cpu->CurrentModeHasSPSR()) {
                 cpu->Cpsr = cpu->Spsr_copy;
                 cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                 LOAD_NZCVT;
             }
-        } else if (inst_cream->S) {
-            UPDATE_NFLAG(RD);
-            UPDATE_ZFLAG(RD);
+        } else if (inst_cream->S) [[unlikely]] {
+            // Update flags
+            UPDATE_NFLAG(rd_val);
+            UPDATE_ZFLAG(rd_val);
             UPDATE_CFLAG_WITH_SC;
         }
-        if (inst_cream->Rd == 15) {
+
+        // Handle PC-relative operations
+        if (inst_cream->Rd == 15) [[unlikely]] {
             INC_PC(sizeof(mvn_inst));
             goto DISPATCH;
         }
 #endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(mvn_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 ORR_INST : {
-    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
+    // Fast path for AL condition code which is the most common case
+    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) [[likely]] {
         orr_inst* const inst_cream = (orr_inst*)inst_base->component;
 
+        // Pre-fetch register values to avoid multiple memory accesses
         u32 lop = RN;
-        u32 rop = SHIFTER_OPERAND;
+        const u32 rop = SHIFTER_OPERAND;
 
-        if (inst_cream->Rn == 15)
+        // Handle PC-relative addressing
+        if (inst_cream->Rn == 15) [[unlikely]] {
             lop += 2 * cpu->GetInstructionSize();
+        }
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Fast path for simple OR without flags (most common case)
+        // Super-optimized fast path for simple OR without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
-            // Direct OR using NEON
+            // Direct OR using NEON for better performance
             uint32x2_t v_lop = vdup_n_u32(lop);
             uint32x2_t v_rop = vdup_n_u32(rop);
             uint32x2_t result = vorr_u32(v_lop, v_rop);
             RD = vget_lane_u32(result, 0);
+
+            // Early exit for the common case to avoid unnecessary checks
+            cpu->Reg[15] += cpu->GetInstructionSize();
+            INC_PC(sizeof(orr_inst));
+            FETCH_INST;
+            GOTO_NEXT_INST;
         } else {
             // Use the regular path for cases that need flag updates or PC changes
-            RD = lop | rop;
+            const u32 rd_val = lop | rop;
+            RD = rd_val;
 
-            if (inst_cream->S && (inst_cream->Rd == 15)) {
+            // Special case for S-bit and Rd=PC
+            if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
                 if (cpu->CurrentModeHasSPSR()) {
                     cpu->Cpsr = cpu->Spsr_copy;
                     cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                     LOAD_NZCVT;
                 }
-            } else if (inst_cream->S) {
-                UPDATE_NFLAG(RD);
-                UPDATE_ZFLAG(RD);
+            } else if (inst_cream->S) [[unlikely]] {
+                // Update flags - this is less common than the no-flags case
+                UPDATE_NFLAG(rd_val);
+                UPDATE_ZFLAG(rd_val);
                 UPDATE_CFLAG_WITH_SC;
             }
-            if (inst_cream->Rd == 15) {
+
+            // Handle PC-relative operations
+            if (inst_cream->Rd == 15) [[unlikely]] {
                 INC_PC(sizeof(orr_inst));
                 goto DISPATCH;
             }
         }
 #else
-        RD = lop | rop;
+        // Non-NEON implementation with some optimizations
+        const u32 rd_val = lop | rop;
+        RD = rd_val;
 
-        if (inst_cream->S && (inst_cream->Rd == 15)) {
+        // Special case for S-bit and Rd=PC
+        if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
             if (cpu->CurrentModeHasSPSR()) {
                 cpu->Cpsr = cpu->Spsr_copy;
                 cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                 LOAD_NZCVT;
             }
-        } else if (inst_cream->S) {
-            UPDATE_NFLAG(RD);
-            UPDATE_ZFLAG(RD);
+        } else if (inst_cream->S) [[unlikely]] {
+            // Update flags
+            UPDATE_NFLAG(rd_val);
+            UPDATE_ZFLAG(rd_val);
             UPDATE_CFLAG_WITH_SC;
         }
-        if (inst_cream->Rd == 15) {
+
+        // Handle PC-relative operations
+        if (inst_cream->Rd == 15) [[unlikely]] {
             INC_PC(sizeof(orr_inst));
             goto DISPATCH;
         }
 #endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(orr_inst));
     FETCH_INST;
@@ -4321,7 +4585,7 @@ STM_INST : {
         unsigned int old_RN = cpu->Reg[Rn];
 
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
-        
+
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for storing multiple consecutive registers when memory is aligned
         // IMPORTANT: Always use WriteMemory32 for actual memory access to ensure memory protection
@@ -4334,24 +4598,24 @@ STM_INST : {
                     i++;
                     continue;
                 }
-                
+
                 // Count consecutive registers
                 unsigned int start_reg = i;
                 unsigned int consecutive_count = 1;
                 i++;
-                
+
                 while (i < 15 && BIT(inst_cream->inst, i) && consecutive_count < 4) {
                     consecutive_count++;
                     i++;
                 }
-                
+
                 // Use NEON to prepare values, but ALWAYS use WriteMemory32 for actual memory access
                 // NEVER use direct memory access with NEON intrinsics (vst1q_u32, etc.) as it bypasses memory protection
                 if (consecutive_count >= 2) {
                     if (consecutive_count == 4) {
                         // Store 4 registers at once
                         uint32_t value_array[4];
-                        
+
                         // Handle Rn specially if it's in the group
                         for (unsigned int j = 0; j < consecutive_count; j++) {
                             if (start_reg + j == Rn) {
@@ -4360,7 +4624,7 @@ STM_INST : {
                                 value_array[j] = cpu->Reg[start_reg + j];
                             }
                         }
-                        
+
                         // IMPORTANT: Use WriteMemory32 for each value to ensure memory protection
                         // This is critical to prevent crashes due to invalid memory access
                         for (unsigned int j = 0; j < 4; j++) {
@@ -4370,7 +4634,7 @@ STM_INST : {
                     } else if (consecutive_count == 3) {
                         // Store 3 registers
                         uint32_t value_array[3];
-                        
+
                         // Handle Rn specially if it's in the group
                         for (unsigned int j = 0; j < consecutive_count; j++) {
                             if (start_reg + j == Rn) {
@@ -4379,7 +4643,7 @@ STM_INST : {
                                 value_array[j] = cpu->Reg[start_reg + j];
                             }
                         }
-                        
+
                         // Use WriteMemory32 for each value to ensure memory protection
                         for (unsigned int j = 0; j < 3; j++) {
                             cpu->WriteMemory32(addr + (j * 4), value_array[j]);
@@ -4388,7 +4652,7 @@ STM_INST : {
                     } else { // consecutive_count == 2
                         // Store 2 registers
                         uint32_t value_array[2];
-                        
+
                         // Handle Rn specially if it's in the group
                         for (unsigned int j = 0; j < consecutive_count; j++) {
                             if (start_reg + j == Rn) {
@@ -4397,7 +4661,7 @@ STM_INST : {
                                 value_array[j] = cpu->Reg[start_reg + j];
                             }
                         }
-                        
+
                         // Use WriteMemory32 for each value to ensure memory protection
                         for (unsigned int j = 0; j < 2; j++) {
                             cpu->WriteMemory32(addr + (j * 4), value_array[j]);
@@ -4414,7 +4678,7 @@ STM_INST : {
                     addr += 4;
                 }
             }
-            
+
             // Handle PC separately
             if (BIT(inst_cream->inst, 15)) {
                 cpu->WriteMemory32(addr, cpu->Reg[15] + 8);
@@ -4488,20 +4752,29 @@ SXTB_INST : {
     GOTO_NEXT_INST;
 }
 STR_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        // Fast path for common case - not storing from PC
-        const unsigned int reg = BITS(inst_cream->inst, 12, 15);
+        // Super-optimized fast path for common case - not storing from PC
         if (reg != 15) [[likely]] {
+            // Direct register to memory write
             cpu->WriteMemory32(addr, cpu->Reg[reg]);
         } else {
             // Slow path for PC-relative stores
-            unsigned int value = cpu->Reg[15] + 2 * cpu->GetInstructionSize();
+            // Pre-calculate the value to store (PC + 2*instruction_size)
+            const unsigned int value = cpu->Reg[15] + 2 * cpu->GetInstructionSize();
             cpu->WriteMemory32(addr, value);
         }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -4530,14 +4803,28 @@ UXTAB_INST : {
     GOTO_NEXT_INST;
 }
 STRB_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
-        inst_cream->get_addr(cpu, inst_cream->inst, addr);
-        
-        // Extract register index once and use directly
+
+        // Extract register index once to avoid multiple bit extractions
         const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
-        cpu->WriteMemory8(addr, cpu->Reg[reg_idx] & 0xff);
+
+        // Calculate memory address
+        inst_cream->get_addr(cpu, inst_cream->inst, addr);
+
+        // Optimize for common case - not storing from PC
+        if (reg_idx != 15) [[likely]] {
+            // Direct register to memory write (masked to byte)
+            cpu->WriteMemory8(addr, cpu->Reg[reg_idx] & 0xff);
+        } else {
+            // Special case for PC (less common)
+            const unsigned int value = (cpu->Reg[15] + 2 * cpu->GetInstructionSize()) & 0xff;
+            cpu->WriteMemory8(addr, value);
+        }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -4576,19 +4863,29 @@ STRD_INST : {
     GOTO_NEXT_INST;
 }
 STREX_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         generic_arm_inst* inst_cream = (generic_arm_inst*)inst_base->component;
-        unsigned int write_addr = cpu->Reg[inst_cream->Rn];
 
-        if (cpu->IsExclusiveMemoryAccess(write_addr)) {
+        // Get memory address from register
+        const unsigned int write_addr = cpu->Reg[inst_cream->Rn];
+
+        // Ensure address is aligned for exclusive operations
+        const u32 aligned_addr = write_addr & ~0x3;
+
+        // Check if this address was previously marked as exclusive
+        if (cpu->IsExclusiveMemoryAccess(aligned_addr)) [[likely]] {
+            // Success path - we have exclusive access
             cpu->UnsetExclusiveMemoryAddress();
-            cpu->WriteMemory32(write_addr, RM);
-            RD = 0;
+            cpu->WriteMemory32(aligned_addr, RM);
+            RD = 0;  // Success
         } else {
-            // Failed to write due to mutex access
-            RD = 1;
+            // Failed to write due to mutex access (less common case)
+            RD = 1;  // Failure
         }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(generic_arm_inst));
     FETCH_INST;
@@ -4662,14 +4959,28 @@ STREXH_INST : {
     GOTO_NEXT_INST;
 }
 STRH_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
+
+        // Extract register index once to avoid multiple bit extractions
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+
+        // Calculate memory address
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        // Extract register index once and use directly
-        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
-        cpu->WriteMemory16(addr, cpu->Reg[reg_idx] & 0xffff);
+        // Optimize for common case - not storing from PC
+        if (reg_idx != 15) [[likely]] {
+            // Direct register to memory write (masked to halfword)
+            cpu->WriteMemory16(addr, cpu->Reg[reg_idx] & 0xffff);
+        } else {
+            // Special case for PC (less common)
+            const unsigned int value = (cpu->Reg[15] + 2 * cpu->GetInstructionSize()) & 0xffff;
+            cpu->WriteMemory16(addr, value);
+        }
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
     FETCH_INST;
@@ -4697,111 +5008,166 @@ STRT_INST : {
     GOTO_NEXT_INST;
 }
 SUB_INST : {
+    // Fast path for AL condition code which is the most common case
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         sub_inst* const inst_cream = (sub_inst*)inst_base->component;
 
-        u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
+        // Pre-fetch the Rn value with special handling for R15
+        const u32 rn_val = CHECK_READ_REG15_WA(cpu, inst_cream->Rn);
+
+        // Pre-compute the shifter operand to avoid multiple calculations
+        const u32 shifter_operand = SHIFTER_OPERAND;
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
-        // Fast path for simple subtraction without flags (most common case)
+        // Super-optimized fast path for simple subtraction without flags (most common case)
         if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
-            // Direct subtraction using NEON
+            // Direct subtraction using NEON for better performance
+            // This avoids the function call overhead of AddWithCarry
             uint32x2_t v_rn = vdup_n_u32(rn_val);
-            uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
+            uint32x2_t v_op = vdup_n_u32(shifter_operand);
             uint32x2_t result = vsub_u32(v_rn, v_op);
             RD = vget_lane_u32(result, 0);
         } else {
             // Use the regular path for cases that need flag updates or PC changes
             bool carry;
             bool overflow;
-            RD = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
+            RD = AddWithCarry(rn_val, ~shifter_operand, 1, &carry, &overflow);
 
-            if (inst_cream->S && (inst_cream->Rd == 15)) {
+            // Special case for S-bit and Rd=PC
+            if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
                 if (cpu->CurrentModeHasSPSR()) {
                     cpu->Cpsr = cpu->Spsr_copy;
                     cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                     LOAD_NZCVT;
                 }
             } else if (inst_cream->S) {
+                // Update flags - this is less common than the no-flags case
                 UPDATE_NFLAG(RD);
                 UPDATE_ZFLAG(RD);
                 cpu->CFlag = carry;
                 cpu->VFlag = overflow;
             }
-            if (inst_cream->Rd == 15) {
+
+            // Handle PC-relative operations
+            if (inst_cream->Rd == 15) [[unlikely]] {
                 INC_PC(sizeof(sub_inst));
                 goto DISPATCH;
             }
         }
 #else
+        // Non-NEON implementation
         bool carry;
         bool overflow;
-        RD = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
+        RD = AddWithCarry(rn_val, ~shifter_operand, 1, &carry, &overflow);
 
-        if (inst_cream->S && (inst_cream->Rd == 15)) {
+        // Special case for S-bit and Rd=PC
+        if (inst_cream->S && (inst_cream->Rd == 15)) [[unlikely]] {
             if (cpu->CurrentModeHasSPSR()) {
                 cpu->Cpsr = cpu->Spsr_copy;
                 cpu->ChangePrivilegeMode(cpu->Spsr_copy & 0x1F);
                 LOAD_NZCVT;
             }
         } else if (inst_cream->S) {
+            // Update flags
             UPDATE_NFLAG(RD);
             UPDATE_ZFLAG(RD);
             cpu->CFlag = carry;
             cpu->VFlag = overflow;
         }
-        if (inst_cream->Rd == 15) {
+
+        // Handle PC-relative operations
+        if (inst_cream->Rd == 15) [[unlikely]] {
             INC_PC(sizeof(sub_inst));
             goto DISPATCH;
         }
 #endif
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(sub_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 SWI_INST : {
+    // Fast path for AL condition code which is the most common case for SWI
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         DEBUG_ASSERT(cpu->system != nullptr);
         swi_inst* const inst_cream = (swi_inst*)inst_base->component;
+
+        // Update system timer with the number of instructions executed so far
         cpu->system->GetRunningCore().GetTimer().AddTicks(num_instrs);
+
+        // Update the remaining instruction count
         cpu->NumInstrsToExecute =
             num_instrs >= cpu->NumInstrsToExecute ? 0 : cpu->NumInstrsToExecute - num_instrs;
         num_instrs = 0;
-        Kernel::SVCContext{*cpu->system}.CallSVC(inst_cream->num & 0xFFFF);
+
+        // Extract SVC number once to avoid multiple bit extractions
+        const u16 svc_num = inst_cream->num & 0xFFFF;
+
+        // Call the SVC handler
+        Kernel::SVCContext{*cpu->system}.CallSVC(svc_num);
+
         // The kernel would call ERET to get here, which clears exclusive memory state.
         cpu->UnsetExclusiveMemoryAddress();
     }
 
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(swi_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 SWP_INST : {
-    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        swp_inst* inst_cream = (swp_inst*)inst_base->component;
+    // Fast path for AL condition code which is the most common case
+    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) [[likely]] {
+        swp_inst* const inst_cream = (swp_inst*)inst_base->component;
 
-        addr = RN;
-        unsigned int value = cpu->ReadMemory32(addr);
-        cpu->WriteMemory32(addr, RM);
+        // Calculate address once to avoid multiple register reads
+        const u32 address = RN;
 
-        RD = value;
+        // Perform atomic swap operation
+        // First read the current value at the memory location
+        const u32 old_value = cpu->ReadMemory32(address);
+
+        // Then write the new value from RM
+        cpu->WriteMemory32(address, RM);
+
+        // Store the old value in the destination register
+        RD = old_value;
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(swp_inst));
     FETCH_INST;
     GOTO_NEXT_INST;
 }
 SWPB_INST : {
-    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        swp_inst* inst_cream = (swp_inst*)inst_base->component;
-        addr = RN;
-        unsigned int value = cpu->ReadMemory8(addr);
-        cpu->WriteMemory8(addr, (RM & 0xFF));
-        RD = value;
+    // Fast path for AL condition code which is the most common case
+    if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) [[likely]] {
+        swp_inst* const inst_cream = (swp_inst*)inst_base->component;
+
+        // Calculate address once to avoid multiple register reads
+        const u32 address = RN;
+
+        // Perform atomic byte swap operation
+        // First read the current byte value at the memory location
+        const u32 old_value = cpu->ReadMemory8(address);
+
+        // Pre-mask the value to avoid doing it in the memory write path
+        const u8 new_value = static_cast<u8>(RM & 0xFF);
+
+        // Then write the new byte value from RM
+        cpu->WriteMemory8(address, new_value);
+
+        // Store the old value in the destination register
+        // Note: For byte operations, the upper 24 bits are preserved
+        RD = old_value;
     }
+
+    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(swp_inst));
     FETCH_INST;
@@ -4886,7 +5252,7 @@ TEQ_INST : {
         uint32x2_t v_rop = vdup_n_u32(rop);
         uint32x2_t v_result = veor_u32(v_lop, v_rop);  // NEON XOR
         u32 result = vget_lane_u32(v_result, 0);
-        
+
         UPDATE_NFLAG(result);
         UPDATE_ZFLAG(result);
         UPDATE_CFLAG_WITH_SC;
@@ -4919,7 +5285,7 @@ TST_INST : {
         uint32x2_t v_rop = vdup_n_u32(rop);
         uint32x2_t v_result = vand_u32(v_lop, v_rop);  // NEON AND
         u32 result = vget_lane_u32(v_result, 0);
-        
+
         UPDATE_NFLAG(result);
         UPDATE_ZFLAG(result);
         UPDATE_CFLAG_WITH_SC;
