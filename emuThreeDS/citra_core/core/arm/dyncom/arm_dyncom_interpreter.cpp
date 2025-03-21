@@ -1275,7 +1275,7 @@ unsigned InterpreterMainLoop(ARMul_State* cpu) {
 #define INC_PC(l) ptr += sizeof(arm_inst) + l
 #define INC_PC_STUB ptr += sizeof(arm_inst)
 
-#ifdef ANDROID
+#ifdef ANDROID || 1
 #define GDB_BP_CHECK
 #else
 #define GDB_BP_CHECK                                                                               \
@@ -2031,7 +2031,7 @@ ADD_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple addition without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct addition using NEON
             uint32x2_t v_rn = vdup_n_u32(rn_val);
             uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
@@ -2100,7 +2100,7 @@ AND_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple AND without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct AND using NEON
             uint32x2_t v_lop = vdup_n_u32(lop);
             uint32x2_t v_rop = vdup_n_u32(rop);
@@ -2176,7 +2176,7 @@ BIC_INST : {
         
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple BIC without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct BIC using NEON
             uint32x2_t v_lop = vdup_n_u32(lop);
             uint32x2_t v_rop = vdup_n_u32(~rop);  // Invert bits first
@@ -2328,24 +2328,24 @@ CMN_INST : {
         if (inst_cream->Rn == 15)
             rn_val += 2 * cpu->GetInstructionSize();
 
-#if defined(__ARM_NEON) || defined(__aarch64__)
-        // CMN always needs to update flags, so we can't use a simple NEON addition
-        // But we can use NEON to calculate the result and then update flags
-        uint32x2_t v_rn = vdup_n_u32(rn_val);
-        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
-        uint32x2_t v_result = vadd_u32(v_rn, v_op2);  // NEON addition
-        u32 result = vget_lane_u32(v_result, 0);
-        
-        // We still need to calculate carry and overflow flags
-        bool carry;
-        bool overflow;
-        AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
-        
-        UPDATE_NFLAG(result);
-        UPDATE_ZFLAG(result);
-        cpu->CFlag = carry;
-        cpu->VFlag = overflow;
-#else
+//#if defined(__ARM_NEON) || defined(__aarch64__)
+//        // CMN always needs to update flags, so we can't use a simple NEON addition
+//        // But we can use NEON to calculate the result and then update flags
+//        uint32x2_t v_rn = vdup_n_u32(rn_val);
+//        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
+//        uint32x2_t v_result = vadd_u32(v_rn, v_op2);  // NEON addition
+//        u32 result = vget_lane_u32(v_result, 0);
+//        
+//        // We still need to calculate carry and overflow flags
+//        bool carry;
+//        bool overflow;
+//        AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
+//        
+//        UPDATE_NFLAG(result);
+//        UPDATE_ZFLAG(result);
+//        cpu->CFlag = carry;
+//        cpu->VFlag = overflow;
+//#else
         bool carry;
         bool overflow;
         u32 result = AddWithCarry(rn_val, SHIFTER_OPERAND, 0, &carry, &overflow);
@@ -2354,7 +2354,7 @@ CMN_INST : {
         UPDATE_ZFLAG(result);
         cpu->CFlag = carry;
         cpu->VFlag = overflow;
-#endif
+//#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(cmn_inst));
@@ -2369,24 +2369,24 @@ CMP_INST : {
         if (inst_cream->Rn == 15)
             rn_val += 2 * cpu->GetInstructionSize();
 
-#if defined(__ARM_NEON) || defined(__aarch64__)
-        // CMP always needs to update flags, so we can't use a simple NEON subtraction
-        // But we can use NEON to calculate the result and then update flags
-        uint32x2_t v_rn = vdup_n_u32(rn_val);
-        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
-        uint32x2_t v_result = vsub_u32(v_rn, v_op2);  // NEON subtraction
-        u32 result = vget_lane_u32(v_result, 0);
-        
-        // We still need to calculate carry and overflow flags
-        bool carry;
-        bool overflow;
-        AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
-        
-        UPDATE_NFLAG(result);
-        UPDATE_ZFLAG(result);
-        cpu->CFlag = carry;
-        cpu->VFlag = overflow;
-#else
+//#if defined(__ARM_NEON) || defined(__aarch64__)
+//        // CMP always needs to update flags, so we can't use a simple NEON subtraction
+//        // But we can use NEON to calculate the result and then update flags
+//        uint32x2_t v_rn = vdup_n_u32(rn_val);
+//        uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
+//        uint32x2_t v_result = vsub_u32(v_rn, v_op2);  // NEON subtraction
+//        u32 result = vget_lane_u32(v_result, 0);
+//        
+//        // We still need to calculate carry and overflow flags
+//        bool carry;
+//        bool overflow;
+//        AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
+//        
+//        UPDATE_NFLAG(result);
+//        UPDATE_ZFLAG(result);
+//        cpu->CFlag = carry;
+//        cpu->VFlag = overflow;
+//#else
         bool carry;
         bool overflow;
         u32 result = AddWithCarry(rn_val, ~SHIFTER_OPERAND, 1, &carry, &overflow);
@@ -2395,7 +2395,7 @@ CMP_INST : {
         UPDATE_ZFLAG(result);
         cpu->CFlag = carry;
         cpu->VFlag = overflow;
-#endif
+//#endif
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(cmp_inst));
@@ -2460,7 +2460,7 @@ EOR_INST : {
         
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple XOR without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct XOR using NEON
             uint32x2_t v_lop = vdup_n_u32(lop);
             uint32x2_t v_rop = vdup_n_u32(rop);
@@ -3021,7 +3021,7 @@ MOV_INST : {
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // For MOV, we don't actually need NEON for the operation itself since it's just assignment
         // But we can still optimize the common case to avoid unnecessary branches and flag updates
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct assignment for the common case (no flags, not PC)
             RD = SHIFTER_OPERAND;
         } else {
@@ -3204,7 +3204,7 @@ MVN_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple MVN without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct MVN using NEON
             uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
             uint32x2_t result = vmvn_u32(v_op);  // Bitwise NOT
@@ -3266,7 +3266,7 @@ ORR_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple OR without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct OR using NEON
             uint32x2_t v_lop = vdup_n_u32(lop);
             uint32x2_t v_rop = vdup_n_u32(rop);
@@ -3548,7 +3548,7 @@ RSB_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple RSB without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // RSB is OP2 - OP1, which is equivalent to OP2 + (~OP1 + 1)
             uint32x2_t v_rn = vdup_n_u32(rn_val);
             uint32x2_t v_op2 = vdup_n_u32(SHIFTER_OPERAND);
@@ -4684,7 +4684,7 @@ SUB_INST : {
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
         // Fast path for simple subtraction without flags (most common case)
-        if (!inst_cream->S && inst_cream->Rd != 15) {
+        if (!inst_cream->S && inst_cream->Rd != 15) [[likely]] {
             // Direct subtraction using NEON
             uint32x2_t v_rn = vdup_n_u32(rn_val);
             uint32x2_t v_op = vdup_n_u32(SHIFTER_OPERAND);
