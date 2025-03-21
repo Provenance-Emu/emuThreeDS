@@ -1241,6 +1241,7 @@ static int clz(unsigned int x) {
 
 MICROPROFILE_DEFINE(DynCom_Execute, "DynCom", "Execute", MP_RGB(255, 0, 0));
 
+__attribute__((hot))
 unsigned InterpreterMainLoop(ARMul_State* cpu) {
     MICROPROFILE_SCOPE(DynCom_Execute);
 
