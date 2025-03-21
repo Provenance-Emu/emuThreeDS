@@ -100,7 +100,67 @@ static void vfp_single_normalise_denormal(struct vfp_single* vs) {
 }
 
 u32 vfp_single_normaliseround(ARMul_State* state, int sd, struct vfp_single* vs, u32 fpscr,
-                              u32 exceptions, const char* func) {
+                               u32 exceptions, const char* func) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Check if we can use a fast path for common cases
+    // This is only applicable for normal numbers without special handling
+    if (vs->exponent != 255 && vs->significand != 0 && 
+        (exceptions == 0) && 
+        (fpscr & FPSCR_RMODE_MASK) == FPSCR_ROUND_NEAREST) {
+        
+        // For normal numbers, we can directly pack and store
+        // First check if normalization is needed
+        int exponent = vs->exponent;
+        u32 significand = vs->significand;
+        
+        // Normalize if needed
+        int shift = 32 - fls(significand);
+        if (shift < 32 && shift) {
+            exponent -= shift;
+            significand <<= shift;
+        }
+        
+        // Check for underflow
+        bool underflow = exponent < 0;
+        if (!underflow) {
+            // Check for overflow
+            if (exponent < 254) {
+                // Normal case - apply rounding
+                u32 incr = 1 << VFP_SINGLE_LOW_BITS;
+                if ((significand & (1 << (VFP_SINGLE_LOW_BITS + 1))) == 0)
+                    incr -= 1;
+                
+                // Check if rounding will overflow
+                if ((significand + incr) < significand) {
+                    exponent += 1;
+                    significand = (significand >> 1) | (significand & 1);
+                    incr >>= 1;
+                }
+                
+                // Check for inexact result
+                if (significand & ((1 << (VFP_SINGLE_LOW_BITS + 1)) - 1))
+                    exceptions |= FPSCR_IXC;
+                
+                // Apply rounding
+                significand += incr;
+                
+                // Final normalization
+                if (significand >> (VFP_SINGLE_LOW_BITS + 1) == 0)
+                    exponent = 0;
+                
+                vs->exponent = exponent;
+                vs->significand = significand >> 1;
+                
+                // Pack and store directly
+                s32 d = vfp_single_pack(vs);
+                vfp_put_float(state, d, sd);
+                return exceptions;
+            }
+        }
+    }
+#endif
+
+    // Fallback to original implementation for special cases
     u32 significand, incr, rmode;
     int exponent, shift, underflow;
 
@@ -931,6 +991,55 @@ static u32 vfp_single_multiply(struct vfp_single* vsd, struct vfp_single* vsn,
 
 static u32 vfp_single_multiply_accumulate(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr,
                                           u32 negate, const char* func) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal numbers with no negation
+    if (negate == 0) {
+        s32 n = vfp_get_float(state, sn);
+        s32 d = vfp_get_float(state, sd);
+        
+        // Extract exponents to check for special values
+        u32 exp_n = (n & 0x7F800000) >> 23;
+        u32 exp_m = (m & 0x7F800000) >> 23;
+        u32 exp_d = (d & 0x7F800000) >> 23;
+        
+        // Check if all numbers are normal (not zero, denormal, infinity, or NaN)
+        if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255 && exp_d > 0 && exp_d < 255) {
+            // All are normal numbers, use NEON for direct floating-point MAC
+            float32_t fn, fm, fd;
+            memcpy(&fn, &n, sizeof(fn));
+            memcpy(&fm, &m, sizeof(fm));
+            memcpy(&fd, &d, sizeof(fd));
+            
+            // Use NEON for fused multiply-add
+            float32x2_t vn = vdup_n_f32(fn);
+            float32x2_t vm = vdup_n_f32(fm);
+            float32x2_t vd = vdup_n_f32(fd);
+            
+#if defined(__aarch64__)
+            // ARM64 has a fused multiply-add instruction
+            float32x2_t result = vfma_f32(vd, vn, vm);
+#else
+            // For older ARM, do multiply then add
+            float32x2_t prod = vmul_f32(vn, vm);
+            float32x2_t result = vadd_f32(vd, prod);
+#endif
+            
+            float32_t fr = vget_lane_f32(result, 0);
+            s32 r;
+            memcpy(&r, &fr, sizeof(r));
+            
+            // Check if the result is still a normal number
+            u32 exp_r = (r & 0x7F800000) >> 23;
+            if (exp_r > 0 && exp_r < 255) {
+                // Result is a normal number, store it directly
+                vfp_put_float(state, r, sd);
+                return 0;
+            }
+        }
+    }
+#endif
+
+    // Original implementation for complex cases
     vfp_single vsd, vsp, vsn, vsm;
     u32 exceptions = 0;
     s32 v;
@@ -972,6 +1081,52 @@ static u32 vfp_single_multiply_accumulate(ARMul_State* state, int sd, int sn, s3
  * sd = sd + (sn * sm)
  */
 static u32 vfp_single_fmac(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal numbers using NEON
+    s32 n = vfp_get_float(state, sn);
+    s32 d = vfp_get_float(state, sd);
+    
+    // Extract exponents to check for special values
+    u32 exp_n = (n & 0x7F800000) >> 23;
+    u32 exp_m = (m & 0x7F800000) >> 23;
+    u32 exp_d = (d & 0x7F800000) >> 23;
+    
+    // Check if all numbers are normal (not zero, denormal, infinity, or NaN)
+    if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255 && exp_d > 0 && exp_d < 255) {
+        // All are normal numbers, use NEON for direct floating-point MAC
+        float32_t fn, fm, fd;
+        memcpy(&fn, &n, sizeof(fn));
+        memcpy(&fm, &m, sizeof(fm));
+        memcpy(&fd, &d, sizeof(fd));
+        
+        // Use NEON for fused multiply-add
+        float32x2_t vn = vdup_n_f32(fn);
+        float32x2_t vm = vdup_n_f32(fm);
+        float32x2_t vd = vdup_n_f32(fd);
+        
+#if defined(__aarch64__)
+        // ARM64 has a fused multiply-add instruction
+        float32x2_t result = vfma_f32(vd, vn, vm);
+#else
+        // For older ARM, do multiply then add
+        float32x2_t prod = vmul_f32(vn, vm);
+        float32x2_t result = vadd_f32(vd, prod);
+#endif
+        
+        float32_t fr = vget_lane_f32(result, 0);
+        s32 r;
+        memcpy(&r, &fr, sizeof(r));
+        
+        // Check if the result is still a normal number
+        u32 exp_r = (r & 0x7F800000) >> 23;
+        if (exp_r > 0 && exp_r < 255) {
+            // Result is a normal number, store it directly
+            vfp_put_float(state, r, sd);
+            return 0;
+        }
+    }
+#endif
+
     LOG_TRACE(Core_ARM11, "s{} = {:08x}", sn, sd);
     return vfp_single_multiply_accumulate(state, sd, sn, m, fpscr, 0, "fmac");
 }
@@ -1008,31 +1163,35 @@ static u32 vfp_single_fnmsc(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr
 static u32 vfp_single_fmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Fast path for normal cases using NEON
-    // Check if we can use a fast path for common cases
     s32 neon_n = vfp_get_float(state, sn);
-    float_u32_union fn, fm;
     
-    // Convert raw bits to float
-    fn.v = neon_n;
-    fm.v = m;
+    // Extract exponents to check for special values
+    u32 exp_n = (neon_n & 0x7F800000) >> 23;
+    u32 exp_m = (m & 0x7F800000) >> 23;
     
-    // Check for special cases (NaN, infinity, denormals)
-    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
-                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
-                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
-                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
-    
-    if (!special_case) {
-        // Use NEON for direct floating-point multiplication
-        float32x2_t vn = vdup_n_f32(fn.f);
-        float32x2_t vm = vdup_n_f32(fm.f);
-        float32x2_t result = vmul_f32(vn, vm);
-        float_u32_union fr;
-        fr.f = vget_lane_f32(result, 0);
+    // Check if both numbers are normal (not zero, denormal, infinity, or NaN)
+    if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255) {
+        // Both are normal numbers, use NEON for direct floating-point multiplication
+        float32_t fn, fm;
+        memcpy(&fn, &neon_n, sizeof(fn));
+        memcpy(&fm, &m, sizeof(fm));
         
-        // Store the result
-        vfp_put_float(state, fr.v, sd);
-        return 0;
+        // Use NEON for direct floating-point multiplication
+        float32x2_t vn = vdup_n_f32(fn);
+        float32x2_t vm = vdup_n_f32(fm);
+        float32x2_t result = vmul_f32(vn, vm);
+        
+        float32_t fr = vget_lane_f32(result, 0);
+        s32 r;
+        memcpy(&r, &fr, sizeof(r));
+        
+        // Check if the result is still a normal number
+        u32 exp_r = (r & 0x7F800000) >> 23;
+        if (exp_r > 0 && exp_r < 255) {
+            // Result is a normal number, store it directly
+            vfp_put_float(state, r, sd);
+            return 0;
+        }
     }
 #endif
     // Fallback to standard implementation for special cases
@@ -1114,31 +1273,35 @@ static u32 vfp_single_fnmul(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr
 static u32 vfp_single_fadd(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Fast path for normal cases using NEON
-    // Check if we can use a fast path for common cases
     s32 neon_n = vfp_get_float(state, sn);
-    float_u32_union fn, fm;
     
-    // Convert raw bits to float
-    fn.v = neon_n;
-    fm.v = m;
+    // Extract exponents to check for special values
+    u32 exp_n = (neon_n & 0x7F800000) >> 23;
+    u32 exp_m = (m & 0x7F800000) >> 23;
     
-    // Check for special cases (NaN, infinity, denormals)
-    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
-                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
-                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
-                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
-    
-    if (!special_case) {
-        // Use NEON for direct floating-point addition
-        float32x2_t vn = vdup_n_f32(fn.f);
-        float32x2_t vm = vdup_n_f32(fm.f);
-        float32x2_t result = vadd_f32(vn, vm);
-        float_u32_union fr;
-        fr.f = vget_lane_f32(result, 0);
+    // Check if both numbers are normal (not zero, denormal, infinity, or NaN)
+    if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255) {
+        // Both are normal numbers, use NEON for direct floating-point addition
+        float32_t fn, fm;
+        memcpy(&fn, &neon_n, sizeof(fn));
+        memcpy(&fm, &m, sizeof(fm));
         
-        // Store the result
-        vfp_put_float(state, fr.v, sd);
-        return 0;
+        // Use NEON for direct floating-point addition
+        float32x2_t vn = vdup_n_f32(fn);
+        float32x2_t vm = vdup_n_f32(fm);
+        float32x2_t result = vadd_f32(vn, vm);
+        
+        float32_t fr = vget_lane_f32(result, 0);
+        s32 r;
+        memcpy(&r, &fr, sizeof(r));
+        
+        // Check if the result is still a normal number
+        u32 exp_r = (r & 0x7F800000) >> 23;
+        if (exp_r > 0 && exp_r < 255) {
+            // Result is a normal number, store it directly
+            vfp_put_float(state, r, sd);
+            return 0;
+        }
     }
 #endif
     // Fallback to standard implementation for special cases
@@ -1170,31 +1333,35 @@ static u32 vfp_single_fadd(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
 static u32 vfp_single_fsub(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Fast path for normal cases using NEON
-    // Check if we can use a fast path for common cases
     s32 neon_n = vfp_get_float(state, sn);
-    float_u32_union fn, fm;
     
-    // Convert raw bits to float
-    fn.v = neon_n;
-    fm.v = m;
+    // Extract exponents to check for special values
+    u32 exp_n = (neon_n & 0x7F800000) >> 23;
+    u32 exp_m = (m & 0x7F800000) >> 23;
     
-    // Check for special cases (NaN, infinity, denormals)
-    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
-                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
-                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
-                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
-    
-    if (!special_case) {
-        // Use NEON for direct floating-point subtraction
-        float32x2_t vn = vdup_n_f32(fn.f);
-        float32x2_t vm = vdup_n_f32(fm.f);
-        float32x2_t result = vsub_f32(vn, vm);
-        float_u32_union fr;
-        fr.f = vget_lane_f32(result, 0);
+    // Check if both numbers are normal (not zero, denormal, infinity, or NaN)
+    if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255) {
+        // Both are normal numbers, use NEON for direct floating-point subtraction
+        float32_t fn, fm;
+        memcpy(&fn, &neon_n, sizeof(fn));
+        memcpy(&fm, &m, sizeof(fm));
         
-        // Store the result
-        vfp_put_float(state, fr.v, sd);
-        return 0;
+        // Use NEON for direct floating-point subtraction
+        float32x2_t vn = vdup_n_f32(fn);
+        float32x2_t vm = vdup_n_f32(fm);
+        float32x2_t result = vsub_f32(vn, vm);
+        
+        float32_t fr = vget_lane_f32(result, 0);
+        s32 r;
+        memcpy(&r, &fr, sizeof(r));
+        
+        // Check if the result is still a normal number
+        u32 exp_r = (r & 0x7F800000) >> 23;
+        if (exp_r > 0 && exp_r < 255) {
+            // Result is a normal number, store it directly
+            vfp_put_float(state, r, sd);
+            return 0;
+        }
     }
 #endif
     LOG_TRACE(Core_ARM11, "s{} = {:08x}", sn, sd);
@@ -1223,21 +1390,20 @@ static u32 vfp_single_fsub(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
 static u32 vfp_single_fdiv(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr) {
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Fast path for normal cases using NEON
-    // Check if we can use a fast path for common cases
     s32 neon_n = vfp_get_float(state, sn);
-    float_u32_union fn, fm;
     
-    // Convert raw bits to float
-    fn.v = neon_n;
-    fm.v = m;
+    // Quick check for common cases where we can use NEON directly
+    // Extract exponents to check for special values
+    u32 exp_n = (neon_n & 0x7F800000) >> 23;
+    u32 exp_m = (m & 0x7F800000) >> 23;
     
-    // Check for special cases (NaN, infinity, denormals, zero)
-    bool special_case = ((neon_n & 0x7F800000) == 0x7F800000) || // n is NaN or infinity
-                        ((m & 0x7F800000) == 0x7F800000) ||      // m is NaN or infinity
-                        ((neon_n & 0x7F800000) == 0) ||          // n is zero or denormal
-                        ((m & 0x7F800000) == 0);                 // m is zero or denormal
-    
-    if (!special_case) {
+    // Check if both numbers are normal (not zero, denormal, infinity, or NaN)
+    if (exp_n > 0 && exp_n < 255 && exp_m > 0 && exp_m < 255) {
+        // Both are normal numbers, use NEON for direct floating-point division
+        float_u32_union fn, fm;
+        fn.v = neon_n;
+        fm.v = m;
+        
         // Use NEON for direct floating-point division
         float32x2_t vn = vdup_n_f32(fn.f);
         float32x2_t vm = vdup_n_f32(fm.f);
@@ -1245,9 +1411,13 @@ static u32 vfp_single_fdiv(ARMul_State* state, int sd, int sn, s32 m, u32 fpscr)
         float_u32_union fr;
         fr.f = vget_lane_f32(result, 0);
         
-        // Store the result
-        vfp_put_float(state, fr.v, sd);
-        return 0;
+        // Check if the result needs special handling (overflow, underflow, etc.)
+        u32 exp_r = (fr.v & 0x7F800000) >> 23;
+        if (exp_r > 0 && exp_r < 255) {
+            // Result is a normal number, store it directly
+            vfp_put_float(state, fr.v, sd);
+            return 0;
+        }
     }
 #endif
     struct vfp_single vsd, vsn, vsm;
@@ -1370,6 +1540,26 @@ u32 vfp_single_cpdo(ARMul_State* state, u32 inst, u32 fpscr) {
     unsigned int sm = vfp_get_sm(inst);
     unsigned int vecitr, veclen, vecstride;
     struct op* fop;
+    
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for common operations
+    // Check if this is a scalar operation with common operators
+    if ((fpscr & FPSCR_LENGTH_MASK) == 0) { // Scalar operation (veclen = 0)
+        fop = (op == FOP_EXT) ? &fops_ext[FEXT_TO_IDX(inst)] : &fops[FOP_TO_IDX(op)];
+        
+        // Get destination register
+        if (fop->flags & OP_DD)
+            dest = vfp_get_dd(inst);
+        else
+            dest = vfp_get_sd(inst);
+            
+        // If this is a simple operation, we can optimize it
+        if (fop->fn && (fop->flags & OP_SCALAR)) {
+            s32 m = vfp_get_float(state, sm);
+            return fop->fn(state, dest, sn, m, fpscr);
+        }
+    }
+#endif
 
     vecstride = 1 + ((fpscr & FPSCR_STRIDE_MASK) == FPSCR_STRIDE_MASK);
 
