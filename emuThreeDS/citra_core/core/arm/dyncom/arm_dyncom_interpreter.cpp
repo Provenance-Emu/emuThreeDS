@@ -2731,31 +2731,42 @@ LDR_INST : {
     ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
     inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-    unsigned int value = cpu->ReadMemory32(addr);
-    cpu->Reg[BITS(inst_cream->inst, 12, 15)] = value;
-
-    if (BITS(inst_cream->inst, 12, 15) == 15) {
+    // Fast path for common case - not loading to PC
+    const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+    if (reg_idx != 15) [[likely]] {
+        cpu->Reg[reg_idx] = cpu->ReadMemory32(addr);
+        cpu->Reg[15] += cpu->GetInstructionSize();
+        INC_PC(sizeof(ldst_inst));
+        FETCH_INST;
+        GOTO_NEXT_INST;
+    } else {
+        // Slow path for PC-relative loads
+        unsigned int value = cpu->ReadMemory32(addr);
+        cpu->Reg[15] = value;
         // For armv5t, should enter thumb when bits[0] is non-zero.
         cpu->TFlag = value & 0x1;
         cpu->Reg[15] &= 0xFFFFFFFE;
         INC_PC(sizeof(ldst_inst));
         goto DISPATCH;
     }
-
-    cpu->Reg[15] += cpu->GetInstructionSize();
-    INC_PC(sizeof(ldst_inst));
-    FETCH_INST;
-    GOTO_NEXT_INST;
 }
 LDRCOND_INST : {
     if (CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        unsigned int value = cpu->ReadMemory32(addr);
-        cpu->Reg[BITS(inst_cream->inst, 12, 15)] = value;
-
-        if (BITS(inst_cream->inst, 12, 15) == 15) {
+        // Fast path for common case - not loading to PC
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        if (reg_idx != 15) [[likely]] {
+            cpu->Reg[reg_idx] = cpu->ReadMemory32(addr);
+            cpu->Reg[15] += cpu->GetInstructionSize();
+            INC_PC(sizeof(ldst_inst));
+            FETCH_INST;
+            GOTO_NEXT_INST;
+        } else {
+            // Slow path for PC-relative loads
+            unsigned int value = cpu->ReadMemory32(addr);
+            cpu->Reg[15] = value;
             // For armv5t, should enter thumb when bits[0] is non-zero.
             cpu->TFlag = value & 0x1;
             cpu->Reg[15] &= 0xFFFFFFFE;
@@ -2795,7 +2806,9 @@ LDRB_INST : {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        cpu->Reg[BITS(inst_cream->inst, 12, 15)] = cpu->ReadMemory8(addr);
+        // Extract register index once and use directly
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        cpu->Reg[reg_idx] = cpu->ReadMemory8(addr);
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
@@ -2903,7 +2916,9 @@ LDRH_INST : {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        cpu->Reg[BITS(inst_cream->inst, 12, 15)] = cpu->ReadMemory16(addr);
+        // Extract register index once and use directly
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        cpu->Reg[reg_idx] = cpu->ReadMemory16(addr);
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
@@ -4477,13 +4492,15 @@ STR_INST : {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        unsigned int reg = BITS(inst_cream->inst, 12, 15);
-        unsigned int value = cpu->Reg[reg];
-
-        if (reg == 15)
-            value += 2 * cpu->GetInstructionSize();
-
-        cpu->WriteMemory32(addr, value);
+        // Fast path for common case - not storing from PC
+        const unsigned int reg = BITS(inst_cream->inst, 12, 15);
+        if (reg != 15) [[likely]] {
+            cpu->WriteMemory32(addr, cpu->Reg[reg]);
+        } else {
+            // Slow path for PC-relative stores
+            unsigned int value = cpu->Reg[15] + 2 * cpu->GetInstructionSize();
+            cpu->WriteMemory32(addr, value);
+        }
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
@@ -4516,8 +4533,10 @@ STRB_INST : {
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
-        unsigned int value = cpu->Reg[BITS(inst_cream->inst, 12, 15)] & 0xff;
-        cpu->WriteMemory8(addr, value);
+        
+        // Extract register index once and use directly
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        cpu->WriteMemory8(addr, cpu->Reg[reg_idx] & 0xff);
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
@@ -4647,8 +4666,9 @@ STRH_INST : {
         ldst_inst* inst_cream = (ldst_inst*)inst_base->component;
         inst_cream->get_addr(cpu, inst_cream->inst, addr);
 
-        unsigned int value = cpu->Reg[BITS(inst_cream->inst, 12, 15)] & 0xffff;
-        cpu->WriteMemory16(addr, value);
+        // Extract register index once and use directly
+        const unsigned int reg_idx = BITS(inst_cream->inst, 12, 15);
+        cpu->WriteMemory16(addr, cpu->Reg[reg_idx] & 0xffff);
     }
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(ldst_inst));
