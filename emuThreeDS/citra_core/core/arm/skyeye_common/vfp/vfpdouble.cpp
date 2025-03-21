@@ -57,6 +57,16 @@
 #include "core/arm/skyeye_common/vfp/vfp.h"
 #include "core/arm/skyeye_common/vfp/vfp_helper.h"
 
+#if defined(__ARM_NEON) || defined(__aarch64__)
+#include <arm_neon.h>
+
+// Union for type-punning between double and u64
+union double_u64_union {
+    double d;
+    u64 v;
+};
+#endif
+
 static struct vfp_double vfp_double_default_qnan = {
     2047,
     0,
@@ -966,6 +976,36 @@ static u32 vfp_double_fnmsc(ARMul_State* state, int dd, int dn, int dm, u32 fpsc
  * sd = sn * sm
  */
 static u32 vfp_double_fmul(ARMul_State* state, int dd, int dn, int dm, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    u64 neon_n = vfp_get_double(state, dn);
+    u64 neon_m = vfp_get_double(state, dm);
+    double_u64_union fn, fm;
+    
+    // Convert raw bits to double
+    fn.v = neon_n;
+    fm.v = neon_m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // n is NaN or infinity
+                        ((neon_m & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // m is NaN or infinity
+                        ((neon_n & 0x7FF0000000000000ULL) == 0) ||                     // n is zero or denormal
+                        ((neon_m & 0x7FF0000000000000ULL) == 0);                       // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point multiplication
+        float64x1_t vn = vdup_n_f64(fn.d);
+        float64x1_t vm = vdup_n_f64(fm.d);
+        float64x1_t result = vmul_f64(vn, vm);
+        double_u64_union fr;
+        fr.d = vget_lane_f64(result, 0);
+        
+        // Store the result
+        vfp_put_double(state, fr.v, dd);
+        return 0;
+    }
+#endif
     struct vfp_double vdd, vdn, vdm;
     u32 exceptions = 0;
 
@@ -986,6 +1026,38 @@ static u32 vfp_double_fmul(ARMul_State* state, int dd, int dn, int dm, u32 fpscr
  * sd = -(sn * sm)
  */
 static u32 vfp_double_fnmul(ARMul_State* state, int dd, int dn, int dm, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    u64 neon_n = vfp_get_double(state, dn);
+    u64 neon_m = vfp_get_double(state, dm);
+    double_u64_union fn, fm;
+    
+    // Convert raw bits to double
+    fn.v = neon_n;
+    fm.v = neon_m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // n is NaN or infinity
+                        ((neon_m & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // m is NaN or infinity
+                        ((neon_n & 0x7FF0000000000000ULL) == 0) ||                     // n is zero or denormal
+                        ((neon_m & 0x7FF0000000000000ULL) == 0);                       // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point multiplication with negation
+        float64x1_t vn = vdup_n_f64(fn.d);
+        float64x1_t vm = vdup_n_f64(fm.d);
+        float64x1_t result = vmul_f64(vn, vm);
+        // Negate the result
+        result = vneg_f64(result);
+        double_u64_union fr;
+        fr.d = vget_lane_f64(result, 0);
+        
+        // Store the result
+        vfp_put_double(state, fr.v, dd);
+        return 0;
+    }
+#endif
     struct vfp_double vdd, vdn, vdm;
     u32 exceptions = 0;
 
@@ -1008,6 +1080,36 @@ static u32 vfp_double_fnmul(ARMul_State* state, int dd, int dn, int dm, u32 fpsc
  * sd = sn + sm
  */
 static u32 vfp_double_fadd(ARMul_State* state, int dd, int dn, int dm, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    u64 neon_n = vfp_get_double(state, dn);
+    u64 neon_m = vfp_get_double(state, dm);
+    double_u64_union fn, fm;
+    
+    // Convert raw bits to double
+    fn.v = neon_n;
+    fm.v = neon_m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // n is NaN or infinity
+                        ((neon_m & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // m is NaN or infinity
+                        ((neon_n & 0x7FF0000000000000ULL) == 0) ||                     // n is zero or denormal
+                        ((neon_m & 0x7FF0000000000000ULL) == 0);                       // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point addition
+        float64x1_t vn = vdup_n_f64(fn.d);
+        float64x1_t vm = vdup_n_f64(fm.d);
+        float64x1_t result = vadd_f64(vn, vm);
+        double_u64_union fr;
+        fr.d = vget_lane_f64(result, 0);
+        
+        // Store the result
+        vfp_put_double(state, fr.v, dd);
+        return 0;
+    }
+#endif
     struct vfp_double vdd, vdn, vdm;
     u32 exceptions = 0;
 
@@ -1029,6 +1131,36 @@ static u32 vfp_double_fadd(ARMul_State* state, int dd, int dn, int dm, u32 fpscr
  * sd = sn - sm
  */
 static u32 vfp_double_fsub(ARMul_State* state, int dd, int dn, int dm, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    u64 neon_n = vfp_get_double(state, dn);
+    u64 neon_m = vfp_get_double(state, dm);
+    double_u64_union fn, fm;
+    
+    // Convert raw bits to double
+    fn.v = neon_n;
+    fm.v = neon_m;
+    
+    // Check for special cases (NaN, infinity, denormals)
+    bool special_case = ((neon_n & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // n is NaN or infinity
+                        ((neon_m & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // m is NaN or infinity
+                        ((neon_n & 0x7FF0000000000000ULL) == 0) ||                     // n is zero or denormal
+                        ((neon_m & 0x7FF0000000000000ULL) == 0);                       // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point subtraction
+        float64x1_t vn = vdup_n_f64(fn.d);
+        float64x1_t vm = vdup_n_f64(fm.d);
+        float64x1_t result = vsub_f64(vn, vm);
+        double_u64_union fr;
+        fr.d = vget_lane_f64(result, 0);
+        
+        // Store the result
+        vfp_put_double(state, fr.v, dd);
+        return 0;
+    }
+#endif
     struct vfp_double vdd, vdn, vdm;
     u32 exceptions = 0;
 
@@ -1055,6 +1187,36 @@ static u32 vfp_double_fsub(ARMul_State* state, int dd, int dn, int dm, u32 fpscr
  * sd = sn / sm
  */
 static u32 vfp_double_fdiv(ARMul_State* state, int dd, int dn, int dm, u32 fpscr) {
+#if defined(__ARM_NEON) || defined(__aarch64__)
+    // Fast path for normal cases using NEON
+    // Check if we can use a fast path for common cases
+    u64 neon_n = vfp_get_double(state, dn);
+    u64 neon_m = vfp_get_double(state, dm);
+    double_u64_union fn, fm;
+    
+    // Convert raw bits to double
+    fn.v = neon_n;
+    fm.v = neon_m;
+    
+    // Check for special cases (NaN, infinity, denormals, zero)
+    bool special_case = ((neon_n & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // n is NaN or infinity
+                        ((neon_m & 0x7FF0000000000000ULL) == 0x7FF0000000000000ULL) || // m is NaN or infinity
+                        ((neon_n & 0x7FF0000000000000ULL) == 0) ||                     // n is zero or denormal
+                        ((neon_m & 0x7FF0000000000000ULL) == 0);                       // m is zero or denormal
+    
+    if (!special_case) {
+        // Use NEON for direct floating-point division
+        float64x1_t vn = vdup_n_f64(fn.d);
+        float64x1_t vm = vdup_n_f64(fm.d);
+        float64x1_t result = vdiv_f64(vn, vm);
+        double_u64_union fr;
+        fr.d = vget_lane_f64(result, 0);
+        
+        // Store the result
+        vfp_put_double(state, fr.v, dd);
+        return 0;
+    }
+#endif
     struct vfp_double vdd, vdn, vdm;
     u32 exceptions = 0;
     int tm, tn;
