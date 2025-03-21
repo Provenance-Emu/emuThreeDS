@@ -8,6 +8,7 @@
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/scm_rev.h"
+#include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/core.h"
 #include "core/core_timing.h"
@@ -73,6 +74,12 @@ enum class KernelState {
      * Reboots the console
      */
     KERNEL_STATE_REBOOT = 7,
+    
+    // Special Citra only states.
+    /**
+     * Sets the emulation speed percentage. A value of 0 means unthrottled.
+     */
+    KERNEL_STATE_CITRA_EMULATION_SPEED = 0x20000 ///
 };
 
 struct PageInfo {
@@ -1422,12 +1429,21 @@ ResultCode SVC::ReleaseSemaphore(s32* count, Handle handle, s32 release_count) {
 /// Sets the kernel state
 ResultCode SVC::KernelSetState(u32 kernel_state, u32 varg1, u32 varg2) {
     switch (static_cast<KernelState>(kernel_state)) {
-
     // This triggers a hardware reboot on real console, since this doesn't make sense
     // on emulator, we shutdown instead.
     case KernelState::KERNEL_STATE_REBOOT:
         system.RequestShutdown();
         break;
+
+    // Citra specific states.
+    case KernelState::KERNEL_STATE_CITRA_EMULATION_SPEED: {
+        u16 new_value = static_cast<u16>(varg1);
+        if (new_value == 0xFFFF) {
+            Settings::is_temporary_frame_limit = false;
+        } else {
+            Settings::temporary_frame_limit = static_cast<double>(new_value);
+        }
+    } break;
     default:
         LOG_ERROR(Kernel_SVC, "Unknown KernelSetState state={} varg1={} varg2={}", kernel_state,
                   varg1, varg2);
