@@ -8,20 +8,27 @@
 #include <memory>
 #include <mutex>
 #include <string>
+#include <boost/optional.hpp>
 #include <boost/serialization/version.hpp>
 #include "common/common_types.h"
+#include "core/arm/arm_interface.h"
+#include "core/cheats/cheats.h"
+#include "core/hle/service/apt/applet_manager.h"
+#include "core/hle/service/plgldr/plgldr.h"
+#include "core/memory.h"
+#include "core/movie.h"
+#include "core/perf_stats.h"
 #include "core/frontend/applets/mii_selector.h"
 #include "core/frontend/applets/swkbd.h"
 #include "core/loader/loader.h"
-#include "core/memory.h"
-#include "core/perf_stats.h"
-#include "core/telemetry_session.h"
 
 class ARM_Interface;
 
 namespace Frontend {
 class EmuWindow;
 class ImageInterface;
+class MiiSelector;
+class SoftwareKeyboard;
 } // namespace Frontend
 
 namespace Memory {
@@ -32,8 +39,8 @@ namespace AudioCore {
 class DspInterface;
 }
 
-namespace RPC {
-class RPCServer;
+namespace Core::RPC {
+class Server;
 }
 
 namespace Service {
@@ -47,11 +54,9 @@ class ArchiveManager;
 
 namespace Kernel {
 class KernelSystem;
-}
-
-namespace Cheats {
-class CheatEngine;
-}
+struct New3dsHwCapabilities;
+enum class MemoryMode : u8;
+} // namespace Kernel
 
 namespace VideoDumper {
 class Backend;
@@ -62,62 +67,20 @@ class CustomTexManager;
 class GPU;
 } // namespace VideoCore
 
+namespace Pica {
+class DebugContext;
+}
+
+namespace Loader {
+class AppLoader;
+}
+
 namespace Core {
 
+//class ARM_Interface;
+class TelemetrySession;
 class ExclusiveMonitor;
 class Timing;
-
-/**
- * Class to handle automatic CPU clock percentage adjustment based on GPU performance.
- * This adjusts the CPU clock to optimize performance by monitoring the FPS and
- * adjusting the CPU clock percentage accordingly.
- */
-class AutoCpuClockAdjuster {
-public:
-    explicit AutoCpuClockAdjuster(System& system);
-    ~AutoCpuClockAdjuster() = default;
-
-    /**
-     * Updates the CPU clock percentage based on current performance metrics.
-     * Should be called periodically (e.g., once per second).
-     */
-    void Update();
-
-    /**
-     * Enables or disables the auto adjustment feature.
-     * @param enabled Whether auto adjustment should be enabled
-     */
-    void SetEnabled(bool enabled) { enabled_ = enabled; }
-
-    /**
-     * Checks if auto adjustment is currently enabled.
-     * @return True if auto adjustment is enabled, false otherwise
-     */
-    bool IsEnabled() const { return enabled_; }
-    
-    /**
-     * Gets the current CPU clock percentage being used.
-     * @return The current CPU clock percentage
-     */
-    s32 GetCurrentPercentage() const { return current_percentage_; }
-
-    static constexpr s32 auto_mode_max_percentage_ = 100; // Maximum for auto mode
-
-private:
-    System& system_;
-    bool enabled_ = false;
-    s32 current_percentage_ = 100;
-    double last_fps_ = 0.0;
-    std::chrono::steady_clock::time_point last_adjustment_time_;
-    
-    // Adjustment parameters
-    static constexpr s32 min_percentage_ = 5;
-    static constexpr s32 max_percentage_ = 400; // Maximum allowed by settings
-    static constexpr s32 adjustment_step_ = 5;
-    static constexpr std::chrono::milliseconds adjustment_interval_{500}; // Adjust every 500ms
-    static constexpr double target_fps_min_ = 50.0; // Target minimum FPS
-    static constexpr double target_fps_max_ = 65.0; // Target maximum FPS
-};
 
 class System {
 public:
@@ -143,10 +106,12 @@ public:
                                    ///< Console
         ErrorSystemFiles,          ///< Error in finding system files
         ErrorSavestate,            ///< Error saving or loading
+        ErrorArticDisconnected,    ///< Error when artic base disconnects
         ShutdownRequested,         ///< Emulated program requested a system shutdown
         ErrorUnknown               ///< Any other error
     };
 
+    explicit System();
     ~System();
 
     /**
@@ -207,6 +172,17 @@ public:
         return is_powered_on;
     }
 
+    /**
+     * Returns a reference to the telemetry session for this emulation session.
+     * @returns Reference to the telemetry session.
+     */
+    [[nodiscard]] Core::TelemetrySession& TelemetrySession() const {
+        return *telemetry_session;
+    }
+
+    /// Prepare the core emulation for a reschedule
+    void PrepareReschedule();
+
     [[nodiscard]] PerfStats::Results GetAndResetPerfStats();
 
     void ReportArticTraffic(u32 bytes) {
@@ -222,19 +198,8 @@ public:
     }
 
     [[nodiscard]] PerfStats::Results GetLastPerfStats();
-
+    
     double GetStableFrameTimeScale();
-
-    /**
-     * Returns a reference to the telemetry session for this emulation session.
-     * @returns Reference to the telemetry session.
-     */
-    [[nodiscard]] Core::TelemetrySession& TelemetrySession() const {
-        return *telemetry_session;
-    }
-
-    /// Prepare the core emulation for a reschedule
-    void PrepareReschedule();
 
     /**
      * Gets a reference to the emulated CPU.
@@ -252,6 +217,10 @@ public:
      */
 
     [[nodiscard]] ARM_Interface& GetCore(u32 core_id) {
+        return *cpu_cores[core_id];
+    };
+
+    [[nodiscard]] const ARM_Interface& GetCore(u32 core_id) const {
         return *cpu_cores[core_id];
     };
 
@@ -326,18 +295,21 @@ public:
     /// Gets a const reference to the custom texture cache system
     [[nodiscard]] const VideoCore::CustomTexManager& CustomTexManager() const;
 
-    /// Gets a reference to the video dumper backend
-    [[nodiscard]] VideoDumper::Backend& VideoDumper();
+    /// Gets a reference to the movie recorder
+    [[nodiscard]] Core::Movie& Movie();
 
-    /// Gets a const reference to the video dumper backend
-    [[nodiscard]] const VideoDumper::Backend& VideoDumper() const;
-    
+    /// Gets a const reference to the movie recorder
+    [[nodiscard]] const Core::Movie& Movie() const;
+
+    /// Video Dumper interface
+
+    void RegisterVideoDumper(std::shared_ptr<VideoDumper::Backend> video_dumper);
+
     [[nodiscard]] std::shared_ptr<VideoDumper::Backend> GetVideoDumper() const {
         return video_dumper;
     }
 
     std::unique_ptr<PerfStats> perf_stats;
-    std::unique_ptr<AutoCpuClockAdjuster> auto_cpu_clock;
     FrameLimiter frame_limiter;
 
     void SetStatus(ResultStatus new_status, const char* details = nullptr) {
@@ -400,9 +372,11 @@ public:
         }
         return false;
     }
-    
+
     /// Applies any changes to settings to this core instance.
     void ApplySettings();
+
+    void RegisterAppLoaderEarly(std::unique_ptr<Loader::AppLoader>& loader);
 
 private:
     /**
@@ -413,14 +387,19 @@ private:
      * @return ResultStatus code, indicating if the operation succeeded.
      */
     [[nodiscard]] ResultStatus Init(Frontend::EmuWindow& emu_window,
-                                    Frontend::EmuWindow* secondary_window, u32 system_mode,
-                                    u8 n3ds_mode, u32 num_cores);
+                                    Frontend::EmuWindow* secondary_window,
+                                    Kernel::MemoryMode memory_mode,
+                                    const Kernel::New3dsHwCapabilities& n3ds_hw_caps,
+                                    u32 num_cores);
 
     /// Reschedule the core emulation
     void Reschedule();
 
     /// AppLoader used to load the current executing application
     std::unique_ptr<Loader::AppLoader> app_loader;
+
+    // Temporary app loader passed from frontend
+    std::unique_ptr<Loader::AppLoader> early_app_loader;
 
     /// ARM11 CPU core
     std::vector<std::shared_ptr<ARM_Interface>> cpu_cores;
@@ -444,8 +423,11 @@ private:
     std::shared_ptr<Frontend::MiiSelector> registered_mii_selector;
     std::shared_ptr<Frontend::SoftwareKeyboard> registered_swkbd;
 
+    /// Movie recorder
+    Core::Movie movie;
+
     /// Cheats manager
-    std::unique_ptr<Cheats::CheatEngine> cheat_engine;
+    Cheats::CheatEngine cheat_engine;
 
     /// Video dumper backend
     std::shared_ptr<VideoDumper::Backend> video_dumper;
@@ -456,8 +438,10 @@ private:
     /// Image interface
     std::shared_ptr<Frontend::ImageInterface> registered_image_interface;
 
+#ifdef ENABLE_SCRIPTING
     /// RPC Server for scripting support
-    std::unique_ptr<RPC::RPCServer> rpc_server;
+    std::unique_ptr<RPC::Server> rpc_server;
+#endif
 
     std::unique_ptr<Service::FS::ArchiveManager> archive_manager;
 
@@ -489,6 +473,9 @@ private:
     std::function<bool()> mic_permission_func;
     bool mic_permission_granted = false;
 
+    boost::optional<Service::APT::DeliverArg> restore_deliver_arg;
+    boost::optional<Service::PLGLDR::PLG_LDR::PluginLoaderContext> restore_plugin_context;
+
     friend class boost::serialization::access;
     template <typename Archive>
     void serialize(Archive& ar, const unsigned int file_version);
@@ -504,10 +491,6 @@ private:
 
 [[nodiscard]] inline u32 GetNumCores() {
     return System::GetInstance().GetNumCores();
-}
-
-[[nodiscard]] inline AudioCore::DspInterface& DSP() {
-    return System::GetInstance().DSP();
 }
 
 } // namespace Core

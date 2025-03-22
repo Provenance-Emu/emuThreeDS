@@ -134,7 +134,7 @@ struct MIC_U::Impl {
     }
 
     void MapSharedMem(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x01, 1, 2};
+        IPC::RequestParser rp(ctx);
         const u32 size = rp.Pop<u32>();
         shared_memory = rp.PopObject<Kernel::SharedMemory>();
 
@@ -152,7 +152,7 @@ struct MIC_U::Impl {
     }
 
     void UnmapSharedMem(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x02, 0, 0};
+        IPC::RequestParser rp(ctx);
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         shared_memory = nullptr;
         rb.Push(RESULT_SUCCESS);
@@ -189,7 +189,7 @@ struct MIC_U::Impl {
     }
 
     void StartSampling(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x03, 5, 0};
+        IPC::RequestParser rp(ctx);
 
         encoding = rp.PopEnum<Encoding>();
         SampleRate sample_rate = rp.PopEnum<SampleRate>();
@@ -223,7 +223,7 @@ struct MIC_U::Impl {
     }
 
     void AdjustSampling(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x04, 1, 0};
+        IPC::RequestParser rp(ctx);
         SampleRate sample_rate = rp.PopEnum<SampleRate>();
         mic->AdjustSampleRate(GetSampleRateInHz(sample_rate));
 
@@ -233,7 +233,7 @@ struct MIC_U::Impl {
     }
 
     void StopSampling(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x05, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
         rb.Push(RESULT_SUCCESS);
@@ -243,7 +243,7 @@ struct MIC_U::Impl {
     }
 
     void IsSampling(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x06, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
         rb.Push(RESULT_SUCCESS);
@@ -253,7 +253,7 @@ struct MIC_U::Impl {
     }
 
     void GetBufferFullEvent(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x07, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
         rb.Push(RESULT_SUCCESS);
@@ -262,7 +262,7 @@ struct MIC_U::Impl {
     }
 
     void SetGain(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x08, 1, 0};
+        IPC::RequestParser rp(ctx);
         u8 gain = rp.Pop<u8>();
         mic->SetGain(gain);
 
@@ -272,7 +272,7 @@ struct MIC_U::Impl {
     }
 
     void GetGain(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x09, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
         rb.Push(RESULT_SUCCESS);
@@ -282,7 +282,7 @@ struct MIC_U::Impl {
     }
 
     void SetPower(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0A, 1, 0};
+        IPC::RequestParser rp(ctx);
         bool power = rp.Pop<bool>();
         mic->SetPower(power);
 
@@ -292,7 +292,7 @@ struct MIC_U::Impl {
     }
 
     void GetPower(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0B, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
         rb.Push(RESULT_SUCCESS);
@@ -302,7 +302,7 @@ struct MIC_U::Impl {
     }
 
     void SetIirFilterMic(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0C, 1, 2};
+        IPC::RequestParser rp(ctx);
         const u32 size = rp.Pop<u32>();
         const Kernel::MappedBuffer& buffer = rp.PopMappedBuffer();
 
@@ -314,7 +314,7 @@ struct MIC_U::Impl {
     }
 
     void SetClamp(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0D, 1, 0};
+        IPC::RequestParser rp(ctx);
         clamp = rp.Pop<bool>();
 
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -323,7 +323,7 @@ struct MIC_U::Impl {
     }
 
     void GetClamp(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0E, 0, 0};
+        IPC::RequestParser rp(ctx);
 
         IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
         rb.Push(RESULT_SUCCESS);
@@ -332,7 +332,7 @@ struct MIC_U::Impl {
     }
 
     void SetAllowShellClosed(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x0F, 1, 0};
+        IPC::RequestParser rp(ctx);
         allow_shell_closed = rp.Pop<bool>();
 
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -341,7 +341,7 @@ struct MIC_U::Impl {
     }
 
     void SetClientVersion(Kernel::HLERequestContext& ctx) {
-        IPC::RequestParser rp{ctx, 0x10, 1, 0};
+        IPC::RequestParser rp(ctx);
         const u32 version = rp.Pop<u32>();
         LOG_WARNING(Service_MIC, "(STUBBED) called, version: 0x{:08X}", version);
 

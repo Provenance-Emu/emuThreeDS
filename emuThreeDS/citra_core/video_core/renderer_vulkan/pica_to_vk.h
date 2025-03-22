@@ -65,12 +65,12 @@ inline vk::SamplerAddressMode WrapMode(Pica::TexturingRegs::TextureConfig::WrapM
         return vk::SamplerAddressMode::eClampToEdge;
     }
 
-    if (index > 3) {
-        Core::System::GetInstance().TelemetrySession().AddField(
-            Common::Telemetry::FieldType::Session, "VideoCore_Pica_UnsupportedTextureWrapMode",
-            static_cast<u32>(index));
-        LOG_WARNING(Render_Vulkan, "Using texture wrap mode {}", index);
-    }
+//    if (index > 3) {
+//        Core::System::GetInstance().TelemetrySession().AddField(
+//            Common::Telemetry::FieldType::Session, "VideoCore_Pica_UnsupportedTextureWrapMode",
+//            static_cast<u32>(index));
+//        LOG_WARNING(Render_Vulkan, "Using texture wrap mode {}", index);
+//    }
 
     return wrap_mode_table[index];
 }

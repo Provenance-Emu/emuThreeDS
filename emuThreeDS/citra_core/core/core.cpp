@@ -2,7 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <memory>
 #include <stdexcept>
 #include <utility>
 #include <boost/serialization/array.hpp>
@@ -11,9 +10,12 @@
 #include "audio_core/lle/lle.h"
 #include "common/arch.h"
 #include "common/logging/log.h"
-#include "common/texture.h"
+#include "common/settings.h"
 #include "core/arm/arm_interface.h"
 #include "core/arm/exclusive_monitor.h"
+#include "core/hle/service/cam/cam.h"
+#include "core/hle/service/hid/hid.h"
+#include "core/hle/service/ir/ir_user.h"
 #if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
 #include "core/arm/dynarmic/arm_dynarmic.h"
 #endif
@@ -22,34 +24,34 @@
 #include "core/core.h"
 #include "core/core_timing.h"
 #include "core/dumping/backend.h"
-#ifdef ENABLE_FFMPEG_VIDEO_DUMPER
-#include "core/dumping/ffmpeg_backend.h"
-#endif
-#include "common/settings.h"
 #include "core/frontend/image_interface.h"
 #include "core/gdbstub/gdbstub.h"
 #include "core/global.h"
-#include "core/hle/kernel/client_port.h"
 #include "core/hle/kernel/kernel.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/kernel/thread.h"
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/apt/apt.h"
+#include "core/hle/service/cam/cam.h"
 #include "core/hle/service/fs/archive.h"
 #include "core/hle/service/gsp/gsp.h"
-#include "core/hle/service/pm/pm_app.h"
+#include "core/hle/service/gsp/gsp_gpu.h"
+#include "core/hle/service/ir/ir_rst.h"
+//#include "core/hle/service/mic/mic_u.h"
+#include "core/hle/service/plgldr/plgldr.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
-#include "core/hw/hw.h"
-#include "core/hw/lcd.h"
+#include "core/hw/aes/key.h"
 #include "core/loader/loader.h"
 #include "core/movie.h"
-#include "core/rpc/rpc_server.h"
+#ifdef ENABLE_SCRIPTING
+#include "core/rpc/server.h"
+#endif
+#include "core/telemetry_session.h"
 #include "network/network.h"
-#include "video_core/gpu.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
+#include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
-#include "video_core/video_core.h"
 
 namespace Core {
 
@@ -70,125 +72,7 @@ Core::Timing& Global() {
     return System::GetInstance().CoreTiming();
 }
 
-AutoCpuClockAdjuster::AutoCpuClockAdjuster(System& system) : system_(system) {
-    last_adjustment_time_ = std::chrono::steady_clock::now();
-}
-
-void AutoCpuClockAdjuster::Update() {
-    if (!enabled_) {
-        return;
-    }
-
-    auto now = std::chrono::steady_clock::now();
-    if (now - last_adjustment_time_ < adjustment_interval_) {
-        return; // Not time to adjust yet
-    }
-    last_adjustment_time_ = now;
-
-    // Get performance metrics from multiple sources
-    double current_fps = 0.0;
-    double renderer_fps = 0.0;
-    double system_fps = 0.0;
-    double game_fps = 0.0;
-    double frametime = 0.0;
-    double emulation_speed = 0.0;
-    
-    // Get metrics from PerfStats
-    const auto perf_stats = system_.GetLastPerfStats();
-    system_fps = perf_stats.system_fps;       // LCD VBlanks (screen refresh rate)
-    game_fps = perf_stats.game_fps;           // GSP frame submissions (GPU rendering)
-    frametime = perf_stats.frametime;         // Walltime per system frame in seconds
-    emulation_speed = perf_stats.emulation_speed; // Ratio of walltime / emulated time
-    
-    // Try to get FPS from renderer
-    try {
-        renderer_fps = static_cast<double>(system_.Renderer().GetCurrentFPS());
-    } catch (const std::exception& e) {
-        renderer_fps = 0.0; // Renderer not available
-    }
-    
-    // Choose the most appropriate FPS source
-    // Prioritize renderer FPS if available and valid
-    if (renderer_fps > 0.0) {
-        current_fps = renderer_fps;
-        LOG_DEBUG(Core, "Using Renderer FPS: {:.1f} (Frametime: {:.3f}ms, Speed: {:.2f}x)", 
-                 current_fps, frametime * 1000.0, emulation_speed);
-    } 
-    // Otherwise use game_fps (GPU frame submissions)
-    else if (game_fps > 0.0) {
-        current_fps = game_fps;
-        LOG_DEBUG(Core, "Using Game FPS: {:.1f} (System: {:.1f}, Frametime: {:.3f}ms, Speed: {:.2f}x)", 
-                 game_fps, system_fps, frametime * 1000.0, emulation_speed);
-    }
-    // Last resort: use system_fps (LCD VBlanks)
-    else {
-        current_fps = system_fps;
-        LOG_DEBUG(Core, "Using System FPS: {:.1f} (Frametime: {:.3f}ms, Speed: {:.2f}x)", 
-                 system_fps, frametime * 1000.0, emulation_speed);
-    }
-    
-    // Determine if we're in a critical performance state
-    // Critical = very low emulation speed or high frametime
-    bool critical_performance = (emulation_speed < 0.75) || (frametime > 0.025); // Below 75% speed or above 25ms frametime
-    
-    // Enhanced algorithm logic using multiple metrics:
-    // 1. Always aim for auto_mode_max_percentage_ (default 100%) CPU clock to minimize input latency when possible
-    // 2. When performance is poor, DECREASE CPU clock (counter-intuitive but helps in emulation)
-    // 3. If performance is good, gradually move back toward auto_mode_max_percentage_
-    // 4. Use frametime and emulation_speed as additional indicators of performance
-
-    const s32 default_percentage = auto_mode_max_percentage_; // Default target
-    
-    // Determine adjustment step size based on performance state
-    s32 current_step = adjustment_step_;
-    if (critical_performance) {
-        // Use larger steps when performance is critical
-        current_step = adjustment_step_ * 2;
-        LOG_DEBUG(Core, "Critical performance detected: Speed={:.2f}x, Frametime={:.1f}ms - Using larger step size", 
-                 emulation_speed, frametime * 1000.0);
-    }
-
-    // Main decision logic - aim for FPS between target_fps_min_ and target_fps_max_
-    if (current_fps < target_fps_min_ || critical_performance) {
-        // Performance is poor, DECREASE CPU clock to improve emulation performance
-        // This is counter-intuitive but in emulation can help achieve better FPS
-        if (current_percentage_ > min_percentage_) {
-            // Only decrease if we're not already at minimum
-            current_percentage_ = std::max(min_percentage_, current_percentage_ - current_step);
-            LOG_DEBUG(Core, "Auto CPU: Poor performance (FPS={:.1f}, Speed={:.2f}x), decreasing to {}%",
-                     current_fps, emulation_speed, current_percentage_);
-        }
-    } else if (current_fps > target_fps_max_) {
-        // FPS is too high, INCREASE CPU clock to slow down emulation
-        // This helps maintain a consistent experience and avoid timing issues
-        if (current_percentage_ < max_percentage_) {
-            // Only increase if we're not already at maximum
-            current_percentage_ = std::min(max_percentage_, current_percentage_ + current_step);
-            LOG_DEBUG(Core, "Auto CPU: FPS too high (FPS={:.1f} > {:.1f}), increasing to {}%",
-                     current_fps, target_fps_max_, current_percentage_);
-        }
-    } else if (current_percentage_ < default_percentage) {
-        // Performance is in target range but we're underclocked - gradually move back toward default for better latency
-        current_percentage_ = std::min(default_percentage, current_percentage_ + adjustment_step_);
-        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
-                 current_fps, emulation_speed, default_percentage);
-    } else if (current_percentage_ > default_percentage) {
-        // Performance is in target range but we're overclocked - gradually move back toward default
-        current_percentage_ = std::max(default_percentage, current_percentage_ - adjustment_step_);
-        LOG_DEBUG(Core, "Auto CPU: Good performance (FPS={:.1f}, Speed={:.2f}x), adjusting toward default {}%",
-                 current_fps, emulation_speed, default_percentage);
-    } else {
-        // We're at the default percentage and performance is in target range
-        LOG_DEBUG(Core, "Auto CPU: Optimal performance (FPS={:.1f}, target={:.1f}-{:.1f}), maintaining {}%",
-                 current_fps, target_fps_min_, target_fps_max_, default_percentage);
-    }
-
-    // Update the CPU clock percentage
-    system_.CoreTiming().UpdateClockSpeed(current_percentage_);
-
-    // Store current FPS for next comparison
-    last_fps_ = current_fps;
-}
+System::System() : movie{*this}, cheat_engine{*this} {}
 
 System::~System() = default;
 
@@ -203,7 +87,7 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
         if (thread && running_core) {
             running_core->SaveContext(thread->context);
         }
-        GDBStub::HandlePacket();
+        GDBStub::HandlePacket(*this);
 
         // If the loop is halted and we want to step, use a tiny (1) number of instructions to
         // execute. Otherwise, get out of the loop function.
@@ -219,7 +103,7 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
     Signal signal{Signal::None};
     u32 param{};
     {
-        std::lock_guard lock{signal_mutex};
+        std::scoped_lock lock{signal_mutex};
         if (current_signal != Signal::None) {
             signal = current_signal;
             param = signal_param;
@@ -273,7 +157,8 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
     for (auto& cpu_core : cpu_cores) {
         if (cpu_core->GetTimer().GetTicks() < global_ticks) {
             s64 delay = global_ticks - cpu_core->GetTimer().GetTicks();
-            kernel->SetRunningCPU(cpu_core.get());
+            running_core = cpu_core.get();
+            kernel->SetRunningCPU(running_core);
             cpu_core->GetTimer().Advance();
             cpu_core->PrepareReschedule();
             kernel->GetThreadManager(cpu_core->GetID()).Reschedule();
@@ -314,7 +199,8 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
         // TODO: Make special check for idle since we can easily revert the time of idle cores
         s64 max_slice = Timing::MAX_SLICE_LENGTH;
         for (const auto& cpu_core : cpu_cores) {
-            kernel->SetRunningCPU(cpu_core.get());
+            running_core = cpu_core.get();
+            kernel->SetRunningCPU(running_core);
             cpu_core->GetTimer().Advance();
             cpu_core->PrepareReschedule();
             kernel->GetThreadManager(cpu_core->GetID()).Reschedule();
@@ -348,19 +234,13 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
         GDBStub::SetCpuStepFlag(false);
     }
 
-    HW::Update();
     Reschedule();
-
-    // Update auto CPU clock adjustment if enabled
-    if (auto_cpu_clock && auto_cpu_clock->IsEnabled()) {
-        auto_cpu_clock->Update();
-    }
 
     return status;
 }
 
 bool System::SendSignal(System::Signal signal, u32 param) {
-    std::lock_guard lock{signal_mutex};
+    std::scoped_lock lock{signal_mutex};
     if (current_signal != signal && current_signal != Signal::None) {
         LOG_ERROR(Core, "Unable to {} as {} is ongoing", signal, current_signal);
         return false;
@@ -376,46 +256,76 @@ System::ResultStatus System::SingleStep() {
 
 System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::string& filepath,
                                   Frontend::EmuWindow* secondary_window) {
-    Settings::ResetTemporaryFrameLimit();
     FileUtil::SetCurrentRomPath(filepath);
-    app_loader = Loader::GetLoader(filepath);
+    if (early_app_loader) {
+        app_loader = std::move(early_app_loader);
+    } else {
+        app_loader = Loader::GetLoader(filepath);
+    }
     if (!app_loader) {
         LOG_CRITICAL(Core, "Failed to obtain loader for {}!", filepath);
         return ResultStatus::ErrorGetLoader;
     }
-    std::pair<std::optional<u32>, Loader::ResultStatus> system_mode =
-        app_loader->LoadKernelSystemMode();
 
-    if (system_mode.second != Loader::ResultStatus::Success) {
+    if (restore_plugin_context.has_value() && restore_plugin_context->is_enabled &&
+        restore_plugin_context->use_user_load_parameters) {
+        u64_le program_id = 0;
+        app_loader->ReadProgramId(program_id);
+        if (restore_plugin_context->user_load_parameters.low_title_Id ==
+                static_cast<u32_le>(program_id) &&
+            restore_plugin_context->user_load_parameters.plugin_memory_strategy ==
+                Service::PLGLDR::PLG_LDR::PluginMemoryStrategy::PLG_STRATEGY_MODE3) {
+            app_loader->SetKernelMemoryModeOverride(Kernel::MemoryMode::Dev2);
+        }
+    }
+
+    auto memory_mode = app_loader->LoadKernelMemoryMode();
+    if (memory_mode.second != Loader::ResultStatus::Success) {
         LOG_CRITICAL(Core, "Failed to determine system mode (Error {})!",
-                     static_cast<int>(system_mode.second));
+                     static_cast<int>(memory_mode.second));
 
-        switch (system_mode.second) {
+        switch (memory_mode.second) {
         case Loader::ResultStatus::ErrorEncrypted:
             return ResultStatus::ErrorLoader_ErrorEncrypted;
         case Loader::ResultStatus::ErrorInvalidFormat:
             return ResultStatus::ErrorLoader_ErrorInvalidFormat;
         case Loader::ResultStatus::ErrorGbaTitle:
             return ResultStatus::ErrorLoader_ErrorGbaTitle;
+        case Loader::ResultStatus::ErrorArtic:
+            return ResultStatus::ErrorArticDisconnected;
         default:
             return ResultStatus::ErrorSystemMode;
         }
     }
 
-    ASSERT(system_mode.first);
-    auto n3ds_mode = app_loader->LoadKernelN3dsMode();
-    ASSERT(n3ds_mode.first);
+    ASSERT(memory_mode.first);
+    auto n3ds_hw_caps = app_loader->LoadNew3dsHwCapabilities();
+    ASSERT(n3ds_hw_caps.first);
     u32 num_cores = 2;
     if (Settings::values.is_new_3ds) {
         num_cores = 4;
     }
     ResultStatus init_result{
-        Init(emu_window, secondary_window, *system_mode.first, *n3ds_mode.first, num_cores)};
+        Init(emu_window, secondary_window, *memory_mode.first, *n3ds_hw_caps.first, num_cores)};
     if (init_result != ResultStatus::Success) {
         LOG_CRITICAL(Core, "Failed to initialize system (Error {})!",
                      static_cast<u32>(init_result));
         System::Shutdown();
         return init_result;
+    }
+
+    // Restore any parameters that should be carried through a reset.
+    if (restore_deliver_arg.has_value()) {
+        if (auto apt = Service::APT::GetModule(*this)) {
+            apt->GetAppletManager()->SetDeliverArg(restore_deliver_arg);
+        }
+        restore_deliver_arg.reset();
+    }
+    if (restore_plugin_context.has_value()) {
+        if (auto plg_ldr = Service::PLGLDR::GetService(*this)) {
+            plg_ldr->SetPluginLoaderContext(restore_plugin_context.value());
+        }
+        restore_plugin_context.reset();
     }
 
     telemetry_session->AddInitialInfo(*app_loader);
@@ -432,6 +342,8 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
             return ResultStatus::ErrorLoader_ErrorInvalidFormat;
         case Loader::ResultStatus::ErrorGbaTitle:
             return ResultStatus::ErrorLoader_ErrorGbaTitle;
+        case Loader::ResultStatus::ErrorArtic:
+            return ResultStatus::ErrorArticDisconnected;
         default:
             return ResultStatus::ErrorLoader;
         }
@@ -442,14 +354,17 @@ System::ResultStatus System::Load(Frontend::EmuWindow& emu_window, const std::st
         LOG_ERROR(Core, "Failed to find title id for ROM (Error {})",
                   static_cast<u32>(load_result));
     }
-    cheat_engine = std::make_unique<Cheats::CheatEngine>(title_id, *this);
+
+    cheat_engine.LoadCheatFile(title_id);
+    cheat_engine.Connect();
+
     perf_stats = std::make_unique<PerfStats>(title_id);
 
+    if (Settings::values.dump_textures) {
+        custom_tex_manager->PrepareDumping(title_id);
+    }
     if (Settings::values.custom_textures) {
         custom_tex_manager->FindCustomTextures();
-    }
-    if (Settings::values.dump_textures) {
-        custom_tex_manager->WriteConfig();
     }
 
     status = ResultStatus::Success;
@@ -495,35 +410,27 @@ void System::Reschedule() {
 }
 
 System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
-                                  Frontend::EmuWindow* secondary_window, u32 system_mode,
-                                  u8 n3ds_mode, u32 num_cores) {
+                                  Frontend::EmuWindow* secondary_window,
+                                  Kernel::MemoryMode memory_mode,
+                                  const Kernel::New3dsHwCapabilities& n3ds_hw_caps, u32 num_cores) {
     LOG_DEBUG(HW_Memory, "initialized OK");
 
-    memory = std::make_unique<Memory::MemorySystem>();
+    memory = std::make_unique<Memory::MemorySystem>(*this);
 
-    // Initialize timing with appropriate CPU clock percentage
-    // If cpu_clock_percentage is 0, use auto_mode_max_percentage_ as default and enable auto mode
-    s32 initial_percentage = Settings::values.cpu_clock_percentage.GetValue();
-    bool auto_mode = (initial_percentage == 0);
-    if (auto_mode) {
-        initial_percentage = AutoCpuClockAdjuster::auto_mode_max_percentage_; // Start with default and let auto adjuster handle it
-    }
-    timing = std::make_unique<Timing>(num_cores, initial_percentage);
-
-    // Initialize auto CPU clock adjuster
-    auto_cpu_clock = std::make_unique<AutoCpuClockAdjuster>(*this);
-    auto_cpu_clock->SetEnabled(auto_mode);
+    timing = std::make_unique<Timing>(num_cores, Settings::values.cpu_clock_percentage.GetValue(),
+                                      movie.GetOverrideBaseTicks());
 
     kernel = std::make_unique<Kernel::KernelSystem>(
-        *memory, *timing, [this] { PrepareReschedule(); }, system_mode, num_cores, n3ds_mode);
+        *memory, *timing, [this] { PrepareReschedule(); }, memory_mode, num_cores, n3ds_hw_caps,
+        movie.GetOverrideInitTime());
 
     exclusive_monitor = MakeExclusiveMonitor(*memory, num_cores);
     cpu_cores.reserve(num_cores);
     if (Settings::values.use_cpu_jit) {
-#if CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)
+#if CYTRUS_ARCH(x86_64) || CYTRUS_ARCH(arm64)
         for (u32 i = 0; i < num_cores; ++i) {
             cpu_cores.push_back(std::make_shared<ARM_Dynarmic>(
-                this, *memory, i, timing->GetTimer(i), *exclusive_monitor));
+                *this, *memory, i, timing->GetTimer(i), *exclusive_monitor));
         }
 #else
         for (u32 i = 0; i < num_cores; ++i) {
@@ -535,7 +442,7 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
     } else {
         for (u32 i = 0; i < num_cores; ++i) {
             cpu_cores.push_back(
-                std::make_shared<ARM_DynCom>(this, *memory, USER32MODE, i, timing->GetTimer(i)));
+                std::make_shared<ARM_DynCom>(*this, *memory, USER32MODE, i, timing->GetTimer(i)));
         }
     }
     running_core = cpu_cores[0].get();
@@ -559,20 +466,16 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     telemetry_session = std::make_unique<Core::TelemetrySession>();
 
-    rpc_server = std::make_unique<RPC::RPCServer>();
+#ifdef ENABLE_SCRIPTING
+    rpc_server = std::make_unique<RPC::Server>(*this);
+#endif
 
     service_manager = std::make_unique<Service::SM::ServiceManager>(*this);
     archive_manager = std::make_unique<Service::FS::ArchiveManager>(*this);
 
-    HW::Init(*memory);
+    HW::AES::InitKeys();
     Service::Init(*this);
     GDBStub::DeferStart();
-
-#ifdef ENABLE_FFMPEG_VIDEO_DUMPER
-    video_dumper = std::make_unique<VideoDumper::FFmpegBackend>();
-#else
-    video_dumper = std::make_unique<VideoDumper::NullBackend>();
-#endif
 
     if (!registered_image_interface) {
         registered_image_interface = std::make_shared<Frontend::ImageInterface>();
@@ -580,7 +483,16 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     custom_tex_manager = std::make_unique<VideoCore::CustomTexManager>(*this);
 
-    VideoCore::Init(emu_window, secondary_window, *this);
+    auto gsp = service_manager->GetService<Service::GSP::GSP_GPU>("gsp::Gpu");
+    gpu = std::make_unique<VideoCore::GPU>(*this, emu_window, secondary_window);
+    gpu->SetInterruptHandler(
+        [gsp](Service::GSP::InterruptId interrupt_id) { gsp->SignalInterrupt(interrupt_id); });
+
+    auto plg_ldr = Service::PLGLDR::GetService(*this);
+    if (plg_ldr) {
+        plg_ldr->SetEnabled(Settings::values.plugin_loader_enabled.GetValue());
+        plg_ldr->SetAllowGameChangeState(Settings::values.allow_plugin_loader.GetValue());
+    }
 
     LOG_DEBUG(Core, "Initialized OK");
 
@@ -638,19 +550,15 @@ const Memory::MemorySystem& System::Memory() const {
 }
 
 Cheats::CheatEngine& System::CheatEngine() {
-    return *cheat_engine;
+    return cheat_engine;
 }
 
 const Cheats::CheatEngine& System::CheatEngine() const {
-    return *cheat_engine;
+    return cheat_engine;
 }
 
-VideoDumper::Backend& System::VideoDumper() {
-    return *video_dumper;
-}
-
-const VideoDumper::Backend& System::VideoDumper() const {
-    return *video_dumper;
+void System::RegisterVideoDumper(std::shared_ptr<VideoDumper::Backend> dumper) {
+    video_dumper = std::move(dumper);
 }
 
 VideoCore::CustomTexManager& System::CustomTexManager() {
@@ -659,6 +567,14 @@ VideoCore::CustomTexManager& System::CustomTexManager() {
 
 const VideoCore::CustomTexManager& System::CustomTexManager() const {
     return *custom_tex_manager;
+}
+
+Core::Movie& System::Movie() {
+    return movie;
+}
+
+const Core::Movie& System::Movie() const {
+    return movie;
 }
 
 void System::RegisterMiiSelector(std::shared_ptr<Frontend::MiiSelector> mii_selector) {
@@ -677,28 +593,28 @@ void System::Shutdown(bool is_deserializing) {
     // Log last frame performance stats
     const auto perf_results = GetAndResetPerfStats();
     constexpr auto performance = Common::Telemetry::FieldType::Performance;
-//
-//    telemetry_session->AddField(performance, "Shutdown_EmulationSpeed",
-//                                perf_results.emulation_speed * 100.0);
-//    telemetry_session->AddField(performance, "Shutdown_Framerate", perf_results.game_fps);
-//    telemetry_session->AddField(performance, "Shutdown_Frametime", perf_results.frametime * 1000.0);
-//    telemetry_session->AddField(performance, "Mean_Frametime_MS",
-//                                perf_stats ? perf_stats->GetMeanFrametime() : 0);
+
+    telemetry_session->AddField(performance, "Shutdown_EmulationSpeed",
+                                perf_results.emulation_speed * 100.0);
+    telemetry_session->AddField(performance, "Shutdown_Framerate", perf_results.game_fps);
+    telemetry_session->AddField(performance, "Shutdown_Frametime", perf_results.frametime * 1000.0);
+    telemetry_session->AddField(performance, "Mean_Frametime_MS",
+                                perf_stats ? perf_stats->GetMeanFrametime() : 0);
 
     // Shutdown emulation session
     is_powered_on = false;
 
     gpu.reset();
-    HW::Shutdown();
     if (!is_deserializing) {
         GDBStub::Shutdown();
         perf_stats.reset();
-        cheat_engine.reset();
         app_loader.reset();
     }
     custom_tex_manager.reset();
     telemetry_session.reset();
+#ifdef ENABLE_SCRIPTING
     rpc_server.reset();
+#endif
     archive_manager.reset();
     service_manager.reset();
     dsp_core.reset();
@@ -730,10 +646,13 @@ void System::Reset() {
     // reloading.
     // TODO: Properly implement the reset
 
-    // Since the system is completely reinitialized, we'll have to store the deliver arg manually.
-    boost::optional<Service::APT::DeliverArg> deliver_arg;
+    // Save the APT deliver arg and plugin loader context across resets.
+    // This is needed as we don't currently support proper app jumping.
     if (auto apt = Service::APT::GetModule(*this)) {
-        deliver_arg = apt->GetAppletManager()->ReceiveDeliverArg();
+        restore_deliver_arg = apt->GetAppletManager()->ReceiveDeliverArg();
+    }
+    if (auto plg_ldr = Service::PLGLDR::GetService(*this)) {
+        restore_plugin_context = plg_ldr->GetPluginLoaderContext();
     }
 
     Shutdown();
@@ -746,16 +665,11 @@ void System::Reset() {
     // Reload the system with the same setting
     [[maybe_unused]] const System::ResultStatus result =
         Load(*m_emu_window, m_filepath, m_secondary_window);
-
-    // Restore the deliver arg.
-    if (auto apt = Service::APT::GetModule(*this)) {
-        apt->GetAppletManager()->SetDeliverArg(std::move(deliver_arg));
-    }
 }
 
 void System::ApplySettings() {
-    GDBStub::SetServerPort(values.gdbstub_port.GetValue());
-    GDBStub::ToggleServer(values.use_gdbstub.GetValue());
+    GDBStub::SetServerPort(Settings::values.gdbstub_port.GetValue());
+    GDBStub::ToggleServer(Settings::values.use_gdbstub.GetValue());
 
     if (gpu) {
 #ifndef ANDROID
@@ -766,42 +680,47 @@ void System::ApplySettings() {
         settings.shader_update_requested = true;
     }
 
-    auto& system = Core::System::GetInstance();
-    if (system.IsPoweredOn()) {
-        system.CoreTiming().UpdateClockSpeed(values.cpu_clock_percentage.GetValue());
-        Core::DSP().SetSink(values.output_type.GetValue(), values.output_device.GetValue());
-        Core::DSP().EnableStretching(values.enable_audio_stretching.GetValue());
+    if (IsPoweredOn()) {
+        CoreTiming().UpdateClockSpeed(Settings::values.cpu_clock_percentage.GetValue());
+        dsp_core->SetSink(Settings::values.output_type.GetValue(),
+                          Settings::values.output_device.GetValue());
+        dsp_core->EnableStretching(Settings::values.enable_audio_stretching.GetValue());
 
-        auto hid = Service::HID::GetModule(system);
+        auto hid = Service::HID::GetModule(*this);
         if (hid) {
             hid->ReloadInputDevices();
         }
 
-        auto apt = Service::APT::GetModule(system);
+        auto apt = Service::APT::GetModule(*this);
         if (apt) {
             apt->GetAppletManager()->ReloadInputDevices();
         }
 
-        auto sm = system.ServiceManager();
-        auto ir_user = sm.GetService<Service::IR::IR_USER>("ir:USER");
+        auto ir_user = service_manager->GetService<Service::IR::IR_USER>("ir:USER");
         if (ir_user)
             ir_user->ReloadInputDevices();
-        auto ir_rst = sm.GetService<Service::IR::IR_RST>("ir:rst");
+        auto ir_rst = service_manager->GetService<Service::IR::IR_RST>("ir:rst");
         if (ir_rst)
             ir_rst->ReloadInputDevices();
 
-        auto cam = Service::CAM::GetModule(system);
+        auto cam = Service::CAM::GetModule(*this);
         if (cam) {
             cam->ReloadCameraDevices();
         }
 
-        Service::MIC::ReloadMic(system);
+        Service::MIC::ReloadMic(*this);
     }
 
-    Service::PLGLDR::PLG_LDR::SetEnabled(values.plugin_loader_enabled.GetValue());
-    Service::PLGLDR::PLG_LDR::SetAllowGameChangeState(values.allow_plugin_loader.GetValue());
+    auto plg_ldr = Service::PLGLDR::GetService(*this);
+    if (plg_ldr) {
+        plg_ldr->SetEnabled(Settings::values.plugin_loader_enabled.GetValue());
+        plg_ldr->SetAllowGameChangeState(Settings::values.allow_plugin_loader.GetValue());
+    }
 }
 
+void System::RegisterAppLoaderEarly(std::unique_ptr<Loader::AppLoader>& loader) {
+    early_app_loader = std::move(loader);
+}
 
 template <class Archive>
 void System::serialize(Archive& ar, const unsigned int file_version) {
@@ -810,7 +729,7 @@ void System::serialize(Archive& ar, const unsigned int file_version) {
     if (Archive::is_saving::value) {
         num_cores = this->GetNumCores();
     }
-    ar& num_cores;
+    ar & num_cores;
 
     if (Archive::is_loading::value) {
         // When loading, we want to make sure any lingering state gets cleared out before we begin.
@@ -818,23 +737,21 @@ void System::serialize(Archive& ar, const unsigned int file_version) {
         Shutdown(true);
 
         // Re-initialize everything like it was before
-        auto system_mode = this->app_loader->LoadKernelSystemMode();
-        auto n3ds_mode = this->app_loader->LoadKernelN3dsMode();
+        auto memory_mode = this->app_loader->LoadKernelMemoryMode();
+        auto n3ds_hw_caps = this->app_loader->LoadNew3dsHwCapabilities();
         [[maybe_unused]] const System::ResultStatus result = Init(
-            *m_emu_window, m_secondary_window, *system_mode.first, *n3ds_mode.first, num_cores);
+            *m_emu_window, m_secondary_window, *memory_mode.first, *n3ds_hw_caps.first, num_cores);
     }
 
-    // flush on save, don't flush on load
-    bool should_flush = !Archive::is_loading::value;
-    Memory::RasterizerClearAll(should_flush);
+    // Flush on save, don't flush on load
+    const bool should_flush = !Archive::is_loading::value;
+    gpu->ClearAll(should_flush);
     ar&* timing.get();
     for (u32 i = 0; i < num_cores; i++) {
         ar&* cpu_cores[i].get();
     }
     ar&* service_manager.get();
     ar&* archive_manager.get();
-    ar& GPU::g_regs;
-    ar& LCD::g_regs;
 
     // NOTE: DSP doesn't like being destroyed and recreated. So instead we do an inline
     // serialization; this means that the DSP Settings need to match for loading to work.
@@ -847,18 +764,21 @@ void System::serialize(Archive& ar, const unsigned int file_version) {
 
     ar&* memory.get();
     ar&* kernel.get();
-    VideoCore::serialize(ar, file_version);
-    if (file_version >= 1) {
-        ar& Movie::GetInstance();
-    }
+    ar&* gpu.get();
+    ar & movie;
 
     // This needs to be set from somewhere - might as well be here!
     if (Archive::is_loading::value) {
         timing->UnlockEventQueue();
-        Service::GSP::SetGlobalModule(*this);
         memory->SetDSP(*dsp_core);
-        cheat_engine->Connect();
-        VideoCore::g_renderer->Sync();
+        cheat_engine.Connect();
+        gpu->Sync();
+
+        // Re-register gpu callback, because gsp service changed after service_manager got
+        // serialized
+        auto gsp = service_manager->GetService<Service::GSP::GSP_GPU>("gsp::Gpu");
+        gpu->SetInterruptHandler(
+            [gsp](Service::GSP::InterruptId interrupt_id) { gsp->SignalInterrupt(interrupt_id); });
     }
 }
 

@@ -283,12 +283,6 @@ enum class FlushMode {
  */
 void RasterizerClearAll(bool flush);
 
-/**
- * Flushes and invalidates any externally cached rasterizer resources touching the given virtual
- * address region.
- */
-void RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode);
-
 class MemorySystem {
 public:
     explicit MemorySystem(Core::System& system);
@@ -610,6 +604,8 @@ public:
     void UnregisterPageTable(std::shared_ptr<PageTable> page_table);
 
     void SetDSP(AudioCore::DspInterface& dsp);
+
+    void RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode);
 
 private:
     template <typename T>

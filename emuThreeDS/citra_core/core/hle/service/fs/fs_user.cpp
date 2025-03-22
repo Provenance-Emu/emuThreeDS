@@ -776,7 +776,7 @@ void FS_USER::GetNumSeeds(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::AddSeed(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp{ctx, 0x87A, 6, 0};
+    IPC::RequestParser rp(ctx);
     u64 title_id{rp.Pop<u64>()};
     FileSys::Seed::Data seed{rp.PopRaw<FileSys::Seed::Data>()};
     FileSys::AddSeed({title_id, seed, {}});

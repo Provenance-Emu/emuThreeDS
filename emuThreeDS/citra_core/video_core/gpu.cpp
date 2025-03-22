@@ -31,7 +31,7 @@ struct GPU::Impl {
     Memory::MemorySystem& memory;
     std::shared_ptr<Pica::DebugContext> debug_context;
     Pica::PicaCore pica;
-    GraphicsDebugger gpu_debugger;
+//    GraphicsDebugger gpu_debugger;
     std::unique_ptr<RendererBase> renderer;
     RasterizerInterface* rasterizer;
     std::unique_ptr<SwRenderer::SwBlitter> sw_blitter;

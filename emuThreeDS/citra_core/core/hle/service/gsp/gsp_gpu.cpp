@@ -433,7 +433,7 @@ void GSP_GPU::TriggerCmdReqQueue(Kernel::HLERequestContext& ctx) {
         command_buffer->number_commands.Assign(command_buffer->number_commands - 1);
         command_buffer->index.Assign((command_buffer->index + 1) % 0xF);
 
-        gpu.Debugger().GXCommandProcessed(command);
+//        gpu.Debugger().GXCommandProcessed(command);
 
         // Decode and execute command
         gpu.Execute(command);
@@ -583,6 +583,9 @@ void GSP_GPU::RestoreVramSysArea(Kernel::HLERequestContext& ctx) {
         // TODO: This should also restore LCD register state.
         auto vram = system.Memory().GetPointer(Memory::VRAM_VADDR);
         std::memcpy(vram, saved_vram.get().data(), Memory::VRAM_SIZE);
+//        Memory::RasterizerFlushVirtualRegion(Memory::VRAM_VADDR, Memory::VRAM_SIZE,
+//                                             Memory::FlushMode::Invalidate);
+
         system.Memory().RasterizerFlushVirtualRegion(Memory::VRAM_VADDR, Memory::VRAM_SIZE,
                                                      Memory::FlushMode::Invalidate);
     }
