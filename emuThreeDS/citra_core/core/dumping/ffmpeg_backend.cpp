@@ -10,7 +10,7 @@
 #include "common/settings.h"
 #include "common/string_util.h"
 #include "core/dumping/ffmpeg_backend.h"
-#include "core/hw/gpu.h"
+#include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
 
@@ -130,7 +130,7 @@ bool FFmpegVideoStream::Init(FFmpegMuxer& muxer, const Layout::FramebufferLayout
     // resampling the video
     // List of codecs known broken by this change: mpeg1, mpeg2, mpeg4, libxvid
     // See https://github.com/citra-emu/citra/pull/5273#issuecomment-643023325 for more information
-    codec_context->time_base.num = static_cast<int>(GPU::frame_ticks);
+    codec_context->time_base.num = 1; //static_cast<int>(GPU::frame_ticks);
     codec_context->time_base.den = static_cast<int>(BASE_CLOCK_RATE_ARM11);
     codec_context->gop_size = 12;
     codec_context->pix_fmt = codec->pix_fmts ? codec->pix_fmts[0] : AV_PIX_FMT_YUV420P;
@@ -486,7 +486,7 @@ void FFmpegMuxer::WriteTrailer() {
     av_write_trailer(format_context.get());
 }
 
-FFmpegBackend::FFmpegBackend() = default;
+FFmpegBackend::FFmpegBackend(VideoCore::RendererBase& renderer_) : renderer{renderer_} {}
 
 FFmpegBackend::~FFmpegBackend() {
     ASSERT_MSG(!IsDumping(), "Dumping must be stopped first");
@@ -549,7 +549,7 @@ bool FFmpegBackend::StartDumping(const std::string& path, const Layout::Framebuf
         }
     });
 
-    VideoCore::g_renderer->PrepareVideoDumping();
+    renderer.PrepareVideoDumping();
     is_dumping = true;
 
     return true;
@@ -582,7 +582,7 @@ void FFmpegBackend::AddAudioSample(const std::array<s16, 2>& sample) {
 
 void FFmpegBackend::StopDumping() {
     is_dumping = false;
-    VideoCore::g_renderer->CleanupVideoDumping();
+    renderer.CleanupVideoDumping();
 
     // Flush the video processing queue
     AddVideoFrame(VideoFrame());

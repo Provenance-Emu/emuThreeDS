@@ -13,7 +13,7 @@
 #include <fmt/format.h>
 #include "common/file_util.h"
 #include "common/settings.h"
-#include "core/hw/gpu.h"
+#include "video_core/gpu.h"
 #include "core/perf_stats.h"
 
 using namespace std::chrono_literals;
@@ -125,7 +125,7 @@ PerfStats::Results PerfStats::GetLastStats() {
 double PerfStats::GetLastFrameTimeScale() const {
     std::lock_guard lock{object_mutex};
 
-    constexpr double FRAME_LENGTH = 1.0 / GPU::SCREEN_REFRESH_RATE;
+    constexpr double FRAME_LENGTH = 1.0 / SCREEN_REFRESH_RATE;
     return duration_cast<DoubleSecs>(previous_frame_length).count() / FRAME_LENGTH;
 }
 

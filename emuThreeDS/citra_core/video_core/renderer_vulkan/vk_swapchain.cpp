@@ -8,7 +8,6 @@
 #include "common/microprofile.h"
 #include "common/settings.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
 
 MICROPROFILE_DEFINE(Vulkan_Acquire, "Vulkan", "Swapchain Acquire", MP_RGB(185, 66, 245));
@@ -16,9 +15,8 @@ MICROPROFILE_DEFINE(Vulkan_Present, "Vulkan", "Swapchain Present", MP_RGB(66, 18
 
 namespace Vulkan {
 
-Swapchain::Swapchain(const Instance& instance_, Scheduler& scheduler, u32 width, u32 height,
-                     vk::SurfaceKHR surface_)
-    : instance{instance_}, scheduler{scheduler}, surface{surface_} {
+Swapchain::Swapchain(const Instance& instance_, u32 width, u32 height, vk::SurfaceKHR surface_)
+    : instance{instance_}, surface{surface_} {
     FindPresentFormat();
     SetPresentMode();
     Create(width, height, surface);
@@ -80,9 +78,13 @@ void Swapchain::Create(u32 width_, u32 height_, vk::SurfaceKHR surface_) {
 }
 
 bool Swapchain::AcquireNextImage() {
+    if (needs_recreation) {
+        return false;
+    }
+
     MICROPROFILE_SCOPE(Vulkan_Acquire);
-    vk::Device device = instance.GetDevice();
-    vk::Result result =
+    const vk::Device device = instance.GetDevice();
+    const vk::Result result =
         device.acquireNextImageKHR(swapchain, std::numeric_limits<u64>::max(),
                                    image_acquired[frame_index], VK_NULL_HANDLE, &image_index);
 
@@ -90,6 +92,7 @@ bool Swapchain::AcquireNextImage() {
     case vk::Result::eSuccess:
         break;
     case vk::Result::eSuboptimalKHR:
+    case vk::Result::eErrorSurfaceLostKHR:
     case vk::Result::eErrorOutOfDateKHR:
         needs_recreation = true;
         break;
@@ -103,10 +106,6 @@ bool Swapchain::AcquireNextImage() {
 }
 
 void Swapchain::Present() {
-    if (needs_recreation) {
-        return;
-    }
-
     const vk::PresentInfoKHR present_info = {
         .waitSemaphoreCount = 1,
         .pWaitSemaphores = &present_ready[image_index],
@@ -120,6 +119,10 @@ void Swapchain::Present() {
         [[maybe_unused]] vk::Result result = instance.GetPresentQueue().presentKHR(present_info);
     } catch (vk::OutOfDateKHRError&) {
         needs_recreation = true;
+        return;
+    } catch (vk::SurfaceLostKHRError&) {
+        needs_recreation = true;
+        return;
     } catch (const vk::SystemError& err) {
         LOG_CRITICAL(Render_Vulkan, "Swapchain presentation failed {}", err.what());
         UNREACHABLE();
@@ -151,24 +154,45 @@ void Swapchain::FindPresentFormat() {
         return;
     }
 
-    LOG_CRITICAL(Render_Vulkan, "Unable to find required swapchain format!");
-    UNREACHABLE();
+    UNREACHABLE_MSG("Unable to find required swapchain format!");
 }
 
 void Swapchain::SetPresentMode() {
+    const auto modes = instance.GetPhysicalDevice().getSurfacePresentModesKHR(surface);
+    const bool use_vsync = Settings::values.use_vsync_new.GetValue();
+    const auto find_mode = [&modes](vk::PresentModeKHR requested) {
+        const auto it =
+            std::find_if(modes.begin(), modes.end(),
+                         [&requested](vk::PresentModeKHR mode) { return mode == requested; });
+
+        return it != modes.end();
+    };
+
     present_mode = vk::PresentModeKHR::eFifo;
-    if (!Settings::values.use_vsync_new) {
-        const auto modes = instance.GetPhysicalDevice().getSurfacePresentModesKHR(surface);
-        const auto find_mode = [&modes](vk::PresentModeKHR requested) {
-            auto it =
-                std::find_if(modes.begin(), modes.end(),
-                             [&requested](vk::PresentModeKHR mode) { return mode == requested; });
+    const bool has_immediate = find_mode(vk::PresentModeKHR::eImmediate);
+    const bool has_mailbox = find_mode(vk::PresentModeKHR::eMailbox);
+    if (!has_immediate && !has_mailbox) {
+        LOG_WARNING(Render_Vulkan, "Forcing Fifo present mode as no alternatives are available");
+        return;
+    }
 
-            return it != modes.end();
-        };
-
-        const bool has_mailbox = find_mode(vk::PresentModeKHR::eMailbox);
+    // If the user has disabled vsync use immediate mode for the least latency.
+    // This may have screen tearing.
+    if (!use_vsync) {
+        present_mode =
+            has_immediate ? vk::PresentModeKHR::eImmediate : vk::PresentModeKHR::eMailbox;
+        return;
+    }
+    // If vsync is enabled attempt to use mailbox mode in case the user wants to speedup/slowdown
+    // the game. If mailbox is not available use immediate and warn about it.
+    if (use_vsync && Settings::values.frame_limit.GetValue() > 100) {
         present_mode = has_mailbox ? vk::PresentModeKHR::eMailbox : vk::PresentModeKHR::eImmediate;
+        if (!has_mailbox) {
+            LOG_WARNING(
+                Render_Vulkan,
+                "Vsync enabled while frame limiting and no mailbox support, expect tearing");
+        }
+        return;
     }
 }
 
@@ -227,12 +251,25 @@ void Swapchain::RefreshSemaphores() {
     for (vk::Semaphore& semaphore : present_ready) {
         semaphore = device.createSemaphore({});
     }
+
+    if (instance.HasDebuggingToolAttached()) {
+        for (u32 i = 0; i < image_count; ++i) {
+            SetObjectName(device, image_acquired[i], "Swapchain Semaphore: image_acquired {}", i);
+            SetObjectName(device, present_ready[i], "Swapchain Semaphore: present_ready {}", i);
+        }
+    }
 }
 
 void Swapchain::SetupImages() {
     vk::Device device = instance.GetDevice();
     images = device.getSwapchainImagesKHR(swapchain);
     image_count = static_cast<u32>(images.size());
+
+    if (instance.HasDebuggingToolAttached()) {
+        for (u32 i = 0; i < image_count; ++i) {
+            SetObjectName(device, images[i], "Swapchain Image {}", i);
+        }
+    }
 }
 
 } // namespace Vulkan

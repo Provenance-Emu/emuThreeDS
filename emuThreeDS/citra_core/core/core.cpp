@@ -40,13 +40,13 @@
 #include "core/hle/service/pm/pm_app.h"
 #include "core/hle/service/service.h"
 #include "core/hle/service/sm/sm.h"
-#include "core/hw/gpu.h"
 #include "core/hw/hw.h"
 #include "core/hw/lcd.h"
 #include "core/loader/loader.h"
 #include "core/movie.h"
 #include "core/rpc/rpc_server.h"
 #include "network/network.h"
+#include "video_core/gpu.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
@@ -589,8 +589,8 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
     return ResultStatus::Success;
 }
 
-VideoCore::RendererBase& System::Renderer() {
-    return *VideoCore::g_renderer;
+VideoCore::GPU& System::GPU() {
+    return *gpu;
 }
 
 Service::SM::ServiceManager& System::ServiceManager() {
@@ -688,7 +688,7 @@ void System::Shutdown(bool is_deserializing) {
     // Shutdown emulation session
     is_powered_on = false;
 
-    VideoCore::Shutdown();
+    gpu.reset();
     HW::Shutdown();
     if (!is_deserializing) {
         GDBStub::Shutdown();
@@ -752,6 +752,56 @@ void System::Reset() {
         apt->GetAppletManager()->SetDeliverArg(std::move(deliver_arg));
     }
 }
+
+void System::ApplySettings() {
+    GDBStub::SetServerPort(values.gdbstub_port.GetValue());
+    GDBStub::ToggleServer(values.use_gdbstub.GetValue());
+
+    if (gpu) {
+#ifndef ANDROID
+        gpu->Renderer().UpdateCurrentFramebufferLayout();
+#endif
+        auto& settings = gpu->Renderer().Settings();
+        settings.bg_color_update_requested = true;
+        settings.shader_update_requested = true;
+    }
+
+    auto& system = Core::System::GetInstance();
+    if (system.IsPoweredOn()) {
+        system.CoreTiming().UpdateClockSpeed(values.cpu_clock_percentage.GetValue());
+        Core::DSP().SetSink(values.output_type.GetValue(), values.output_device.GetValue());
+        Core::DSP().EnableStretching(values.enable_audio_stretching.GetValue());
+
+        auto hid = Service::HID::GetModule(system);
+        if (hid) {
+            hid->ReloadInputDevices();
+        }
+
+        auto apt = Service::APT::GetModule(system);
+        if (apt) {
+            apt->GetAppletManager()->ReloadInputDevices();
+        }
+
+        auto sm = system.ServiceManager();
+        auto ir_user = sm.GetService<Service::IR::IR_USER>("ir:USER");
+        if (ir_user)
+            ir_user->ReloadInputDevices();
+        auto ir_rst = sm.GetService<Service::IR::IR_RST>("ir:rst");
+        if (ir_rst)
+            ir_rst->ReloadInputDevices();
+
+        auto cam = Service::CAM::GetModule(system);
+        if (cam) {
+            cam->ReloadCameraDevices();
+        }
+
+        Service::MIC::ReloadMic(system);
+    }
+
+    Service::PLGLDR::PLG_LDR::SetEnabled(values.plugin_loader_enabled.GetValue());
+    Service::PLGLDR::PLG_LDR::SetAllowGameChangeState(values.allow_plugin_loader.GetValue());
+}
+
 
 template <class Archive>
 void System::serialize(Archive& ar, const unsigned int file_version) {

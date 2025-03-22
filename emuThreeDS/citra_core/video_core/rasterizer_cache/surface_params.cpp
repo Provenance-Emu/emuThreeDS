@@ -34,15 +34,6 @@ bool SurfaceParams::CanReinterpret(const SurfaceParams& other_surface) {
            GetSubRect(other_surface).right <= stride;
 }
 
-bool SurfaceParams::CanExpand(const SurfaceParams& expanded_surface) const {
-    return pixel_format != PixelFormat::Invalid && pixel_format == expanded_surface.pixel_format &&
-           addr <= expanded_surface.end && expanded_surface.addr <= end &&
-           is_tiled == expanded_surface.is_tiled && stride == expanded_surface.stride &&
-           (std::max(expanded_surface.addr, addr) - std::min(expanded_surface.addr, addr)) %
-                   BytesInPixels(stride * (is_tiled ? 8 : 1)) ==
-               0;
-}
-
 bool SurfaceParams::CanTexCopy(const SurfaceParams& texcopy_params) const {
     const SurfaceInterval copy_interval = texcopy_params.GetInterval();
     if (pixel_format == PixelFormat::Invalid || addr > texcopy_params.addr ||
@@ -234,6 +225,13 @@ std::string SurfaceParams::DebugName(bool scaled, bool custom) const noexcept {
     return fmt::format("Surface: {}x{} {} {} levels from {:#x} to {:#x} ({}{})", scaled_width,
                        scaled_height, PixelFormatAsString(pixel_format), levels, addr, end,
                        custom ? "custom," : "", scaled ? "scaled" : "unscaled");
+}
+
+bool SurfaceParams::operator==(const SurfaceParams& other) const noexcept {
+    return std::tie(addr, end, width, height, stride, levels, is_tiled, texture_type, pixel_format,
+                    custom_format) ==
+           std::tie(other.addr, other.end, other.width, other.height, other.stride, other.levels,
+                    other.is_tiled, other.texture_type, other.pixel_format, other.custom_format);
 }
 
 } // namespace VideoCore

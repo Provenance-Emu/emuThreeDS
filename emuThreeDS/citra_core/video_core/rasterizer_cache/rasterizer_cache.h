@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+// Local Changes: Check for 0x18000000 in addr
 #pragma once
 
 #include <type_traits>
@@ -10,11 +11,14 @@
 #include "common/alignment.h"
 #include "common/logging/log.h"
 #include "common/microprofile.h"
+#include "common/scope_exit.h"
 #include "common/settings.h"
 #include "core/memory.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
+#include "video_core/pica/regs_external.h"
+#include "video_core/pica/regs_internal.h"
 #include "video_core/rasterizer_cache/rasterizer_cache_base.h"
-#include "video_core/regs.h"
+#include "video_core/rasterizer_cache/surface_base.h"
 #include "video_core/renderer_base.h"
 #include "video_core/texture/texture_decode.h"
 
@@ -32,10 +36,10 @@ constexpr auto RangeFromInterval(const auto& map, const auto& interval) {
 template <class T>
 RasterizerCache<T>::RasterizerCache(Memory::MemorySystem& memory_,
                                     CustomTexManager& custom_tex_manager_, Runtime& runtime_,
-                                    Pica::Regs& regs_, RendererBase& renderer_)
+                                    Pica::RegsInternal& regs_, RendererBase& renderer_)
     : memory{memory_}, custom_tex_manager{custom_tex_manager_}, runtime{runtime_}, regs{regs_},
       renderer{renderer_}, resolution_scale_factor{renderer.GetResolutionScaleFactor()},
-      use_filter{Settings::values.texture_filter.GetValue() != Settings::TextureFilter::None},
+      filter{Settings::values.texture_filter.GetValue()},
       dump_textures{Settings::values.dump_textures.GetValue()},
       use_custom_textures{Settings::values.custom_textures.GetValue()} {
     using TextureConfig = Pica::TexturingRegs::TextureConfig;
@@ -64,6 +68,16 @@ RasterizerCache<T>::RasterizerCache(Memory::MemorySystem& memory_,
                                            .wrap_s = TextureConfig::WrapMode::ClampToBorder,
                                            .wrap_t = TextureConfig::WrapMode::ClampToBorder,
                                        }));
+
+    auto& null_surface = slot_surfaces[NULL_SURFACE_ID];
+    runtime.ClearTexture(null_surface, {
+                                           .texture_level = 0,
+                                           .texture_rect = null_surface.GetScaledRect(),
+                                           .value =
+                                               {
+                                                   .color = {0.f, 0.f, 0.f, 0.f},
+                                               },
+                                       });
 }
 
 template <class T>
@@ -74,18 +88,21 @@ RasterizerCache<T>::~RasterizerCache() {
 template <class T>
 void RasterizerCache<T>::TickFrame() {
     custom_tex_manager.TickFrame();
-    runtime.TickFrame();
+    RunGarbageCollector();
+
+    const auto new_filter = Settings::values.texture_filter.GetValue();
+    if (filter != new_filter) [[unlikely]] {
+        filter = new_filter;
+        UnregisterAll();
+    }
 
     const u32 scale_factor = renderer.GetResolutionScaleFactor();
     const bool resolution_scale_changed = resolution_scale_factor != scale_factor;
     const bool use_custom_texture_changed =
         Settings::values.custom_textures.GetValue() != use_custom_textures;
-    const bool texture_filter_changed =
-        renderer.Settings().texture_filter_update_requested.exchange(false);
 
-    if (resolution_scale_changed || texture_filter_changed || use_custom_texture_changed) {
+    if (resolution_scale_changed || use_custom_texture_changed) {
         resolution_scale_factor = scale_factor;
-        use_filter = Settings::values.texture_filter.GetValue() != Settings::TextureFilter::None;
         use_custom_textures = Settings::values.custom_textures.GetValue();
         if (use_custom_textures) {
             custom_tex_manager.FindCustomTextures();
@@ -95,7 +112,61 @@ void RasterizerCache<T>::TickFrame() {
 }
 
 template <class T>
-bool RasterizerCache<T>::AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config) {
+void RasterizerCache<T>::RunGarbageCollector() {
+    frame_tick++;
+    for (auto it = sentenced.begin(); it != sentenced.end();) {
+        const auto [surface_id, tick] = *it;
+        if (frame_tick - tick <= runtime.RemoveThreshold()) {
+            it++;
+            continue;
+        }
+        RemoveFramebuffers(surface_id);
+        slot_surfaces.erase(surface_id);
+        it = sentenced.erase(it);
+    }
+}
+
+template <class T>
+void RasterizerCache<T>::RemoveFramebuffers(SurfaceId surface_id) {
+    for (auto it = framebuffers.begin(); it != framebuffers.end();) {
+        const auto& params = it->first;
+        if (params.color_id == surface_id || params.depth_id == surface_id) {
+            slot_framebuffers.erase(it->second);
+            it = framebuffers.erase(it);
+        } else {
+            it++;
+        }
+    }
+}
+
+template <class T>
+void RasterizerCache<T>::RemoveTextureCubeFace(SurfaceId surface_id) {
+    if (False(slot_surfaces[surface_id].flags & SurfaceFlagBits::Tracked)) {
+        return;
+    }
+
+    for (auto it = texture_cube_cache.begin(); it != texture_cube_cache.end();) {
+        TextureCube& cube = it->second;
+        for (SurfaceId& face_id : cube.face_ids) {
+            if (face_id == surface_id) {
+                face_id = SurfaceId{};
+            }
+        }
+        if (std::none_of(cube.face_ids.begin(), cube.face_ids.end(),
+                         [](SurfaceId id) { return id; })) {
+            sentenced.emplace_back(cube.surface_id, frame_tick);
+            it = texture_cube_cache.erase(it);
+        } else {
+            it++;
+        }
+    }
+}
+
+template <class T>
+bool RasterizerCache<T>::AccelerateTextureCopy(const Pica::DisplayTransferConfig& config) {
+    const DebugScope scope{runtime, Common::Vec4f{0.f, 0.f, 1.f, 1.f},
+                           "RasterizerCache::AccelerateTextureCopy ({})", config.DebugName()};
+
     // Texture copy size is aligned to 16 byte units
     const u32 copy_size = Common::AlignDown(config.texture_copy.size, 16);
     if (copy_size == 0) {
@@ -190,7 +261,10 @@ bool RasterizerCache<T>::AccelerateTextureCopy(const GPU::Regs::DisplayTransferC
 }
 
 template <class T>
-bool RasterizerCache<T>::AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config) {
+bool RasterizerCache<T>::AccelerateDisplayTransfer(const Pica::DisplayTransferConfig& config) {
+    const DebugScope scope{runtime, Common::Vec4f{0.f, 0.f, 1.f, 1.f},
+                           "RasterizerCache::AccelerateDisplayTransfer ({})", config.DebugName()};
+
     SurfaceParams src_params;
     src_params.addr = config.GetPhysicalInputAddress();
     src_params.width = config.output_width;
@@ -209,6 +283,13 @@ bool RasterizerCache<T>::AccelerateDisplayTransfer(const GPU::Regs::DisplayTrans
     dst_params.is_tiled = config.input_linear != config.dont_swizzle;
     dst_params.pixel_format = PixelFormatFromGPUPixelFormat(config.output_format);
     dst_params.UpdateParams();
+
+    // Using flip_vertically alongside crop_input_lines produces skewed output on hardware.
+    // We have to emulate this because some games rely on this behaviour to render correctly.
+    if (config.flip_vertically && config.crop_input_lines) {
+        dst_params.addr += (config.input_width - config.output_width) * (config.output_height - 1) *
+                           Pica::BytesPerPixel(config.output_format);
+    }
 
     auto [src_surface_id, src_rect] = GetSurfaceSubRect(src_params, ScaleMatch::Ignore, true);
     if (!src_surface_id) {
@@ -250,7 +331,10 @@ bool RasterizerCache<T>::AccelerateDisplayTransfer(const GPU::Regs::DisplayTrans
 }
 
 template <class T>
-bool RasterizerCache<T>::AccelerateFill(const GPU::Regs::MemoryFillConfig& config) {
+bool RasterizerCache<T>::AccelerateFill(const Pica::MemoryFillConfig& config) {
+    const DebugScope scope{runtime, Common::Vec4f{1.f, 0.f, 1.f, 1.f},
+                           "RasterizerCache::AccelerateFill ({})", config.DebugName()};
+
     SurfaceParams params;
     params.addr = config.GetStartAddress();
     params.end = config.GetEndAddress();
@@ -288,10 +372,25 @@ typename T::Sampler& RasterizerCache<T>::GetSampler(SamplerId sampler_id) {
 template <class T>
 typename T::Sampler& RasterizerCache<T>::GetSampler(
     const Pica::TexturingRegs::TextureConfig& config) {
+    using TextureFilter = Pica::TexturingRegs::TextureConfig::TextureFilter;
+
+    const auto get_filter = [](TextureFilter filter) {
+        switch (Settings::values.texture_sampling.GetValue()) {
+        case Settings::TextureSampling::GameControlled:
+            return filter;
+        case Settings::TextureSampling::NearestNeighbor:
+            return TextureFilter::Nearest;
+        case Settings::TextureSampling::Linear:
+            return TextureFilter::Linear;
+        default:
+            return filter;
+        }
+    };
+
     const SamplerParams params = {
-        .mag_filter = config.mag_filter,
-        .min_filter = config.min_filter,
-        .mip_filter = config.mip_filter,
+        .mag_filter = get_filter(config.mag_filter),
+        .min_filter = get_filter(config.min_filter),
+        .mip_filter = get_filter(config.mip_filter),
         .wrap_s = config.wrap_s,
         .wrap_t = config.wrap_t,
         .border_color = config.border_color.raw,
@@ -312,29 +411,46 @@ template <class T>
 void RasterizerCache<T>::CopySurface(Surface& src_surface, Surface& dst_surface,
                                      SurfaceInterval copy_interval) {
     MICROPROFILE_SCOPE(RasterizerCache_CopySurface);
-
     const PAddr copy_addr = copy_interval.lower();
     const SurfaceParams subrect_params = dst_surface.FromInterval(copy_interval);
-    const auto dst_rect = dst_surface.GetScaledSubRect(subrect_params);
     ASSERT(subrect_params.GetInterval() == copy_interval);
 
     if (src_surface.type == SurfaceType::Fill) {
         const TextureClear clear = {
             .texture_level = dst_surface.LevelOf(copy_addr),
-            .texture_rect = dst_rect,
+            .texture_rect = dst_surface.GetScaledSubRect(subrect_params),
             .value = src_surface.MakeClearValue(copy_addr, dst_surface.pixel_format),
         };
         runtime.ClearTexture(dst_surface, clear);
         return;
     }
 
-    const TextureBlit blit = {
-        .src_level = src_surface.LevelOf(copy_addr),
-        .dst_level = dst_surface.LevelOf(copy_addr),
-        .src_rect = src_surface.GetScaledSubRect(subrect_params),
-        .dst_rect = dst_rect,
-    };
-    runtime.BlitTextures(src_surface, dst_surface, blit);
+    const u32 src_scale = src_surface.res_scale;
+    const u32 dst_scale = dst_surface.res_scale;
+    if (src_scale > dst_scale) {
+        dst_surface.ScaleUp(src_scale);
+    }
+
+    const auto src_rect = src_surface.GetScaledSubRect(subrect_params);
+    const auto dst_rect = dst_surface.GetScaledSubRect(subrect_params);
+    if (src_scale == dst_scale) {
+        const TextureCopy copy = {
+            .src_level = src_surface.LevelOf(copy_addr),
+            .dst_level = dst_surface.LevelOf(copy_addr),
+            .src_offset = {src_rect.left, src_rect.bottom},
+            .dst_offset = {dst_rect.left, dst_rect.bottom},
+            .extent = {src_rect.GetWidth(), src_rect.GetHeight()},
+        };
+        runtime.CopyTextures(src_surface, dst_surface, copy);
+    } else {
+        const TextureBlit blit = {
+            .src_level = src_surface.LevelOf(copy_addr),
+            .dst_level = dst_surface.LevelOf(copy_addr),
+            .src_rect = src_rect,
+            .dst_rect = dst_rect,
+        };
+        runtime.BlitTextures(src_surface, dst_surface, blit);
+    }
 }
 
 template <class T>
@@ -351,33 +467,7 @@ SurfaceId RasterizerCache<T>::GetSurface(const SurfaceParams& params, ScaleMatch
     SurfaceId surface_id = FindMatch<MatchFlags::Exact>(params, match_res_scale);
 
     if (!surface_id) {
-        u16 target_res_scale = params.res_scale;
-        if (match_res_scale != ScaleMatch::Exact) {
-            // This surface may have a subrect of another surface with a higher res_scale, find
-            // it to adjust our params
-            SurfaceParams find_params = params;
-            SurfaceId expandable_id = FindMatch<MatchFlags::Expand>(find_params, match_res_scale);
-            if (expandable_id) {
-                Surface& expandable = slot_surfaces[expandable_id];
-                if (expandable.res_scale > target_res_scale) {
-                    target_res_scale = expandable.res_scale;
-                }
-            }
-            // Keep res_scale when reinterpreting d24s8 -> rgba8
-            if (params.pixel_format == PixelFormat::RGBA8) {
-                find_params.pixel_format = PixelFormat::D24S8;
-                expandable_id = FindMatch<MatchFlags::Expand>(find_params, match_res_scale);
-                if (expandable_id) {
-                    Surface& expandable = slot_surfaces[expandable_id];
-                    if (expandable.res_scale > target_res_scale) {
-                        target_res_scale = expandable.res_scale;
-                    }
-                }
-            }
-        }
-        SurfaceParams new_params = params;
-        new_params.res_scale = target_res_scale;
-        surface_id = CreateSurface(new_params);
+        surface_id = CreateSurface(params);
         RegisterSurface(surface_id);
     }
 
@@ -419,31 +509,6 @@ typename RasterizerCache<T>::SurfaceRect_Tuple RasterizerCache<T>::GetSurfaceSub
         aligned_params.UpdateParams();
     }
 
-    // Check for a surface we can expand before creating a new one
-    if (!surface_id) {
-        surface_id = FindMatch<MatchFlags::Expand>(aligned_params, match_res_scale);
-        if (surface_id) {
-            Surface& surface = slot_surfaces[surface_id];
-            aligned_params.width = aligned_params.stride;
-            aligned_params.UpdateParams();
-
-            SurfaceParams new_params = surface;
-            new_params.addr = std::min(aligned_params.addr, surface.addr);
-            new_params.end = std::max(aligned_params.end, surface.end);
-            new_params.size = new_params.end - new_params.addr;
-            new_params.height =
-                new_params.size / aligned_params.BytesInPixels(aligned_params.stride);
-            new_params.UpdateParams();
-            ASSERT(new_params.size % aligned_params.BytesInPixels(aligned_params.stride) == 0);
-
-            SurfaceId new_surface_id = CreateSurface(new_params);
-            DuplicateSurface(surface_id, new_surface_id);
-            UnregisterSurface(surface_id);
-            RegisterSurface(new_surface_id);
-            surface_id = new_surface_id;
-        }
-    }
-
     // No subrect found - create and return a new surface
     if (!surface_id) {
         SurfaceParams new_params = aligned_params;
@@ -471,7 +536,7 @@ typename T::Surface& RasterizerCache<T>::GetTextureSurface(
 template <class T>
 SurfaceId RasterizerCache<T>::GetTextureSurface(const Pica::Texture::TextureInfo& info,
                                                 u32 max_level) {
-    if (info.physical_address == 0) [[unlikely]] {
+    if (info.physical_address == 0 || info.physical_address == 0x18000000) [[unlikely]] {
         // Can occur when texture addr is null or its memory is unmapped/invalid
         // HACK: In this case, the correct behaviour for the PICA is to use the last
         // rendered colour. But because this would be impractical to implement, the
@@ -489,32 +554,33 @@ SurfaceId RasterizerCache<T>::GetTextureSurface(const Pica::Texture::TextureInfo
     params.levels = max_level + 1;
     params.is_tiled = true;
     params.pixel_format = PixelFormatFromTextureFormat(info.format);
-    params.res_scale = use_filter ? resolution_scale_factor : 1;
+    params.res_scale = filter != Settings::TextureFilter::None ? resolution_scale_factor : 1;
     params.UpdateParams();
 
     const u32 min_width = info.width >> max_level;
     const u32 min_height = info.height >> max_level;
     if (min_width % 8 != 0 || min_height % 8 != 0) {
-        if (min_width % 4 == 0 && min_height % 4 == 0) {
-            const auto [src_surface_id, rect] = GetSurfaceSubRect(params, ScaleMatch::Ignore, true);
-            Surface& src_surface = slot_surfaces[src_surface_id];
-
-            params.res_scale = src_surface.res_scale;
-            SurfaceId tmp_surface_id = CreateSurface(params);
-            Surface& tmp_surface = slot_surfaces[tmp_surface_id];
-
-            const TextureBlit blit = {
-                .src_level = src_surface.LevelOf(params.addr),
-                .dst_level = 0,
-                .src_rect = rect,
-                .dst_rect = tmp_surface.GetScaledRect(),
-            };
-            runtime.BlitTextures(src_surface, tmp_surface, blit);
-            return tmp_surface_id;
+        if (min_width % 4 != 0 || min_height % 4 != 0) {
+            LOG_CRITICAL(HW_GPU, "Texture size ({}x{}) is not multiple of 4", min_width,
+                         min_height);
+            return NULL_SURFACE_ID;
         }
+        const auto [src_surface_id, rect] = GetSurfaceSubRect(params, ScaleMatch::Ignore, true);
+        Surface& src_surface = slot_surfaces[src_surface_id];
 
-        LOG_CRITICAL(HW_GPU, "Texture size ({}x{}) is not multiple of 4", min_width, min_height);
-        return NULL_SURFACE_ID;
+        params.res_scale = src_surface.res_scale;
+        SurfaceId tmp_surface_id = CreateSurface(params);
+        Surface& tmp_surface = slot_surfaces[tmp_surface_id];
+        sentenced.emplace_back(tmp_surface_id, frame_tick);
+
+        const TextureBlit blit = {
+            .src_level = src_surface.LevelOf(params.addr),
+            .dst_level = 0,
+            .src_rect = rect,
+            .dst_rect = tmp_surface.GetScaledRect(),
+        };
+        runtime.BlitTextures(src_surface, tmp_surface, blit);
+        return tmp_surface_id;
     }
     if (info.width != (min_width << max_level) || info.height != (min_height << max_level)) {
         LOG_CRITICAL(HW_GPU, "Texture size ({}x{}) does not support required mipmap level ({})",
@@ -535,14 +601,43 @@ typename T::Surface& RasterizerCache<T>::GetTextureCube(const TextureCubeConfig&
     auto [it, new_surface] = texture_cube_cache.try_emplace(config);
     TextureCube& cube = it->second;
 
+    const std::array addresses = {config.px, config.nx, config.py, config.ny, config.pz, config.nz};
+
     if (new_surface) {
+        Pica::Texture::TextureInfo info = {
+            .width = config.width,
+            .height = config.width,
+            .format = config.format,
+        };
+        info.SetDefaultStride();
+
+        u32 res_scale = 1;
+        for (u32 i = 0; i < addresses.size(); i++) {
+            if (!addresses[i]) {
+                continue;
+            }
+
+            SurfaceId& face_id = cube.face_ids[i];
+            if (!face_id) {
+                info.physical_address = addresses[i];
+                face_id = GetTextureSurface(info, config.levels - 1);
+                Surface& surface = slot_surfaces[face_id];
+                ASSERT_MSG(
+                    surface.levels >= config.levels,
+                    "Texture cube face levels are not enough to validate the levels requested");
+                surface.flags |= SurfaceFlagBits::Tracked;
+            }
+            Surface& surface = slot_surfaces[face_id];
+            res_scale = std::max(surface.res_scale, res_scale);
+        }
+
         SurfaceParams cube_params = {
             .addr = config.px,
             .width = config.width,
             .height = config.width,
             .stride = config.width,
             .levels = config.levels,
-            .res_scale = use_filter ? resolution_scale_factor : 1,
+            .res_scale = res_scale,
             .texture_type = TextureType::CubeMap,
             .pixel_format = PixelFormatFromTextureFormat(config.format),
             .type = SurfaceType::Texture,
@@ -551,38 +646,21 @@ typename T::Surface& RasterizerCache<T>::GetTextureCube(const TextureCubeConfig&
         cube.surface_id = CreateSurface(cube_params);
     }
 
-    const u32 scaled_size = slot_surfaces[cube.surface_id].GetScaledWidth();
-    const std::array addresses = {config.px, config.nx, config.py, config.ny, config.pz, config.nz};
-
-    Pica::Texture::TextureInfo info = {
-        .width = config.width,
-        .height = config.width,
-        .format = config.format,
-    };
-    info.SetDefaultStride();
-
+    Surface& cube_surface = slot_surfaces[cube.surface_id];
     for (u32 i = 0; i < addresses.size(); i++) {
-        if (!addresses[i]) {
+        const SurfaceId& face_id = cube.face_ids[i];
+        if (!addresses[i] || !face_id) {
             continue;
         }
-
-        SurfaceId& face_id = cube.face_ids[i];
-        if (!face_id) {
-            info.physical_address = addresses[i];
-            face_id = GetTextureSurface(info, config.levels - 1);
-            ASSERT_MSG(slot_surfaces[face_id].levels >= config.levels,
-                       "Texture cube face levels are not enough to validate the levels requested");
-        }
         Surface& surface = slot_surfaces[face_id];
-        surface.flags |= SurfaceFlagBits::Tracked;
         if (cube.ticks[i] == surface.modification_tick) {
             continue;
         }
         cube.ticks[i] = surface.modification_tick;
-        Surface& cube_surface = slot_surfaces[cube.surface_id];
+        boost::container::small_vector<TextureCopy, 8> upload_copies;
         for (u32 level = 0; level < config.levels; level++) {
-            const u32 width_lod = scaled_size >> level;
-            const TextureCopy texture_copy = {
+            const u32 width_lod = surface.GetScaledWidth() >> level;
+            upload_copies.push_back({
                 .src_level = level,
                 .dst_level = level,
                 .src_layer = 0,
@@ -590,17 +668,17 @@ typename T::Surface& RasterizerCache<T>::GetTextureCube(const TextureCubeConfig&
                 .src_offset = {0, 0},
                 .dst_offset = {0, 0},
                 .extent = {width_lod, width_lod},
-            };
-            runtime.CopyTextures(surface, cube_surface, texture_copy);
+            });
         }
+        runtime.CopyTextures(surface, cube_surface, upload_copies);
     }
 
     return slot_surfaces[cube.surface_id];
 }
 
 template <class T>
-typename T::Framebuffer RasterizerCache<T>::GetFramebufferSurfaces(bool using_color_fb,
-                                                                   bool using_depth_fb) {
+FramebufferHelper<T> RasterizerCache<T>::GetFramebufferSurfaces(bool using_color_fb,
+                                                                bool using_depth_fb) {
     const auto& config = regs.framebuffer.framebuffer;
 
     const s32 framebuffer_width = config.GetWidth();
@@ -613,7 +691,6 @@ typename T::Framebuffer RasterizerCache<T>::GetFramebufferSurfaces(bool using_co
         static_cast<u32>(std::clamp(viewport_rect.bottom, 0, framebuffer_height)),
     };
 
-    // get color and depth surfaces
     SurfaceParams color_params;
     color_params.is_tiled = true;
     color_params.res_scale = resolution_scale_factor;
@@ -631,14 +708,6 @@ typename T::Framebuffer RasterizerCache<T>::GetFramebufferSurfaces(bool using_co
 
     auto color_vp_interval = color_params.GetSubRectInterval(viewport_clamped);
     auto depth_vp_interval = depth_params.GetSubRectInterval(viewport_clamped);
-
-    // Make sure that framebuffers don't overlap if both color and depth are being used
-    if (using_color_fb && using_depth_fb &&
-        boost::icl::length(color_vp_interval & depth_vp_interval)) {
-        LOG_CRITICAL(HW_GPU, "Color and depth framebuffer memory regions overlap; "
-                             "overlapping framebuffers not supported!");
-        using_depth_fb = false;
-    }
 
     Common::Rectangle<u32> color_rect{};
     SurfaceId color_id{};
@@ -668,49 +737,36 @@ typename T::Framebuffer RasterizerCache<T>::GetFramebufferSurfaces(bool using_co
         fb_rect = depth_rect;
     }
 
-    Surface* const color_surface = color_id ? &slot_surfaces[color_id] : nullptr;
-    Surface* const depth_surface = depth_id ? &slot_surfaces[depth_id] : nullptr;
+    Surface* color_surface = color_id ? &slot_surfaces[color_id] : nullptr;
+    Surface* depth_surface = depth_id ? &slot_surfaces[depth_id] : nullptr;
 
     if (color_id) {
         color_level = color_surface->LevelOf(color_params.addr);
+        color_surface->flags |= SurfaceFlagBits::RenderTarget;
         ValidateSurface(color_id, boost::icl::first(color_vp_interval),
                         boost::icl::length(color_vp_interval));
     }
     if (depth_id) {
         depth_level = depth_surface->LevelOf(depth_params.addr);
+        depth_surface->flags |= SurfaceFlagBits::RenderTarget;
         ValidateSurface(depth_id, boost::icl::first(depth_vp_interval),
                         boost::icl::length(depth_vp_interval));
     }
 
-    render_targets = RenderTargets{
+    const FramebufferParams fb_params = {
         .color_id = color_id,
         .depth_id = depth_id,
+        .color_level = color_level,
+        .depth_level = depth_level,
+        .shadow_rendering = regs.framebuffer.IsShadowRendering(),
     };
 
-    return Framebuffer{runtime,     color_surface, color_level, depth_surface,
-                       depth_level, regs,          fb_rect};
-}
+    auto [it, new_framebuffer] = framebuffers.try_emplace(fb_params);
+    if (new_framebuffer) {
+        it->second = slot_framebuffers.insert(runtime, fb_params, color_surface, depth_surface);
+    }
 
-template <class T>
-void RasterizerCache<T>::InvalidateFramebuffer(const Framebuffer& framebuffer) {
-    const auto invalidate = [&](SurfaceId surface_id) {
-        if (!surface_id) {
-            return;
-        }
-        Surface& surface = slot_surfaces[surface_id];
-        const SurfaceInterval interval = framebuffer.Interval(surface.type);
-        const PAddr addr = boost::icl::first(interval);
-        const u32 size = boost::icl::length(interval);
-        InvalidateRegion(addr, size, surface_id);
-    };
-    const bool has_color = framebuffer.HasAttachment(SurfaceType::Color);
-    const bool has_depth = framebuffer.HasAttachment(SurfaceType::DepthStencil);
-    if (has_color) {
-        invalidate(render_targets.color_id);
-    }
-    if (has_depth) {
-        invalidate(render_targets.depth_id);
-    }
+    return FramebufferHelper<T>{this, &slot_framebuffers[it->second], regs.rasterizer, fb_rect};
 }
 
 template <class T>
@@ -744,7 +800,7 @@ typename RasterizerCache<T>::SurfaceRect_Tuple RasterizerCache<T>::GetTexCopySur
 
 template <class T>
 template <typename Func>
-void RasterizerCache<T>::ForEachSurfaceInRegion(PAddr addr, size_t size, Func&& func) {
+void RasterizerCache<T>::ForEachSurfaceInRegion(PAddr addr, std::size_t size, Func&& func) {
     using FuncReturn = typename std::invoke_result<Func, SurfaceId, Surface&>::type;
     static constexpr bool BOOL_BREAK = std::is_same_v<FuncReturn, bool>;
     boost::container::small_vector<SurfaceId, 8> surfaces;
@@ -865,47 +921,11 @@ SurfaceId RasterizerCache<T>::FindMatch(const SurfaceParams& params, ScaleMatch 
                                  surface.CanReinterpret(params);
             return std::make_pair(matched, copy_interval);
         });
-        IsMatch_Helper(std::integral_constant<MatchFlags, MatchFlags::Expand>{}, [&] {
-            return std::make_pair(surface.CanExpand(params), surface.GetInterval());
-        });
         IsMatch_Helper(std::integral_constant<MatchFlags, MatchFlags::TexCopy>{}, [&] {
             return std::make_pair(surface.CanTexCopy(params), surface.GetInterval());
         });
     });
     return match_id;
-}
-
-template <class T>
-void RasterizerCache<T>::DuplicateSurface(SurfaceId src_id, SurfaceId dst_id) {
-    Surface& src_surface = slot_surfaces[src_id];
-    Surface& dst_surface = slot_surfaces[dst_id];
-    ASSERT(dst_surface.addr <= src_surface.addr && dst_surface.end >= src_surface.end);
-
-    const auto src_rect = src_surface.GetScaledRect();
-    const auto dst_rect = dst_surface.GetScaledSubRect(src_surface);
-    ASSERT(src_rect.GetWidth() == dst_rect.GetWidth());
-
-    const TextureCopy copy = {
-        .src_level = 0,
-        .dst_level = 0,
-        .src_offset = {src_rect.left, src_rect.bottom},
-        .dst_offset = {dst_rect.left, dst_rect.bottom},
-        .extent = {src_rect.GetWidth(), src_rect.GetHeight()},
-    };
-    runtime.CopyTextures(src_surface, dst_surface, copy);
-
-    dst_surface.invalid_regions -= src_surface.GetInterval();
-    dst_surface.invalid_regions += src_surface.invalid_regions;
-
-    SurfaceRegions regions;
-    for (const auto& pair : RangeFromInterval(dirty_regions, src_surface.GetInterval())) {
-        if (pair.second == src_id) {
-            regions += pair.first;
-        }
-    }
-    for (const auto& interval : regions) {
-        dirty_regions.set({interval, dst_id});
-    }
 }
 
 template <class T>
@@ -925,10 +945,18 @@ void RasterizerCache<T>::ValidateSurface(SurfaceId surface_id, PAddr addr, u32 s
 
     SurfaceRegions validate_regions = surface.invalid_regions & validate_interval;
 
+    if (validate_regions.empty()) {
+        return;
+    }
+
     auto notify_validated = [&](SurfaceInterval interval) {
         surface.MarkValid(interval);
         validate_regions.erase(interval);
     };
+
+    const DebugScope scope{runtime, Common::Vec4f{0.f, 1.f, 0.f, 1.f},
+                           "RasterizerCache::ValidateSurface (from {:#x} to {:#x})", addr,
+                           addr + size};
 
     u32 level = surface.LevelOf(addr);
     SurfaceInterval level_interval = surface.LevelInterval(level);
@@ -994,8 +1022,10 @@ void RasterizerCache<T>::UploadSurface(Surface& surface, SurfaceInterval interva
     DecodeTexture(load_info, load_info.addr, load_info.end, upload_data, staging.mapped,
                   runtime.NeedsConversion(surface.pixel_format));
 
-    if (dump_textures && False(surface.flags & SurfaceFlagBits::Custom)) {
-        const u64 hash = Common::ComputeHash64(upload_data.data(), upload_data.size());
+    const bool should_dump = False(surface.flags & SurfaceFlagBits::Custom) &&
+                             False(surface.flags & SurfaceFlagBits::RenderTarget);
+    if (dump_textures && should_dump) {
+        const u64 hash = ComputeHash(load_info, upload_data);
         const u32 level = surface.LevelOf(load_info.addr);
         custom_tex_manager.DumpTexture(load_info, level, upload_data, hash);
     }
@@ -1007,6 +1037,20 @@ void RasterizerCache<T>::UploadSurface(Surface& surface, SurfaceInterval interva
         .texture_level = surface.LevelOf(load_info.addr),
     };
     surface.Upload(upload, staging);
+}
+
+template <class T>
+u64 RasterizerCache<T>::ComputeHash(const SurfaceParams& load_info, std::span<u8> upload_data) {
+    if (!custom_tex_manager.UseNewHash()) {
+        const u32 width = load_info.width;
+        const u32 height = load_info.height;
+        const u32 bpp = GetFormatBytesPerPixel(load_info.pixel_format);
+        auto decoded = std::vector<u8>(width * height * bpp);
+        DecodeTexture(load_info, load_info.addr, load_info.end, upload_data, decoded, false);
+        return Common::ComputeHash64(decoded.data(), decoded.size());
+    } else {
+        return Common::ComputeHash64(upload_data.data(), upload_data.size());
+    }
 }
 
 template <class T>
@@ -1023,18 +1067,7 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
     }
 
     const auto upload_data = source_ptr.GetWriteBytes(load_info.end - load_info.addr);
-    const u64 hash = [&] {
-        if (!custom_tex_manager.UseNewHash()) {
-            const u32 width = load_info.width;
-            const u32 height = load_info.height;
-            const u32 bpp = surface.GetInternalBytesPerPixel();
-            auto decoded = std::vector<u8>(width * height * bpp);
-            DecodeTexture(load_info, load_info.addr, load_info.end, upload_data, decoded, false);
-            return Common::ComputeHash64(decoded.data(), decoded.size());
-        } else {
-            return Common::ComputeHash64(upload_data.data(), upload_data.size());
-        }
-    }();
+    const u64 hash = ComputeHash(load_info, upload_data);
 
     const u32 level = surface.LevelOf(load_info.addr);
     Material* material = custom_tex_manager.GetMaterial(hash);
@@ -1049,16 +1082,16 @@ bool RasterizerCache<T>::UploadCustomSurface(SurfaceId surface_id, SurfaceInterv
     surface.flags |= SurfaceFlagBits::Custom;
 
     const auto upload = [this, level, surface_id, material]() -> bool {
+        ASSERT_MSG(True(slot_surfaces[surface_id].flags & SurfaceFlagBits::Custom),
+                   "Surface is not suitable for custom upload, aborting!");
+        if (!slot_surfaces[surface_id].IsCustom()) {
+            const SurfaceBase old_surface{slot_surfaces[surface_id]};
+            const SurfaceId old_id =
+                slot_surfaces.swap_and_insert(surface_id, runtime, old_surface, material);
+            slot_surfaces[old_id].flags &= ~SurfaceFlagBits::Registered;
+            sentenced.emplace_back(old_id, frame_tick);
+        }
         Surface& surface = slot_surfaces[surface_id];
-        if (False(surface.flags & SurfaceFlagBits::Custom)) {
-            LOG_ERROR(HW_GPU, "Surface is not suitable for custom upload, aborting!");
-            return false;
-        }
-        if (!surface.IsCustom() && !surface.Swap(material)) {
-            LOG_ERROR(HW_GPU, "Custom compressed format {} unsupported by host GPU",
-                      material->format);
-            return false;
-        }
         surface.UploadCustom(material, level);
         if (custom_tex_manager.SkipMipmaps()) {
             runtime.GenerateMipmaps(surface);
@@ -1141,39 +1174,35 @@ bool RasterizerCache<T>::ValidateByReinterpretation(Surface& surface, SurfacePar
         if (boost::icl::is_empty(copy_interval & interval)) {
             return false;
         }
+        const u32 res_scale = src_surface.res_scale;
+        if (res_scale > surface.res_scale) {
+            surface.ScaleUp(res_scale);
+        }
         const PAddr addr = boost::icl::lower(interval);
         const SurfaceParams copy_params = surface.FromInterval(copy_interval);
-        const TextureBlit reinterpret = {
+        const auto src_rect = src_surface.GetScaledSubRect(copy_params);
+        const auto dst_rect = surface.GetScaledSubRect(copy_params);
+        const TextureCopy reinterpret = {
             .src_level = src_surface.LevelOf(addr),
             .dst_level = surface.LevelOf(addr),
-            .src_rect = src_surface.GetScaledSubRect(copy_params),
-            .dst_rect = surface.GetScaledSubRect(copy_params),
+            .src_offset = {src_rect.left, src_rect.bottom},
+            .dst_offset = {dst_rect.left, dst_rect.bottom},
+            .extent = {src_rect.GetWidth(), src_rect.GetHeight()},
         };
         return runtime.Reinterpret(src_surface, surface, reinterpret);
     }
 
     // No surfaces were found in the cache that had a matching bit-width.
-    // If there's a surface with invalid format it means the region was cleared
-    // so we don't want to skip validation in that case.
-    const bool has_invalid = IntervalHasInvalidPixelFormat(params, interval);
-    const bool is_gpu_modified = boost::icl::contains(dirty_regions, interval);
-    return !has_invalid && is_gpu_modified;
-}
-
-template <class T>
-bool RasterizerCache<T>::IntervalHasInvalidPixelFormat(const SurfaceParams& params,
-                                                       SurfaceInterval interval) {
-    bool invalid_format_found = false;
-    const PAddr addr = boost::icl::lower(interval);
-    const u32 size = boost::icl::length(interval);
-    ForEachSurfaceInRegion(addr, size, [&](SurfaceId surface_id, Surface& surface) {
-        if (surface.pixel_format == PixelFormat::Invalid) {
-            invalid_format_found = true;
-            return true;
-        }
-        return false;
-    });
-    return invalid_format_found;
+    // Before entering the slow path, check if part of the interval is owned
+    // by a gpu modified surface with a different stride than ours. This is indicative
+    // of texture aliasing by the guest, which for the vast majority of cases we don't
+    // need to validate.
+    // TODO: While this works for the vast majority of cases, in Fire Emblem: Shadows of Valentia
+    // the warping effect when running in dugeons relies on this stride reinterpretation.
+    // In the future this transformation should be properly implemented with a GPU shader.
+    const auto it = dirty_regions.find(interval);
+    return it != dirty_regions.end() && it->second &&
+           slot_surfaces[it->second].stride != surface.stride;
 }
 
 template <class T>
@@ -1187,8 +1216,8 @@ void RasterizerCache<T>::ClearAll(bool flush) {
     for (auto& pair : RangeFromInterval(cached_pages, flush_interval)) {
         const auto interval = pair.first & flush_interval;
 
-        const PAddr interval_start_addr = boost::icl::first(interval) << Memory::CITRA_PAGE_BITS;
-        const PAddr interval_end_addr = boost::icl::last_next(interval) << Memory::CITRA_PAGE_BITS;
+        const PAddr interval_start_addr = boost::icl::first(interval) << Memory::CYTRUS_PAGE_BITS;
+        const PAddr interval_end_addr = boost::icl::last_next(interval) << Memory::CYTRUS_PAGE_BITS;
         const u32 interval_size = interval_end_addr - interval_start_addr;
 
         memory.RasterizerMarkRegionCached(interval_start_addr, interval_size, false);
@@ -1196,9 +1225,8 @@ void RasterizerCache<T>::ClearAll(bool flush) {
 
     // Remove the whole cache without really looking at it.
     cached_pages -= flush_interval;
-    dirty_regions -= SurfaceInterval(0x0, 0xFFFFFFFF);
+    dirty_regions.clear();
     page_table.clear();
-    remove_surfaces.clear();
 }
 
 template <class T>
@@ -1211,25 +1239,37 @@ void RasterizerCache<T>::FlushRegion(PAddr addr, u32 size, SurfaceId flush_surfa
     SurfaceRegions flushed_intervals;
 
     for (const auto& [region, surface_id] : RangeFromInterval(dirty_regions, flush_interval)) {
-        // Small sizes imply that this most likely comes from the cpu, flush the entire region
-        // the point is to avoid thousands of small writes every frame if the cpu decides to
-        // access that region, anything higher than 8 you're guaranteed it comes from a service
-        const auto interval = size <= 8 ? region : region & flush_interval;
         if (flush_surface_id && surface_id != flush_surface_id) {
             continue;
         }
 
-        // Sanity check, this surface is the last one that marked this region dirty
+        // Small sizes imply that this most likely comes from the cpu, flush the entire region
+        // the point is to avoid thousands of small writes every frame if the cpu decides to
+        // access that region, anything higher than 8 you're guaranteed it comes from a service
+        const auto interval = size <= 8 ? region : region & flush_interval;
         Surface& surface = slot_surfaces[surface_id];
-        ASSERT(surface.IsRegionValid(interval));
+        ASSERT_MSG(surface.IsRegionValid(interval), "Region owner has invalid regions");
 
+        const DebugScope scope{runtime, Common::Vec4f{0.f, 0.f, 0.f, 1.f},
+                               "RasterizerCache::FlushRegion (from {:#x} to {:#x})",
+                               interval.lower(), interval.upper()};
+
+        SCOPE_EXIT({ flushed_intervals += interval; });
         if (surface.type == SurfaceType::Fill) {
             DownloadFillSurface(surface, interval);
-        } else {
-            DownloadSurface(surface, interval);
+            continue;
         }
 
-        flushed_intervals += interval;
+        // Download each requested level of the surface.
+        const u32 start_level = surface.LevelOf(interval.lower());
+        const u32 end_level = surface.LevelOf(interval.upper());
+        for (u32 level = start_level; level <= end_level; level++) {
+            const auto download_interval = interval & surface.LevelInterval(level);
+            if (boost::icl::is_empty(download_interval)) {
+                continue;
+            }
+            DownloadSurface(surface, download_interval);
+        }
     }
 
     // Reset dirty regions
@@ -1257,11 +1297,11 @@ void RasterizerCache<T>::InvalidateRegion(PAddr addr, u32 size, SurfaceId region
         region_owner.MarkValid(invalid_interval);
     }
 
+    boost::container::small_vector<SurfaceId, 4> remove_surfaces;
     ForEachSurfaceInRegion(addr, size, [&](SurfaceId surface_id, Surface& surface) {
         if (surface_id == region_owner_id) {
             return;
         }
-
         // If the CPU is invalidating this region we want to remove it
         // to (likely) mark the memory pages as uncached
         if (!region_owner_id && size <= 8) {
@@ -1269,14 +1309,12 @@ void RasterizerCache<T>::InvalidateRegion(PAddr addr, u32 size, SurfaceId region
             remove_surfaces.push_back(surface_id);
             return;
         }
-
-        surface.MarkInvalid(surface.GetInterval() & invalid_interval);
-
-        // If the surface has no salvageable data it should be removed
-        // from the cache to avoid clogging the data structure.
-        if (surface.IsFullyInvalid()) {
-            remove_surfaces.push_back(surface_id);
+        const auto interval = surface.GetInterval() & invalid_interval;
+        surface.MarkInvalid(interval);
+        if (!surface.IsFullyInvalid()) {
+            return;
         }
+        remove_surfaces.push_back(surface_id);
     });
 
     if (region_owner_id) {
@@ -1285,16 +1323,28 @@ void RasterizerCache<T>::InvalidateRegion(PAddr addr, u32 size, SurfaceId region
         dirty_regions.erase(invalid_interval);
     }
 
-    for (const SurfaceId remove_surface_id : remove_surfaces) {
-        UnregisterSurface(remove_surface_id);
+    for (const SurfaceId surface_id : remove_surfaces) {
+        UnregisterSurface(surface_id);
     }
-    remove_surfaces.clear();
 }
 
 template <class T>
 SurfaceId RasterizerCache<T>::CreateSurface(const SurfaceParams& params) {
-    SurfaceId surface_id = slot_surfaces.insert(runtime, params);
+    const SurfaceId surface_id = [&] {
+        const auto it = std::find_if(sentenced.begin(), sentenced.end(), [&](const auto& pair) {
+            return slot_surfaces[pair.first] == params;
+        });
+        if (it == sentenced.end()) {
+            return slot_surfaces.insert(runtime, params);
+        }
+        const SurfaceId surface_id = it->first;
+        sentenced.erase(it);
+        return surface_id;
+    }();
     Surface& surface = slot_surfaces[surface_id];
+    if (params.res_scale > surface.res_scale) {
+        surface.ScaleUp(params.res_scale);
+    }
     surface.MarkInvalid(surface.GetInterval());
     return surface_id;
 }
@@ -1322,34 +1372,23 @@ void RasterizerCache<T>::UnregisterSurface(SurfaceId surface_id) {
     ForEachPage(surface.addr, surface.size, [this, surface_id](u64 page) {
         const auto page_it = page_table.find(page);
         if (page_it == page_table.end()) {
-            ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << CITRA_PAGEBITS);
+            ASSERT_MSG(false, "Unregistering unregistered page=0x{:x}", page << CYTRUS_PAGEBITS);
             return;
         }
         std::vector<SurfaceId>& surfaces = page_it.value();
         const auto vector_it = std::find(surfaces.begin(), surfaces.end(), surface_id);
         if (vector_it == surfaces.end()) {
             ASSERT_MSG(false, "Unregistering unregistered surface in page=0x{:x}",
-                       page << CITRA_PAGEBITS);
+                       page << CYTRUS_PAGEBITS);
             return;
         }
         surfaces.erase(vector_it);
     });
 
-    if (True(surface.flags & SurfaceFlagBits::Tracked)) {
-        auto it = texture_cube_cache.begin();
-        while (it != texture_cube_cache.end()) {
-            std::array<SurfaceId, 6>& face_ids = it->second.face_ids;
-            const auto array_it = std::find(face_ids.begin(), face_ids.end(), surface_id);
-            if (array_it != face_ids.end()) {
-                *array_it = SurfaceId{};
-            }
-            if (std::none_of(face_ids.begin(), face_ids.end(), [](SurfaceId id) { return id; })) {
-                slot_surfaces.erase(it->second.surface_id);
-                it = texture_cube_cache.erase(it);
-                continue;
-            }
-            it++;
-        }
+    if (surface.type != SurfaceType::Fill) {
+        RemoveTextureCubeFace(surface_id);
+        sentenced.emplace_back(surface_id, frame_tick);
+        return;
     }
 
     slot_surfaces.erase(surface_id);
@@ -1363,16 +1402,16 @@ void RasterizerCache<T>::UnregisterAll() {
             UnregisterSurface(surfaces.back());
         }
     }
-    texture_cube_cache.clear();
-    remove_surfaces.clear();
-    runtime.Reset();
+    runtime.Finish();
+    frame_tick += runtime.RemoveThreshold();
+    RunGarbageCollector();
 }
 
 template <class T>
 void RasterizerCache<T>::UpdatePagesCachedCount(PAddr addr, u32 size, int delta) {
     const u32 num_pages =
-        ((addr + size - 1) >> Memory::CITRA_PAGE_BITS) - (addr >> Memory::CITRA_PAGE_BITS) + 1;
-    const u32 page_start = addr >> Memory::CITRA_PAGE_BITS;
+        ((addr + size - 1) >> Memory::CYTRUS_PAGE_BITS) - (addr >> Memory::CYTRUS_PAGE_BITS) + 1;
+    const u32 page_start = addr >> Memory::CYTRUS_PAGE_BITS;
     const u32 page_end = page_start + num_pages;
 
     // Interval maps will erase segments if count reaches 0, so if delta is negative we have to
@@ -1386,8 +1425,8 @@ void RasterizerCache<T>::UpdatePagesCachedCount(PAddr addr, u32 size, int delta)
         const auto interval = pair.first & pages_interval;
         const int count = pair.second;
 
-        const PAddr interval_start_addr = boost::icl::first(interval) << Memory::CITRA_PAGE_BITS;
-        const PAddr interval_end_addr = boost::icl::last_next(interval) << Memory::CITRA_PAGE_BITS;
+        const PAddr interval_start_addr = boost::icl::first(interval) << Memory::CYTRUS_PAGE_BITS;
+        const PAddr interval_end_addr = boost::icl::last_next(interval) << Memory::CYTRUS_PAGE_BITS;
         const u32 interval_size = interval_end_addr - interval_start_addr;
 
         if (delta > 0 && count == delta) {

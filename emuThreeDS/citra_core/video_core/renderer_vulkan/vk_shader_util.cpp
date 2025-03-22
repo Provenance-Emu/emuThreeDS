@@ -14,6 +14,7 @@ namespace Vulkan {
 
 using namespace Common::Literals;
 
+namespace {
 constexpr TBuiltInResource DefaultTBuiltInResource = {
     .maxLights = 32,
     .maxClipPlanes = 6,
@@ -133,10 +134,8 @@ EShLanguage ToEshShaderStage(vk::ShaderStageFlagBits stage) {
     case vk::ShaderStageFlagBits::eCompute:
         return EShLanguage::EShLangCompute;
     default:
-        LOG_CRITICAL(Render_Vulkan, "Unkown shader stage");
-        UNREACHABLE();
+        UNREACHABLE_MSG("Unkown shader stage {}", stage);
     }
-
     return EShLanguage::EShLangVertex;
 }
 
@@ -157,11 +156,12 @@ bool InitializeCompiler() {
     glslang_initialized = true;
     return true;
 }
+} // Anonymous namespace
 
 vk::ShaderModule Compile(std::string_view code, vk::ShaderStageFlagBits stage, vk::Device device,
-                         ShaderOptimization level) {
+                         std::string_view premable) {
     if (!InitializeCompiler()) {
-        return VK_NULL_HANDLE;
+        return {};
     }
 
     EProfile profile = ECoreProfile;
@@ -177,14 +177,15 @@ vk::ShaderModule Compile(std::string_view code, vk::ShaderStageFlagBits stage, v
     shader->setEnvTarget(glslang::EShTargetSpv,
                          glslang::EShTargetLanguageVersion::EShTargetSpv_1_3);
     shader->setStringsWithLengths(&pass_source_code, &pass_source_code_length, 1);
+    shader->setPreamble(premable.data());
 
     glslang::TShader::ForbidIncluder includer;
     if (!shader->parse(&DefaultTBuiltInResource, default_version, profile, false, true, messages,
                        includer)) [[unlikely]] {
         LOG_INFO(Render_Vulkan, "Shader Info Log:\n{}\n{}", shader->getInfoLog(),
                  shader->getInfoDebugLog());
-        fmt::print("{}", code);
-        return VK_NULL_HANDLE;
+        LOG_INFO(Render_Vulkan, "Shader Source:\n{}", code);
+        return {};
     }
 
     // Even though there's only a single shader, we still need to link it to generate SPV
@@ -193,7 +194,7 @@ vk::ShaderModule Compile(std::string_view code, vk::ShaderStageFlagBits stage, v
     if (!program->link(messages)) {
         LOG_INFO(Render_Vulkan, "Program Info Log:\n{}\n{}", program->getInfoLog(),
                  program->getInfoDebugLog());
-        return VK_NULL_HANDLE;
+        return {};
     }
 
     glslang::TIntermediate* intermediate = program->getIntermediate(lang);
@@ -201,19 +202,10 @@ vk::ShaderModule Compile(std::string_view code, vk::ShaderStageFlagBits stage, v
     spv::SpvBuildLogger logger;
     glslang::SpvOptions options;
 
-    // Compile the SPIR-V module without optimizations for easier debugging in RenderDoc.
-    if (level == ShaderOptimization::Debug) [[unlikely]] {
-        intermediate->addSourceText(pass_source_code, pass_source_code_length);
-        options.generateDebugInfo = true;
-        options.disableOptimizer = true;
-        options.optimizeSize = false;
-        options.disassemble = false;
-        options.validate = true;
-    } else {
-        options.disableOptimizer = false;
-        options.validate = false;
-        options.optimizeSize = true;
-    }
+    // Enable optimizations on the generated SPIR-V code.
+    options.disableOptimizer = false;
+    options.validate = false;
+    options.optimizeSize = true;
 
     out_code.reserve(8_KiB);
     glslang::GlslangToSpv(*intermediate, out_code, &logger, &options);
@@ -235,11 +227,10 @@ vk::ShaderModule CompileSPV(std::span<const u32> code, vk::Device device) {
     try {
         return device.createShaderModule(shader_info);
     } catch (vk::SystemError& err) {
-        LOG_CRITICAL(Render_Vulkan, "{}", err.what());
-        UNREACHABLE();
+        UNREACHABLE_MSG("{}", err.what());
     }
 
-    return VK_NULL_HANDLE;
+    return {};
 }
 
 } // namespace Vulkan

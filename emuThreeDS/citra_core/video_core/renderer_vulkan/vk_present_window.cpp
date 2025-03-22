@@ -11,8 +11,9 @@
 #include "video_core/renderer_vulkan/vk_present_window.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_swapchain.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 MICROPROFILE_DEFINE(Vulkan_WaitPresent, "Vulkan", "Wait For Present", MP_RGB(128, 128, 128));
 
@@ -99,8 +100,8 @@ bool CanBlitToSwapchain(const vk::PhysicalDevice& physical_device, vk::Format fo
 PresentWindow::PresentWindow(Frontend::EmuWindow& emu_window_, const Instance& instance_,
                              Scheduler& scheduler_)
     : emu_window{emu_window_}, instance{instance_}, scheduler{scheduler_},
-      surface{CreateSurface(instance.GetInstance(), emu_window)},
-      swapchain{instance, scheduler, emu_window.GetFramebufferLayout().width,
+      surface{CreateSurface(instance.GetInstance(), emu_window)}, next_surface{surface},
+      swapchain{instance, emu_window.GetFramebufferLayout().width,
                 emu_window.GetFramebufferLayout().height, surface},
       graphics_queue{instance.GetGraphicsQueue()}, present_renderpass{CreateRenderpass()},
       vsync_enabled{Settings::values.use_vsync_new.GetValue()},
@@ -109,7 +110,9 @@ PresentWindow::PresentWindow(Frontend::EmuWindow& emu_window_, const Instance& i
       use_present_thread{Settings::values.async_presentation.GetValue()},
       last_render_surface{emu_window.GetWindowInfo().render_surface} {
 
+    const u32 num_images = swapchain.GetImageCount();
     const vk::Device device = instance.GetDevice();
+
     const vk::CommandPoolCreateInfo pool_info = {
         .flags = vk::CommandPoolCreateFlagBits::eResetCommandBuffer |
                  vk::CommandPoolCreateFlagBits::eTransient,
@@ -120,16 +123,27 @@ PresentWindow::PresentWindow(Frontend::EmuWindow& emu_window_, const Instance& i
     const vk::CommandBufferAllocateInfo alloc_info = {
         .commandPool = command_pool,
         .level = vk::CommandBufferLevel::ePrimary,
-        .commandBufferCount = SWAP_CHAIN_SIZE,
+        .commandBufferCount = num_images,
     };
     const std::vector command_buffers = device.allocateCommandBuffers(alloc_info);
 
-    for (u32 i = 0; i < SWAP_CHAIN_SIZE; i++) {
+    swap_chain.resize(num_images);
+    for (u32 i = 0; i < num_images; i++) {
         Frame& frame = swap_chain[i];
         frame.cmdbuf = command_buffers[i];
         frame.render_ready = device.createSemaphore({});
         frame.present_done = device.createFence({.flags = vk::FenceCreateFlagBits::eSignaled});
         free_queue.push(&frame);
+    }
+
+    if (instance.HasDebuggingToolAttached()) {
+        for (u32 i = 0; i < num_images; ++i) {
+            SetObjectName(device, swap_chain[i].cmdbuf, "Swapchain Command Buffer {}", i);
+            SetObjectName(device, swap_chain[i].render_ready,
+                          "Swapchain Semaphore: render_ready {}", i);
+            SetObjectName(device, swap_chain[i].present_done, "Swapchain Fence: present_done {}",
+                          i);
+        }
     }
 
     if (use_present_thread) {
@@ -154,12 +168,15 @@ PresentWindow::~PresentWindow() {
 void PresentWindow::RecreateFrame(Frame* frame, u32 width, u32 height) {
     vk::Device device = instance.GetDevice();
     if (frame->framebuffer) {
+        WaitPresent();
         device.destroyFramebuffer(frame->framebuffer);
     }
     if (frame->image_view) {
+        WaitPresent();
         device.destroyImageView(frame->image_view);
     }
     if (frame->image) {
+        WaitPresent();
         vmaDestroyImage(instance.GetAllocator(), frame->image, frame->allocation);
     }
 
@@ -322,18 +339,29 @@ void PresentWindow::PresentThread(std::stop_token token) {
     }
 }
 
-void PresentWindow::CopyToSwapchain(Frame* frame) {
-    const auto recreate_swapchain = [&] { swapchain.Create(frame->width, frame->height, surface); };
-
+void PresentWindow::NotifySurfaceChanged() {
 #ifdef ANDROID
-    void* const render_surface = emu_window.GetWindowInfo().render_surface;
-    if (last_render_surface != render_surface) {
-        last_render_surface = render_surface;
-        surface = CreateSurface(instance.GetInstance(), emu_window);
-        recreate_swapchain();
-    }
+    std::scoped_lock lock{recreate_surface_mutex};
+    next_surface = CreateSurface(instance.GetInstance(), emu_window);
+    recreate_surface_cv.notify_one();
 #endif
+}
 
+void PresentWindow::CopyToSwapchain(Frame* frame) {
+    const auto recreate_swapchain = [&] {
+#ifdef ANDROID
+        {
+            std::unique_lock lock{recreate_surface_mutex};
+            recreate_surface_cv.wait(lock, [this]() { return surface != next_surface; });
+            surface = next_surface;
+        }
+#endif
+        std::scoped_lock submit_lock{scheduler.submit_mutex};
+        graphics_queue.waitIdle();
+        swapchain.Create(frame->width, frame->height, surface);
+    };
+
+#ifndef ANDROID
     const bool use_vsync = Settings::values.use_vsync_new.GetValue();
     const bool size_changed =
         swapchain.GetWidth() != frame->width || swapchain.GetHeight() != frame->height;
@@ -342,6 +370,7 @@ void PresentWindow::CopyToSwapchain(Frame* frame) {
         vsync_enabled = use_vsync;
         recreate_swapchain();
     }
+#endif
 
     while (!swapchain.AcquireNextImage()) {
         recreate_swapchain();
@@ -447,7 +476,7 @@ void PresentWindow::CopyToSwapchain(Frame* frame) {
         .pSignalSemaphores = &present_ready,
     };
 
-    std::scoped_lock lock{scheduler.queue_mutex};
+    std::scoped_lock submit_lock{scheduler.submit_mutex, recreate_surface_mutex};
 
     try {
         graphics_queue.submit(submit_info, frame->present_done);

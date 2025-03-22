@@ -2,21 +2,32 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include "common/vector_math_neon.h"
+#include "common/vector_math.h"
 #include "video_core/renderer_vulkan/vk_blit_helper.h"
-#include "video_core/renderer_vulkan/vk_descriptor_manager.h"
+#include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
-#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
+#include "video_core/renderer_vulkan/vk_render_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 #include "video_core/renderer_vulkan/vk_texture_runtime.h"
 
+#define USE_SPRIV_SHADERS 1
+
+#if USE_SPRIV_SHADERS
 #include "video_core/host_shaders/format_reinterpreter/vulkan_d24s8_to_rgba8_comp_spv.h"
 #include "video_core/host_shaders/full_screen_triangle_vert_spv.h"
 #include "video_core/host_shaders/vulkan_blit_depth_stencil_frag_spv.h"
 #include "video_core/host_shaders/vulkan_depth_to_buffer_comp_spv.h"
+#else
+#include "video_core/host_shaders/format_reinterpreter/vulkan_d24s8_to_rgba8_comp.h"
+#include "video_core/host_shaders/full_screen_triangle_vert.h"
+#include "video_core/host_shaders/vulkan_blit_depth_stencil_frag.h"
+#include "video_core/host_shaders/vulkan_depth_to_buffer_comp.h"
+#endif
 
 namespace Vulkan {
+
+using VideoCore::PixelFormat;
 
 namespace {
 struct PushConstants {
@@ -26,77 +37,32 @@ struct PushConstants {
 
 struct ComputeInfo {
     Common::Vec2i src_offset;
+    Common::Vec2i dst_offset;
     Common::Vec2i src_extent;
-};
-
-template <u32 binding, vk::DescriptorType type, vk::ShaderStageFlagBits stage>
-inline constexpr vk::DescriptorSetLayoutBinding TEXTURE_DESC_LAYOUT{
-    .binding = binding,
-    .descriptorType = type,
-    .descriptorCount = 1,
-    .stageFlags = stage,
-};
-template <u32 binding, vk::DescriptorType type>
-inline constexpr vk::DescriptorUpdateTemplateEntry TEXTURE_TEMPLATE{
-    .dstBinding = binding,
-    .dstArrayElement = 0,
-    .descriptorCount = 1,
-    .descriptorType = type,
-    .offset = binding * sizeof(vk::DescriptorImageInfo),
-    .stride = 0,
-};
-
-constexpr std::array COMPUTE_DESCRIPTOR_SET_BINDINGS = {
-    TEXTURE_DESC_LAYOUT<0, vk::DescriptorType::eSampledImage, vk::ShaderStageFlagBits::eCompute>,
-    TEXTURE_DESC_LAYOUT<1, vk::DescriptorType::eSampledImage, vk::ShaderStageFlagBits::eCompute>,
-    TEXTURE_DESC_LAYOUT<2, vk::DescriptorType::eStorageImage, vk::ShaderStageFlagBits::eCompute>,
-};
-constexpr vk::DescriptorSetLayoutCreateInfo COMPUTE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO{
-    .bindingCount = static_cast<u32>(COMPUTE_DESCRIPTOR_SET_BINDINGS.size()),
-    .pBindings = COMPUTE_DESCRIPTOR_SET_BINDINGS.data(),
-};
-const std::array COMPUTE_UPDATE_TEMPLATES = {
-    TEXTURE_TEMPLATE<0, vk::DescriptorType::eSampledImage>,
-    TEXTURE_TEMPLATE<1, vk::DescriptorType::eSampledImage>,
-    TEXTURE_TEMPLATE<2, vk::DescriptorType::eStorageImage>,
-};
-constexpr std::array COMPUTE_BUFFER_DESCRIPTOR_SET_BINDINGS = {
-    TEXTURE_DESC_LAYOUT<0, vk::DescriptorType::eCombinedImageSampler,
-                        vk::ShaderStageFlagBits::eCompute>,
-    TEXTURE_DESC_LAYOUT<1, vk::DescriptorType::eCombinedImageSampler,
-                        vk::ShaderStageFlagBits::eCompute>,
-    TEXTURE_DESC_LAYOUT<2, vk::DescriptorType::eStorageBuffer, vk::ShaderStageFlagBits::eCompute>,
-};
-constexpr vk::DescriptorSetLayoutCreateInfo COMPUTE_BUFFER_DESCRIPTOR_SET_LAYOUT_CREATE_INFO{
-    .bindingCount = static_cast<u32>(COMPUTE_BUFFER_DESCRIPTOR_SET_BINDINGS.size()),
-    .pBindings = COMPUTE_BUFFER_DESCRIPTOR_SET_BINDINGS.data(),
-};
-const std::array COMPUTE_BUFFER_UPDATE_TEMPLATES = {
-    TEXTURE_TEMPLATE<0, vk::DescriptorType::eCombinedImageSampler>,
-    TEXTURE_TEMPLATE<1, vk::DescriptorType::eCombinedImageSampler>,
-    TEXTURE_TEMPLATE<2, vk::DescriptorType::eStorageBuffer>,
 };
 
 inline constexpr vk::PushConstantRange COMPUTE_PUSH_CONSTANT_RANGE{
     .stageFlags = vk::ShaderStageFlagBits::eCompute,
     .offset = 0,
-    .size = 2 * sizeof(Common::Vec2i),
+    .size = sizeof(ComputeInfo),
 };
 
-constexpr std::array TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_BINDINGS{
-    TEXTURE_DESC_LAYOUT<0, vk::DescriptorType::eCombinedImageSampler,
-                        vk::ShaderStageFlagBits::eFragment>,
-    TEXTURE_DESC_LAYOUT<1, vk::DescriptorType::eCombinedImageSampler,
-                        vk::ShaderStageFlagBits::eFragment>,
-};
-constexpr vk::DescriptorSetLayoutCreateInfo TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_CREATE_INFO{
-    .bindingCount = static_cast<u32>(TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_BINDINGS.size()),
-    .pBindings = TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_BINDINGS.data(),
-};
-const std::array TWO_TEXTURES_UPDATE_TEMPLATES = {
-    TEXTURE_TEMPLATE<0, vk::DescriptorType::eCombinedImageSampler>,
-    TEXTURE_TEMPLATE<1, vk::DescriptorType::eCombinedImageSampler>,
-};
+constexpr std::array<vk::DescriptorSetLayoutBinding, 3> COMPUTE_BINDINGS = {{
+    {0, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eCompute},
+    {1, vk::DescriptorType::eSampledImage, 1, vk::ShaderStageFlagBits::eCompute},
+    {2, vk::DescriptorType::eStorageImage, 1, vk::ShaderStageFlagBits::eCompute},
+}};
+
+constexpr std::array<vk::DescriptorSetLayoutBinding, 3> COMPUTE_BUFFER_BINDINGS = {{
+    {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute},
+    {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eCompute},
+    {2, vk::DescriptorType::eStorageBuffer, 1, vk::ShaderStageFlagBits::eCompute},
+}};
+
+constexpr std::array<vk::DescriptorSetLayoutBinding, 2> TWO_TEXTURES_BINDINGS = {{
+    {0, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+    {1, vk::DescriptorType::eCombinedImageSampler, 1, vk::ShaderStageFlagBits::eFragment},
+}};
 
 inline constexpr vk::PushConstantRange PUSH_CONSTANT_RANGE{
     .stageFlags = vk::ShaderStageFlagBits::eVertex,
@@ -109,18 +75,10 @@ constexpr vk::PipelineVertexInputStateCreateInfo PIPELINE_VERTEX_INPUT_STATE_CRE
     .vertexAttributeDescriptionCount = 0,
     .pVertexAttributeDescriptions = nullptr,
 };
-// Metal doesn't support disabling primitive restart, so we use different settings for Apple platforms
-#if defined(__APPLE__)
-constexpr vk::PipelineInputAssemblyStateCreateInfo PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO{
-    .topology = vk::PrimitiveTopology::eTriangleList,
-    .primitiveRestartEnable = VK_TRUE,
-};
-#else
 constexpr vk::PipelineInputAssemblyStateCreateInfo PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO{
     .topology = vk::PrimitiveTopology::eTriangleList,
     .primitiveRestartEnable = VK_FALSE,
 };
-#endif
 constexpr vk::PipelineViewportStateCreateInfo PIPELINE_VIEWPORT_STATE_CREATE_INFO{
     .viewportCount = 1,
     .pViewports = nullptr,
@@ -160,24 +118,6 @@ constexpr vk::PipelineColorBlendStateCreateInfo PIPELINE_COLOR_BLEND_STATE_EMPTY
     .logicOp = vk::LogicOp::eClear,
     .attachmentCount = 0,
     .pAttachments = nullptr,
-    .blendConstants = std::array{0.0f, 0.0f, 0.0f, 0.0f},
-};
-constexpr vk::PipelineColorBlendAttachmentState PIPELINE_COLOR_BLEND_ATTACHMENT_STATE{
-    .blendEnable = VK_FALSE,
-    .srcColorBlendFactor = vk::BlendFactor::eZero,
-    .dstColorBlendFactor = vk::BlendFactor::eZero,
-    .colorBlendOp = vk::BlendOp::eAdd,
-    .srcAlphaBlendFactor = vk::BlendFactor::eZero,
-    .dstAlphaBlendFactor = vk::BlendFactor::eZero,
-    .alphaBlendOp = vk::BlendOp::eAdd,
-    .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
-                      vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
-};
-constexpr vk::PipelineColorBlendStateCreateInfo PIPELINE_COLOR_BLEND_STATE_GENERIC_CREATE_INFO{
-    .logicOpEnable = VK_FALSE,
-    .logicOp = vk::LogicOp::eClear,
-    .attachmentCount = 1,
-    .pAttachments = &PIPELINE_COLOR_BLEND_ATTACHMENT_STATE,
     .blendConstants = std::array{0.0f, 0.0f, 0.0f, 0.0f},
 };
 constexpr vk::PipelineDepthStencilStateCreateInfo PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO{
@@ -221,16 +161,6 @@ constexpr vk::PipelineLayoutCreateInfo PipelineLayoutCreateInfo(
     };
 }
 
-constexpr vk::DescriptorUpdateTemplateCreateInfo DescriptorUpdateTemplateCreateInfo(
-    std::span<const vk::DescriptorUpdateTemplateEntry> entries, vk::DescriptorSetLayout layout) {
-    return vk::DescriptorUpdateTemplateCreateInfo{
-        .descriptorUpdateEntryCount = static_cast<u32>(entries.size()),
-        .pDescriptorUpdateEntries = entries.data(),
-        .templateType = vk::DescriptorUpdateTemplateType::eDescriptorSet,
-        .descriptorSetLayout = layout,
-    };
-}
-
 constexpr std::array<vk::PipelineShaderStageCreateInfo, 2> MakeStages(
     vk::ShaderModule vertex_shader, vk::ShaderModule fragment_shader) {
     return std::array{
@@ -258,50 +188,68 @@ constexpr vk::PipelineShaderStageCreateInfo MakeStages(vk::ShaderModule compute_
 } // Anonymous namespace
 
 BlitHelper::BlitHelper(const Instance& instance_, Scheduler& scheduler_,
-                       DescriptorManager& desc_manager_, RenderpassCache& renderpass_cache_)
-    : instance{instance_}, scheduler{scheduler_}, desc_manager{desc_manager_},
-      renderpass_cache{renderpass_cache_}, device{instance.GetDevice()},
-      compute_descriptor_layout{
-          device.createDescriptorSetLayout(COMPUTE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)},
-      compute_buffer_descriptor_layout{
-          device.createDescriptorSetLayout(COMPUTE_BUFFER_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)},
-      two_textures_descriptor_layout{
-          device.createDescriptorSetLayout(TWO_TEXTURES_DESCRIPTOR_SET_LAYOUT_CREATE_INFO)},
-      compute_update_template{device.createDescriptorUpdateTemplate(
-          DescriptorUpdateTemplateCreateInfo(COMPUTE_UPDATE_TEMPLATES, compute_descriptor_layout))},
-      compute_buffer_update_template{
-          device.createDescriptorUpdateTemplate(DescriptorUpdateTemplateCreateInfo(
-              COMPUTE_BUFFER_UPDATE_TEMPLATES, compute_buffer_descriptor_layout))},
-      two_textures_update_template{
-          device.createDescriptorUpdateTemplate(DescriptorUpdateTemplateCreateInfo(
-              TWO_TEXTURES_UPDATE_TEMPLATES, two_textures_descriptor_layout))},
+                       RenderManager& renderpass_cache_, DescriptorUpdateQueue& update_queue_)
+    : instance{instance_}, scheduler{scheduler_}, renderpass_cache{renderpass_cache_},
+      update_queue{update_queue_}, device{instance.GetDevice()},
+      compute_provider{instance, scheduler.GetMasterSemaphore(), COMPUTE_BINDINGS},
+      compute_buffer_provider{instance, scheduler.GetMasterSemaphore(), COMPUTE_BUFFER_BINDINGS},
+      two_textures_provider{instance, scheduler.GetMasterSemaphore(), TWO_TEXTURES_BINDINGS, 16},
       compute_pipeline_layout{
-          device.createPipelineLayout(PipelineLayoutCreateInfo(&compute_descriptor_layout, true))},
+          device.createPipelineLayout(PipelineLayoutCreateInfo(&compute_provider.Layout(), true))},
       compute_buffer_pipeline_layout{device.createPipelineLayout(
-          PipelineLayoutCreateInfo(&compute_buffer_descriptor_layout, true))},
+          PipelineLayoutCreateInfo(&compute_buffer_provider.Layout(), true))},
       two_textures_pipeline_layout{
-          device.createPipelineLayout(PipelineLayoutCreateInfo(&two_textures_descriptor_layout))},
-      full_screen_vert{CompileSPV(FULL_SCREEN_TRIANGLE_VERT_SPV, device)},
-      d24s8_to_rgba8_comp{CompileSPV(VULKAN_D24S8_TO_RGBA8_COMP_SPV, device)},
-      depth_to_buffer_comp{CompileSPV(VULKAN_DEPTH_TO_BUFFER_COMP_SPV, device)},
-      blit_depth_stencil_frag{CompileSPV(VULKAN_BLIT_DEPTH_STENCIL_FRAG_SPV, device)},
+          device.createPipelineLayout(PipelineLayoutCreateInfo(&two_textures_provider.Layout()))},
+#if USE_SPRIV_SHADERS
+      full_screen_vert{CompileSPV(FULL_SCREEN_TRIANGLE_VERT_SPV,
+                                  device)},
+      d24s8_to_rgba8_comp{CompileSPV(VULKAN_D24S8_TO_RGBA8_COMP_SPV,
+                                  device)},
+      depth_to_buffer_comp{CompileSPV(VULKAN_DEPTH_TO_BUFFER_COMP_SPV,
+                                   device)},
+      blit_depth_stencil_frag{CompileSPV(VULKAN_BLIT_DEPTH_STENCIL_FRAG_SPV,
+                                    device)},
+#else
+    full_screen_vert{Compile(HostShaders::FULL_SCREEN_TRIANGLE_VERT,
+                             vk::ShaderStageFlagBits::eVertex, device)},
+    d24s8_to_rgba8_comp{Compile(HostShaders::VULKAN_D24S8_TO_RGBA8_COMP,
+                                vk::ShaderStageFlagBits::eCompute, device)},
+    depth_to_buffer_comp{Compile(HostShaders::VULKAN_DEPTH_TO_BUFFER_COMP,
+                                 vk::ShaderStageFlagBits::eCompute, device)},
+    blit_depth_stencil_frag{Compile(HostShaders::VULKAN_BLIT_DEPTH_STENCIL_FRAG,
+                                    vk::ShaderStageFlagBits::eFragment, device)},
+#endif
       d24s8_to_rgba8_pipeline{MakeComputePipeline(d24s8_to_rgba8_comp, compute_pipeline_layout)},
       depth_to_buffer_pipeline{
           MakeComputePipeline(depth_to_buffer_comp, compute_buffer_pipeline_layout)},
       depth_blit_pipeline{MakeDepthStencilBlitPipeline()},
       linear_sampler{device.createSampler(SAMPLER_CREATE_INFO<vk::Filter::eLinear>)},
-      nearest_sampler{device.createSampler(SAMPLER_CREATE_INFO<vk::Filter::eNearest>)} {}
+      nearest_sampler{device.createSampler(SAMPLER_CREATE_INFO<vk::Filter::eNearest>)} {
+
+//    if (instance.HasDebuggingToolAttached()) {
+//        SetObjectName(device, compute_pipeline_layout, "BlitHelper: compute_pipeline_layout");
+//        SetObjectName(device, compute_buffer_pipeline_layout,
+//                      "BlitHelper: compute_buffer_pipeline_layout");
+//        SetObjectName(device, two_textures_pipeline_layout,
+//                      "BlitHelper: two_textures_pipeline_layout");
+//        SetObjectName(device, full_screen_vert, "BlitHelper: full_screen_vert");
+//        SetObjectName(device, d24s8_to_rgba8_comp, "BlitHelper: d24s8_to_rgba8_comp");
+//        SetObjectName(device, depth_to_buffer_comp, "BlitHelper: depth_to_buffer_comp");
+//        SetObjectName(device, blit_depth_stencil_frag, "BlitHelper: blit_depth_stencil_frag");
+//        SetObjectName(device, d24s8_to_rgba8_pipeline, "BlitHelper: d24s8_to_rgba8_pipeline");
+//        SetObjectName(device, depth_to_buffer_pipeline, "BlitHelper: depth_to_buffer_pipeline");
+//        if (depth_blit_pipeline) {
+//            SetObjectName(device, depth_blit_pipeline, "BlitHelper: depth_blit_pipeline");
+//        }
+//        SetObjectName(device, linear_sampler, "BlitHelper: linear_sampler");
+//        SetObjectName(device, nearest_sampler, "BlitHelper: nearest_sampler");
+//    }
+}
 
 BlitHelper::~BlitHelper() {
     device.destroyPipelineLayout(compute_pipeline_layout);
     device.destroyPipelineLayout(compute_buffer_pipeline_layout);
     device.destroyPipelineLayout(two_textures_pipeline_layout);
-    device.destroyDescriptorUpdateTemplate(compute_update_template);
-    device.destroyDescriptorUpdateTemplate(compute_buffer_update_template);
-    device.destroyDescriptorUpdateTemplate(two_textures_update_template);
-    device.destroyDescriptorSetLayout(compute_descriptor_layout);
-    device.destroyDescriptorSetLayout(two_textures_descriptor_layout);
-    device.destroyDescriptorSetLayout(compute_buffer_descriptor_layout);
     device.destroyShaderModule(full_screen_vert);
     device.destroyShaderModule(d24s8_to_rgba8_comp);
     device.destroyShaderModule(depth_to_buffer_comp);
@@ -360,29 +308,23 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
         .extent = {dest.GetScaledWidth(), dest.GetScaledHeight()},
     };
 
-    const std::array textures = {
-        vk::DescriptorImageInfo{
-            .sampler = nearest_sampler,
-            .imageView = source.DepthView(),
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        },
-        vk::DescriptorImageInfo{
-            .sampler = nearest_sampler,
-            .imageView = source.StencilView(),
-            .imageLayout = vk::ImageLayout::eShaderReadOnlyOptimal,
-        },
+    const auto descriptor_set = two_textures_provider.Commit();
+    update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), nearest_sampler);
+    update_queue.AddImageSampler(descriptor_set, 1, 0, source.StencilView(), nearest_sampler);
+
+    const RenderPass depth_pass = {
+        .framebuffer = dest.Framebuffer(),
+        .render_pass =
+            renderpass_cache.GetRenderpass(PixelFormat::Invalid, dest.pixel_format, false),
+        .render_area = dst_render_area,
     };
+    renderpass_cache.BeginRendering(depth_pass);
 
-    vk::DescriptorSet set = desc_manager.AllocateSet(two_textures_descriptor_layout);
-    device.updateDescriptorSetWithTemplate(set, two_textures_update_template, textures[0]);
-
-    const Framebuffer framebuffer{nullptr, &dest, dst_render_area};
-    renderpass_cache.BeginRendering(framebuffer);
-    scheduler.Record([blit, set, this](vk::CommandBuffer cmdbuf) {
+    scheduler.Record([blit, descriptor_set, this](vk::CommandBuffer cmdbuf) {
         const vk::PipelineLayout layout = two_textures_pipeline_layout;
 
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eGraphics, depth_blit_pipeline);
-        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, set, {});
+        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eGraphics, layout, 0, descriptor_set, {});
         BindBlitState(cmdbuf, layout, blit);
         cmdbuf.draw(3, 1, 0, 0);
     });
@@ -391,38 +333,22 @@ bool BlitHelper::BlitDepthStencil(Surface& source, Surface& dest,
 }
 
 bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
-                                      const VideoCore::TextureBlit& blit) {
-    const std::array textures = {
-        vk::DescriptorImageInfo{
-            .imageView = source.DepthView(),
-            .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-        },
-        vk::DescriptorImageInfo{
-            .imageView = source.StencilView(),
-            .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-        },
-        vk::DescriptorImageInfo{
-            .imageView = dest.ImageView(),
-            .imageLayout = vk::ImageLayout::eGeneral,
-        },
-    };
-
-    vk::DescriptorSet set = desc_manager.AllocateSet(compute_descriptor_layout);
-    device.updateDescriptorSetWithTemplate(set, compute_update_template, textures[0]);
+                                      const VideoCore::TextureCopy& copy) {
+    const auto descriptor_set = compute_provider.Commit();
+    update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), VK_NULL_HANDLE,
+                                 vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    update_queue.AddImageSampler(descriptor_set, 1, 0, source.StencilView(), VK_NULL_HANDLE,
+                                 vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    update_queue.AddStorageImage(descriptor_set, 2, dest.ImageView());
 
     renderpass_cache.EndRendering();
-    scheduler.Record([this, set, blit, src_image = source.Image(),
+    scheduler.Record([this, descriptor_set, copy, src_image = source.Image(),
                       dst_image = dest.Image()](vk::CommandBuffer cmdbuf) {
         const std::array pre_barriers = {
             vk::ImageMemoryBarrier{
                 .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
                 .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-#if defined(__APPLE__)
-                // MoltenVK has issues with certain layout transitions
-                .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-#else
                 .oldLayout = vk::ImageLayout::eGeneral,
-#endif
                 .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -459,12 +385,7 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                 .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite |
                                  vk::AccessFlagBits::eDepthStencilAttachmentRead,
                 .oldLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-#if defined(__APPLE__)
-                // MoltenVK has issues with certain layout transitions
-                .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-#else
                 .newLayout = vk::ImageLayout::eGeneral,
-#endif
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = src_image,
@@ -481,12 +402,7 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                 .srcAccessMask = vk::AccessFlagBits::eShaderWrite,
                 .dstAccessMask = vk::AccessFlagBits::eTransferRead,
                 .oldLayout = vk::ImageLayout::eGeneral,
-#if defined(__APPLE__)
-                // MoltenVK has issues with identical source and destination layouts
-                .newLayout = vk::ImageLayout::eTransferSrcOptimal,
-#else
                 .newLayout = vk::ImageLayout::eGeneral,
-#endif
                 .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
                 .image = dst_image,
@@ -503,15 +419,20 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
                                vk::PipelineStageFlagBits::eComputeShader,
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barriers);
 
-        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eCompute, compute_pipeline_layout, 0, set,
-                                  {});
+        cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eCompute, compute_pipeline_layout, 0,
+                                  descriptor_set, {});
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, d24s8_to_rgba8_pipeline);
 
-        const auto src_offset = Common::MakeVec(blit.src_rect.left, blit.src_rect.bottom);
+        const ComputeInfo info = {
+            .src_offset = Common::Vec2i{static_cast<int>(copy.src_offset.x),
+                                        static_cast<int>(copy.src_offset.y)},
+            .dst_offset = Common::Vec2i{static_cast<int>(copy.dst_offset.x),
+                                        static_cast<int>(copy.dst_offset.y)},
+        };
         cmdbuf.pushConstants(compute_pipeline_layout, vk::ShaderStageFlagBits::eCompute, 0,
-                             sizeof(Common::Vec2i), src_offset.AsArray());
+                             sizeof(info), &info);
 
-        cmdbuf.dispatch(blit.src_rect.GetWidth() / 8, blit.src_rect.GetHeight() / 8, 1);
+        cmdbuf.dispatch(copy.extent.width / 8, copy.extent.height / 8, 1);
 
         cmdbuf.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
                                vk::PipelineStageFlagBits::eEarlyFragmentTests |
@@ -524,38 +445,21 @@ bool BlitHelper::ConvertDS24S8ToRGBA8(Surface& source, Surface& dest,
 
 bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
                                const VideoCore::BufferTextureCopy& copy) {
-    std::array<DescriptorData, 3> textures{};
-    textures[0].image_info = vk::DescriptorImageInfo{
-        .sampler = nearest_sampler,
-        .imageView = source.DepthView(),
-        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-    };
-    textures[1].image_info = vk::DescriptorImageInfo{
-        .sampler = nearest_sampler,
-        .imageView = source.StencilView(),
-        .imageLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-    };
-    textures[2].buffer_info = vk::DescriptorBufferInfo{
-        .buffer = buffer,
-        .offset = copy.buffer_offset,
-        .range = copy.buffer_size,
-    };
-
-    vk::DescriptorSet set = desc_manager.AllocateSet(compute_buffer_descriptor_layout);
-    device.updateDescriptorSetWithTemplate(set, compute_buffer_update_template, textures[0]);
+    const auto descriptor_set = compute_buffer_provider.Commit();
+    update_queue.AddImageSampler(descriptor_set, 0, 0, source.DepthView(), nearest_sampler,
+                                 vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    update_queue.AddImageSampler(descriptor_set, 1, 0, source.StencilView(), nearest_sampler,
+                                 vk::ImageLayout::eDepthStencilReadOnlyOptimal);
+    update_queue.AddBuffer(descriptor_set, 2, buffer, copy.buffer_offset, copy.buffer_size,
+                           vk::DescriptorType::eStorageBuffer);
 
     renderpass_cache.EndRendering();
-    scheduler.Record([this, set, copy, src_image = source.Image(),
+    scheduler.Record([this, descriptor_set, copy, src_image = source.Image(),
                       extent = source.RealExtent(false)](vk::CommandBuffer cmdbuf) {
         const vk::ImageMemoryBarrier pre_barrier = {
             .srcAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite,
             .dstAccessMask = vk::AccessFlagBits::eShaderRead,
-#if defined(__APPLE__)
-            // MoltenVK has issues with certain layout transitions
-            .oldLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-#else
             .oldLayout = vk::ImageLayout::eGeneral,
-#endif
             .newLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
@@ -573,12 +477,7 @@ bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
             .dstAccessMask = vk::AccessFlagBits::eDepthStencilAttachmentWrite |
                              vk::AccessFlagBits::eDepthStencilAttachmentRead,
             .oldLayout = vk::ImageLayout::eDepthStencilReadOnlyOptimal,
-#if defined(__APPLE__)
-            // MoltenVK has issues with certain layout transitions
-            .newLayout = vk::ImageLayout::eDepthStencilAttachmentOptimal,
-#else
             .newLayout = vk::ImageLayout::eGeneral,
-#endif
             .srcQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED,
             .image = src_image,
@@ -596,7 +495,7 @@ bool BlitHelper::DepthToBuffer(Surface& source, vk::Buffer buffer,
                                vk::DependencyFlagBits::eByRegion, {}, {}, pre_barrier);
 
         cmdbuf.bindDescriptorSets(vk::PipelineBindPoint::eCompute, compute_buffer_pipeline_layout,
-                                  0, set, {});
+                                  0, descriptor_set, {});
         cmdbuf.bindPipeline(vk::PipelineBindPoint::eCompute, depth_to_buffer_pipeline);
 
         const ComputeInfo info = {
@@ -640,55 +539,25 @@ vk::Pipeline BlitHelper::MakeDepthStencilBlitPipeline() {
     }
 
     const std::array stages = MakeStages(full_screen_vert, blit_depth_stencil_frag);
-    const VideoCore::PixelFormat depth_stencil = VideoCore::PixelFormat::D24S8;
-    const vk::Format depth_stencil_format = instance.GetTraits(depth_stencil).native;
-    // Create a custom input assembly state to ensure primitive restart is enabled on Apple platforms
-#if defined(__APPLE__)
-    const vk::PipelineInputAssemblyStateCreateInfo apple_input_assembly = {
-        .topology = vk::PrimitiveTopology::eTriangleList,
-        .primitiveRestartEnable = VK_TRUE,
-    };
-#endif
-
+    const auto renderpass = renderpass_cache.GetRenderpass(VideoCore::PixelFormat::Invalid,
+                                                           VideoCore::PixelFormat::D24S8, false);
     vk::GraphicsPipelineCreateInfo depth_stencil_info = {
         .stageCount = static_cast<u32>(stages.size()),
         .pStages = stages.data(),
         .pVertexInputState = &PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
-#if defined(__APPLE__)
-        .pInputAssemblyState = &apple_input_assembly,
-#else
         .pInputAssemblyState = &PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
-#endif
         .pTessellationState = nullptr,
         .pViewportState = &PIPELINE_VIEWPORT_STATE_CREATE_INFO,
         .pRasterizationState = &PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         .pMultisampleState = &PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
         .pDepthStencilState = &PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
-        .pColorBlendState = &PIPELINE_COLOR_BLEND_STATE_GENERIC_CREATE_INFO,
+        .pColorBlendState = &PIPELINE_COLOR_BLEND_STATE_EMPTY_CREATE_INFO,
         .pDynamicState = &PIPELINE_DYNAMIC_STATE_CREATE_INFO,
         .layout = two_textures_pipeline_layout,
+        .renderPass = renderpass,
     };
 
-    if (!instance.IsDynamicRenderingSupported()) {
-        depth_stencil_info.renderPass =
-            renderpass_cache.GetRenderpass(VideoCore::PixelFormat::Invalid, depth_stencil, false);
-    }
-
-    vk::StructureChain depth_blit_chain = {
-        depth_stencil_info,
-        vk::PipelineRenderingCreateInfoKHR{
-            .colorAttachmentCount = 0,
-            .pColorAttachmentFormats = nullptr,
-            .depthAttachmentFormat = depth_stencil_format,
-            .stencilAttachmentFormat = depth_stencil_format,
-        },
-    };
-
-    if (!instance.IsDynamicRenderingSupported()) {
-        depth_blit_chain.unlink<vk::PipelineRenderingCreateInfoKHR>();
-    }
-
-    if (const auto result = device.createGraphicsPipeline({}, depth_blit_chain.get());
+    if (const auto result = device.createGraphicsPipeline({}, depth_stencil_info);
         result.result == vk::Result::eSuccess) {
         return result.value;
     } else {

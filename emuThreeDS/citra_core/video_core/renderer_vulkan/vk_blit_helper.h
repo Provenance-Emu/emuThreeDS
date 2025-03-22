@@ -4,57 +4,53 @@
 
 #pragma once
 
-#include "video_core/rasterizer_cache/pixel_format.h"
-#include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_resource_pool.h"
 
 namespace VideoCore {
 struct TextureBlit;
+struct TextureCopy;
 struct BufferTextureCopy;
 } // namespace VideoCore
 
 namespace Vulkan {
 
 class Instance;
-class DescriptorManager;
-class RenderpassCache;
+class RenderManager;
 class Scheduler;
 class Surface;
+class DescriptorUpdateQueue;
 
 class BlitHelper {
+    friend class TextureRuntime;
+
 public:
-    BlitHelper(const Instance& instance, Scheduler& scheduler, DescriptorManager& desc_manager,
-               RenderpassCache& renderpass_cache);
+    explicit BlitHelper(const Instance& instance, Scheduler& scheduler,
+                        RenderManager& renderpass_cache, DescriptorUpdateQueue& update_queue);
     ~BlitHelper();
 
     bool BlitDepthStencil(Surface& source, Surface& dest, const VideoCore::TextureBlit& blit);
 
-    bool ConvertDS24S8ToRGBA8(Surface& source, Surface& dest, const VideoCore::TextureBlit& blit);
+    bool ConvertDS24S8ToRGBA8(Surface& source, Surface& dest, const VideoCore::TextureCopy& copy);
 
     bool DepthToBuffer(Surface& source, vk::Buffer buffer,
                        const VideoCore::BufferTextureCopy& copy);
 
 private:
-    /// Creates compute pipelines used for blit
     vk::Pipeline MakeComputePipeline(vk::ShaderModule shader, vk::PipelineLayout layout);
-
-    /// Creates graphics pipelines used for blit
     vk::Pipeline MakeDepthStencilBlitPipeline();
 
 private:
     const Instance& instance;
     Scheduler& scheduler;
-    DescriptorManager& desc_manager;
-    RenderpassCache& renderpass_cache;
+    RenderManager& renderpass_cache;
+    DescriptorUpdateQueue& update_queue;
 
     vk::Device device;
     vk::RenderPass r32_renderpass;
 
-    vk::DescriptorSetLayout compute_descriptor_layout;
-    vk::DescriptorSetLayout compute_buffer_descriptor_layout;
-    vk::DescriptorSetLayout two_textures_descriptor_layout;
-    vk::DescriptorUpdateTemplate compute_update_template;
-    vk::DescriptorUpdateTemplate compute_buffer_update_template;
-    vk::DescriptorUpdateTemplate two_textures_update_template;
+    DescriptorHeap compute_provider;
+    DescriptorHeap compute_buffer_provider;
+    DescriptorHeap two_textures_provider;
     vk::PipelineLayout compute_pipeline_layout;
     vk::PipelineLayout compute_buffer_pipeline_layout;
     vk::PipelineLayout two_textures_pipeline_layout;

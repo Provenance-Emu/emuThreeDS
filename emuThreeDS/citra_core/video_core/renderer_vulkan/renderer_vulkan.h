@@ -4,32 +4,33 @@
 
 #pragma once
 
-#include <array>
-#include <condition_variable>
-#include <mutex>
 #include "common/common_types.h"
 #include "common/math_util.h"
-#include "core/hw/gpu.h"
 #include "video_core/renderer_base.h"
-#include "video_core/renderer_vulkan/vk_descriptor_manager.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_present_window.h"
 #include "video_core/renderer_vulkan/vk_rasterizer.h"
-#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
+#include "video_core/renderer_vulkan/vk_render_manager.h"
 #include "video_core/renderer_vulkan/vk_scheduler.h"
-#include "video_core/renderer_vulkan/vk_swapchain.h"
 
 namespace Core {
 class System;
-class TelemetrySession;
-} // namespace Core
+}
 
 namespace Memory {
 class MemorySystem;
 }
 
+namespace Pica {
+class PicaCore;
+}
+
 namespace Layout {
 struct FramebufferLayout;
+}
+
+namespace VideoCore {
+class GPU;
 }
 
 namespace Vulkan {
@@ -37,7 +38,7 @@ namespace Vulkan {
 struct TextureInfo {
     u32 width;
     u32 height;
-    GPU::Regs::PixelFormat format;
+    Pica::PixelFormat format;
     vk::Image image;
     vk::ImageView image_view;
     VmaAllocation allocation;
@@ -65,7 +66,7 @@ class RendererVulkan : public VideoCore::RendererBase {
     static constexpr std::size_t PRESENT_PIPELINES = 3;
 
 public:
-    explicit RendererVulkan(Core::System& system, Frontend::EmuWindow& window,
+    explicit RendererVulkan(Core::System& system, Pica::PicaCore& pica, Frontend::EmuWindow& window,
                             Frontend::EmuWindow* secondary_window);
     ~RendererVulkan() override;
 
@@ -73,22 +74,27 @@ public:
         return &rasterizer;
     }
 
+    void NotifySurfaceChanged() override {
+        main_window.NotifySurfaceChanged();
+    }
+
     void SwapBuffers() override;
     void TryPresent(int timeout_ms, bool is_secondary) override {}
     void Sync() override;
 
 private:
-    void ReportDriver() const;
-    void ReloadSampler();
     void ReloadPipeline();
     void CompileShaders();
     void BuildLayouts();
     void BuildPipelines();
     void ConfigureFramebufferTexture(TextureInfo& texture,
-                                     const GPU::Regs::FramebufferConfig& framebuffer);
+                                     const Pica::FramebufferConfig& framebuffer);
     void ConfigureRenderPipeline();
     void PrepareRendertarget();
     void RenderScreenshot();
+    void RenderScreenshotWithStagingCopy();
+    bool TryRenderScreenshotWithHostMemory();
+    void PrepareDraw(Frame* frame, const Layout::FramebufferLayout& layout);
     void RenderToWindow(PresentWindow& window, const Layout::FramebufferLayout& layout,
                         bool flipped);
 
@@ -101,37 +107,32 @@ private:
                           Layout::DisplayOrientation orientation);
     void DrawSingleScreenStereo(u32 screen_id_l, u32 screen_id_r, float x, float y, float w,
                                 float h, Layout::DisplayOrientation orientation);
-    void LoadFBToScreenInfo(const GPU::Regs::FramebufferConfig& framebuffer,
-                            ScreenInfo& screen_info, bool right_eye);
-    void LoadColorToActiveVkTexture(u8 color_r, u8 color_g, u8 color_b, const TextureInfo& texture);
+    void LoadFBToScreenInfo(const Pica::FramebufferConfig& framebuffer, ScreenInfo& screen_info,
+                            bool right_eye);
+    void FillScreen(Common::Vec3<u8> color, const TextureInfo& texture);
 
 private:
     Memory::MemorySystem& memory;
-    Core::TelemetrySession& telemetry_session;
+    Pica::PicaCore& pica;
 
     Instance instance;
     Scheduler scheduler;
-    RenderpassCache renderpass_cache;
-    DescriptorManager desc_manager;
-    TextureRuntime runtime;
-    StreamBuffer vertex_buffer;
-    RasterizerVulkan rasterizer;
+    RenderManager renderpass_cache;
     PresentWindow main_window;
+    StreamBuffer vertex_buffer;
+    DescriptorUpdateQueue update_queue;
+    RasterizerVulkan rasterizer;
     std::unique_ptr<PresentWindow> second_window;
 
-    vk::PipelineLayout present_pipeline_layout;
-    vk::DescriptorSetLayout present_descriptor_layout;
-    vk::DescriptorUpdateTemplate present_update_template;
+    DescriptorHeap present_heap;
+    vk::UniquePipelineLayout present_pipeline_layout;
     std::array<vk::Pipeline, PRESENT_PIPELINES> present_pipelines;
-    std::array<vk::DescriptorSet, PRESENT_PIPELINES> present_sets;
     std::array<vk::ShaderModule, PRESENT_PIPELINES> present_shaders;
     std::array<vk::Sampler, 2> present_samplers;
     vk::ShaderModule present_vertex_shader;
     u32 current_pipeline = 0;
-    u32 current_sampler = 0;
 
     std::array<ScreenInfo, 3> screen_infos{};
-    std::array<vk::DescriptorImageInfo, 3> present_textures{};
     PresentUniformData draw_info{};
     vk::ClearColorValue clear_color{};
 };

@@ -5,7 +5,7 @@
 #pragma once
 
 #include "common/vector_math_neon.h"
-#include "video_core/regs_lighting.h"
+#include "video_core/pica/regs_lighting.h"
 
 namespace Pica {
 struct ShaderRegs;

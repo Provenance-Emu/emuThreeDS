@@ -2,8 +2,6 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#pragma once
-
 #include <atomic>
 #include <condition_variable>
 #include <mutex>
@@ -22,7 +20,7 @@ namespace Vulkan {
 class Instance;
 class Swapchain;
 class Scheduler;
-class RenderpassCache;
+class RenderManager;
 
 struct Frame {
     u32 width;
@@ -37,8 +35,6 @@ struct Frame {
 };
 
 class PresentWindow final {
-    static constexpr std::size_t SWAP_CHAIN_SIZE = 6;
-
 public:
     explicit PresentWindow(Frontend::EmuWindow& emu_window, const Instance& instance,
                            Scheduler& scheduler);
@@ -56,8 +52,15 @@ public:
     /// Queues the provided frame for presentation.
     void Present(Frame* frame);
 
-    vk::RenderPass Renderpass() const noexcept {
+    /// This is called to notify the rendering backend of a surface change
+    void NotifySurfaceChanged();
+
+    [[nodiscard]] vk::RenderPass Renderpass() const noexcept {
         return present_renderpass;
+    }
+
+    u32 ImageCount() const noexcept {
+        return swapchain.GetImageCount();
     }
 
 private:
@@ -72,16 +75,19 @@ private:
     const Instance& instance;
     Scheduler& scheduler;
     vk::SurfaceKHR surface;
+    vk::SurfaceKHR next_surface{};
     Swapchain swapchain;
     vk::CommandPool command_pool;
     vk::Queue graphics_queue;
     vk::RenderPass present_renderpass;
-    std::array<Frame, SWAP_CHAIN_SIZE> swap_chain{};
+    std::vector<Frame> swap_chain;
     std::queue<Frame*> free_queue;
     std::queue<Frame*> present_queue;
     std::condition_variable free_cv;
+    std::condition_variable recreate_surface_cv;
     std::condition_variable_any frame_cv;
     std::mutex swapchain_mutex;
+    std::mutex recreate_surface_mutex;
     std::mutex queue_mutex;
     std::mutex free_mutex;
     std::jthread present_thread;

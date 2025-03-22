@@ -12,7 +12,7 @@
 #include <arm_neon.h>
 #include "common/vector_math.h"
 #include "video_core/pica_types.h"
-#include "video_core/regs_framebuffer.h"
+#include "video_core/pica/regs_framebuffer.h"
 
 namespace Pica {
 namespace ColorBlending {

@@ -2,176 +2,23 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <cmath>
-#include <cstring>
 #include "common/arch.h"
-#include "common/bit_set.h"
-#include "common/logging/log.h"
-#include "common/microprofile.h"
-#include "video_core/pica_state.h"
-#include "video_core/regs_rasterizer.h"
-#include "video_core/regs_shader.h"
-#include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"
-#include "video_core/video_core.h"
-#include "video_core/neon_optimizations.h"
+#if __x86_64__ || __arm64__
+#include "video_core/shader/shader_jit.h"
+#endif
+#include "video_core/shader/shader.h"
 
-namespace Pica::Shader {
+namespace Pica {
 
-void OutputVertex::ValidateSemantics(const RasterizerRegs& regs) {
-    unsigned int num_attributes = regs.vs_output_total;
-    ASSERT(num_attributes <= 7);
-    for (std::size_t attrib = 0; attrib < num_attributes; ++attrib) {
-        u32 output_register_map = regs.vs_output_attributes[attrib].raw;
-        for (std::size_t comp = 0; comp < 4; ++comp) {
-            u32 semantic = (output_register_map >> (8 * comp)) & 0x1F;
-            ASSERT_MSG(semantic < 24 || semantic == RasterizerRegs::VSOutputAttributes::INVALID,
-                       "Invalid/unknown semantic id: {}", semantic);
-        }
-    }
-}
-
-OutputVertex OutputVertex::FromAttributeBuffer(const RasterizerRegs& regs,
-                                               const AttributeBuffer& input) {
-    // Setup output data
-    union {
-        OutputVertex ret{};
-        // Allow us to overflow OutputVertex to avoid branches, since
-        // RasterizerRegs::VSOutputAttributes::INVALID would write to slot 31, which
-        // would be out of bounds otherwise.
-        std::array<float24, 32> vertex_slots_overflow;
-    };
-
-    // Assert that OutputVertex has enough space for 24 semantic registers
-    static_assert(sizeof(std::array<float24, 24>) == sizeof(ret),
-                  "Struct and array have different sizes.");
-
-#if CITRA_NEON_OPTIMIZATIONS_ENABLED
-    // Use NEON-optimized implementation for attribute processing on ARM64 platforms
-    unsigned int num_attributes = regs.vs_output_total & 7;
-    for (std::size_t attrib = 0; attrib < num_attributes; ++attrib) {
-        const auto output_register_map = regs.vs_output_attributes[attrib];
-        // Process attribute mapping with NEON optimizations
-        vertex_slots_overflow[output_register_map.map_x] = input.attr[attrib][0];
-        vertex_slots_overflow[output_register_map.map_y] = input.attr[attrib][1];
-        vertex_slots_overflow[output_register_map.map_z] = input.attr[attrib][2];
-        vertex_slots_overflow[output_register_map.map_w] = input.attr[attrib][3];
-    }
-    
-    // The hardware takes the absolute and saturates vertex colors like this, *before* doing
-    // interpolation - use NEON-optimized abs and min operations
-    // Convert float24 to float32 for NEON processing
-    float32x4_t color_vec = {ret.color[0].ToFloat32(), ret.color[1].ToFloat32(), 
-                             ret.color[2].ToFloat32(), ret.color[3].ToFloat32()};
-    // Compute absolute values using NEON
-    color_vec = vabsq_f32(color_vec);
-    // Saturate to 1.0 using NEON min operation
-    float32x4_t ones = vdupq_n_f32(1.0f);
-    color_vec = vminq_f32(color_vec, ones);
-    
-    // Convert back to float24
-    ret.color[0] = float24::FromFloat32(vgetq_lane_f32(color_vec, 0));
-    ret.color[1] = float24::FromFloat32(vgetq_lane_f32(color_vec, 1));
-    ret.color[2] = float24::FromFloat32(vgetq_lane_f32(color_vec, 2));
-    ret.color[3] = float24::FromFloat32(vgetq_lane_f32(color_vec, 3));
-#else
-    // Use standard implementation on non-ARM64 platforms
-    unsigned int num_attributes = regs.vs_output_total & 7;
-    for (std::size_t attrib = 0; attrib < num_attributes; ++attrib) {
-        const auto output_register_map = regs.vs_output_attributes[attrib];
-        vertex_slots_overflow[output_register_map.map_x] = input.attr[attrib][0];
-        vertex_slots_overflow[output_register_map.map_y] = input.attr[attrib][1];
-        vertex_slots_overflow[output_register_map.map_z] = input.attr[attrib][2];
-        vertex_slots_overflow[output_register_map.map_w] = input.attr[attrib][3];
-    }
-
-    // The hardware takes the absolute and saturates vertex colors like this, *before* doing
-    // interpolation
-    for (unsigned i = 0; i < 4; ++i) {
-        float c = std::fabs(ret.color[i].ToFloat32());
-        ret.color[i] = float24::FromFloat32(c < 1.0f ? c : 1.0f);
+std::unique_ptr<ShaderEngine> CreateEngine(bool use_jit) {
+#if __x86_64__ || __arm64__
+    if (use_jit) {
+        return std::make_unique<Shader::JitEngine>();
     }
 #endif
 
-    LOG_TRACE(HW_GPU,
-              "Output vertex: pos({:.2}, {:.2}, {:.2}, {:.2}), quat({:.2}, {:.2}, {:.2}, {:.2}), "
-              "col({:.2}, {:.2}, {:.2}, {:.2}), tc0({:.2}, {:.2}), view({:.2}, {:.2}, {:.2})",
-              ret.pos.x.ToFloat32(), ret.pos.y.ToFloat32(), ret.pos.z.ToFloat32(),
-              ret.pos.w.ToFloat32(), ret.quat.x.ToFloat32(), ret.quat.y.ToFloat32(),
-              ret.quat.z.ToFloat32(), ret.quat.w.ToFloat32(), ret.color.x.ToFloat32(),
-              ret.color.y.ToFloat32(), ret.color.z.ToFloat32(), ret.color.w.ToFloat32(),
-              ret.tc0.u().ToFloat32(), ret.tc0.v().ToFloat32(), ret.view.x.ToFloat32(),
-              ret.view.y.ToFloat32(), ret.view.z.ToFloat32());
-
-    return ret;
+    return std::make_unique<Shader::InterpreterEngine>();
 }
 
-void UnitState::LoadInput(const ShaderRegs& config, const AttributeBuffer& input) {
-    const unsigned max_attribute = config.max_input_attribute_index;
-
-    for (unsigned attr = 0; attr <= max_attribute; ++attr) {
-        unsigned reg = config.GetRegisterForAttribute(attr);
-        registers.input[reg] = input.attr[attr];
-    }
-}
-
-static void CopyRegistersToOutput(std::span<Common::Vec4<float24>, 16> regs, u32 mask,
-                                  AttributeBuffer& buffer) {
-    int output_i = 0;
-    for (int reg : Common::BitSet<u32>(mask)) {
-        buffer.attr[output_i++] = regs[reg];
-    }
-}
-
-void UnitState::WriteOutput(const ShaderRegs& config, AttributeBuffer& output) {
-    CopyRegistersToOutput(registers.output, config.output_mask, output);
-}
-
-UnitState::UnitState(GSEmitter* emitter) : emitter_ptr(emitter) {}
-
-GSEmitter::GSEmitter() {
-    handlers = new Handlers;
-}
-
-GSEmitter::~GSEmitter() {
-    delete handlers;
-}
-
-void GSEmitter::Emit(std::span<Common::Vec4<float24>, 16> output_regs) {
-    ASSERT(vertex_id < 3);
-    // TODO: This should be merged with UnitState::WriteOutput somehow
-    CopyRegistersToOutput(output_regs, output_mask, buffer[vertex_id]);
-
-    if (prim_emit) {
-        if (winding)
-            handlers->winding_setter();
-        for (std::size_t i = 0; i < buffer.size(); ++i) {
-            handlers->vertex_handler(buffer[i]);
-        }
-    }
-}
-
-GSUnitState::GSUnitState() : UnitState(&emitter) {}
-
-void GSUnitState::SetVertexHandler(VertexHandler vertex_handler, WindingSetter winding_setter) {
-    emitter.handlers->vertex_handler = std::move(vertex_handler);
-    emitter.handlers->winding_setter = std::move(winding_setter);
-}
-
-void GSUnitState::ConfigOutput(const ShaderRegs& config) {
-    emitter.output_mask = config.output_mask;
-}
-
-MICROPROFILE_DEFINE(GPU_Shader, "GPU", "Shader", MP_RGB(50, 50, 240));
-
-static InterpreterEngine interpreter_engine;
-
-ShaderEngine* GetEngine() {
-    return &interpreter_engine;
-}
-
-void Shutdown() {
-    
-}
-
-} // namespace Pica::Shader
+} // namespace Pica

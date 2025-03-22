@@ -3,6 +3,9 @@
 // Refer to the license.txt file included.
 
 #include <span>
+#include <boost/container/static_vector.hpp>
+#include <fmt/format.h>
+
 #include "common/assert.h"
 #include "common/settings.h"
 #include "core/frontend/emu_window.h"
@@ -10,76 +13,11 @@
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_platform.h"
 
-#include <vma/vk_mem_alloc.h>
+#include <vk_mem_alloc.h>
 
 namespace Vulkan {
 
-static VKAPI_ATTR VkBool32 VKAPI_CALL DebugUtilsCallback(
-    VkDebugUtilsMessageSeverityFlagBitsEXT severity, VkDebugUtilsMessageTypeFlagsEXT type,
-    const VkDebugUtilsMessengerCallbackDataEXT* callback_data, void* user_data) {
-
-    switch (callback_data->messageIdNumber) {
-    case 0x609a13b: // Vertex attribute at location not consumed by shader
-        return VK_FALSE;
-    default:
-        break;
-    }
-
-    Log::Level level{};
-    switch (severity) {
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_ERROR_BIT_EXT:
-        level = Log::Level::Error;
-        break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_WARNING_BIT_EXT:
-        level = Log::Level::Info;
-        break;
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_INFO_BIT_EXT:
-    case VK_DEBUG_UTILS_MESSAGE_SEVERITY_VERBOSE_BIT_EXT:
-        level = Log::Level::Debug;
-        break;
-    default:
-        level = Log::Level::Info;
-    }
-
-    LOG_GENERIC(Log::Class::Render_Vulkan, level, "{}: {}",
-                callback_data->pMessageIdName ? callback_data->pMessageIdName : "<null>",
-                callback_data->pMessage ? callback_data->pMessage : "<null>");
-
-    return VK_FALSE;
-}
-
-static VKAPI_ATTR VkBool32 VKAPI_CALL DebugReportCallback(VkDebugReportFlagsEXT flags,
-                                                          VkDebugReportObjectTypeEXT objectType,
-                                                          uint64_t object, size_t location,
-                                                          int32_t messageCode,
-                                                          const char* pLayerPrefix,
-                                                          const char* pMessage, void* pUserData) {
-
-    const VkDebugReportFlagBitsEXT severity = static_cast<VkDebugReportFlagBitsEXT>(flags);
-    Log::Level level{};
-    switch (severity) {
-    case VK_DEBUG_REPORT_ERROR_BIT_EXT:
-        level = Log::Level::Error;
-        break;
-    case VK_DEBUG_REPORT_INFORMATION_BIT_EXT:
-        level = Log::Level::Warning;
-        break;
-    case VK_DEBUG_REPORT_DEBUG_BIT_EXT:
-    case VK_DEBUG_REPORT_WARNING_BIT_EXT:
-    case VK_DEBUG_REPORT_PERFORMANCE_WARNING_BIT_EXT:
-        level = Log::Level::Debug;
-        break;
-    default:
-        level = Log::Level::Info;
-    }
-
-    const vk::DebugReportObjectTypeEXT type = static_cast<vk::DebugReportObjectTypeEXT>(objectType);
-    LOG_GENERIC(Log::Class::Render_Vulkan, level,
-                "type = {}, object = {} | MessageCode = {:#x}, LayerPrefix = {} | {}",
-                vk::to_string(type), object, messageCode, pLayerPrefix, pMessage);
-
-    return VK_FALSE;
-}
+namespace {
 
 vk::Format MakeFormat(VideoCore::PixelFormat format) {
     switch (format) {
@@ -176,30 +114,6 @@ vk::ImageAspectFlags MakeAspect(VideoCore::SurfaceType type) {
     return vk::ImageAspectFlagBits::eColor;
 }
 
-[[nodiscard]] vk::DebugUtilsMessengerCreateInfoEXT MakeDebugUtilsMessengerInfo() {
-    return vk::DebugUtilsMessengerCreateInfoEXT{
-        .messageSeverity = vk::DebugUtilsMessageSeverityFlagBitsEXT::eInfo |
-                           vk::DebugUtilsMessageSeverityFlagBitsEXT::eError |
-                           vk::DebugUtilsMessageSeverityFlagBitsEXT::eWarning |
-                           vk::DebugUtilsMessageSeverityFlagBitsEXT::eVerbose,
-        .messageType = vk::DebugUtilsMessageTypeFlagBitsEXT::eGeneral |
-                       vk::DebugUtilsMessageTypeFlagBitsEXT::eValidation |
-                       vk::DebugUtilsMessageTypeFlagBitsEXT::eDeviceAddressBinding |
-                       vk::DebugUtilsMessageTypeFlagBitsEXT::ePerformance,
-        .pfnUserCallback = DebugUtilsCallback,
-    };
-}
-
-[[nodiscard]] vk::DebugReportCallbackCreateInfoEXT MakeDebugReportCallbackInfo() {
-    return vk::DebugReportCallbackCreateInfoEXT{
-        .flags = vk::DebugReportFlagBitsEXT::eDebug | vk::DebugReportFlagBitsEXT::eInformation |
-                 vk::DebugReportFlagBitsEXT::eError |
-                 vk::DebugReportFlagBitsEXT::ePerformanceWarning |
-                 vk::DebugReportFlagBitsEXT::eWarning,
-        .pfnCallback = DebugReportCallback,
-    };
-}
-
 std::vector<std::string> GetSupportedExtensions(vk::PhysicalDevice physical) {
     const std::vector extensions = physical.enumerateDeviceExtensionProperties();
     std::vector<std::string> supported_extensions;
@@ -210,210 +124,61 @@ std::vector<std::string> GetSupportedExtensions(vk::PhysicalDevice physical) {
     return supported_extensions;
 }
 
-Instance::Instance(bool validation, bool dump_command_buffers)
-    : enable_validation{validation}, dump_command_buffers{dump_command_buffers} {
-    auto vkGetInstanceProcAddr =
-        GetVulkanLoader().getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
-    // Enable the instance extensions the platform requires
-    const std::vector extensions =
-        GetInstanceExtensions(Frontend::WindowSystemType::Headless, false);
-
-    const vk::ApplicationInfo application_info = {
-        .pApplicationName = "Citra",
-        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-        .pEngineName = "Citra Vulkan",
-        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_0,
-    };
-
-    std::array<const char*, 2> layers;
-    u32 layer_count = 0;
-
-    if (enable_validation) {
-        layers[layer_count++] = "VK_LAYER_KHRONOS_validation";
-    }
-    if (dump_command_buffers) {
-        layers[layer_count++] = "VK_LAYER_LUNARG_api_dump";
-    }
-
-    const vk::StructureChain instance_chain = {
-        vk::InstanceCreateInfo{
-            .flags = GetInstanceFlags(),
-            .pApplicationInfo = &application_info,
-            .enabledLayerCount = layer_count,
-            .ppEnabledLayerNames = layers.data(),
-            .enabledExtensionCount = static_cast<u32>(extensions.size()),
-            .ppEnabledExtensionNames = extensions.data(),
-        },
-    };
-
-    instance = vk::createInstance(instance_chain.get());
-
-    // Load required function pointers for querying the physical device
-    VULKAN_HPP_DEFAULT_DISPATCHER.vkEnumeratePhysicalDevices = PFN_vkEnumeratePhysicalDevices(
-        vkGetInstanceProcAddr(instance, "vkEnumeratePhysicalDevices"));
-    VULKAN_HPP_DEFAULT_DISPATCHER.vkGetPhysicalDeviceProperties = PFN_vkGetPhysicalDeviceProperties(
-        vkGetInstanceProcAddr(instance, "vkGetPhysicalDeviceProperties"));
-    VULKAN_HPP_DEFAULT_DISPATCHER.vkDestroyInstance =
-        PFN_vkDestroyInstance(vkGetInstanceProcAddr(instance, "vkDestroyInstance"));
-
-    physical_devices = instance.enumeratePhysicalDevices();
+std::string GetReadableVersion(u32 version) {
+    return fmt::format("{}.{}.{}", VK_VERSION_MAJOR(version), VK_VERSION_MINOR(version),
+                       VK_VERSION_PATCH(version));
 }
 
+} // Anonymous namespace
+
+Instance::Instance(bool enable_validation, bool dump_command_buffers)
+    : library{OpenLibrary()},
+      instance{CreateInstance(*library, Frontend::WindowSystemType::Headless, enable_validation,
+                              dump_command_buffers)},
+      physical_devices{instance->enumeratePhysicalDevices()} {}
+
 Instance::Instance(Frontend::EmuWindow& window, u32 physical_device_index)
-    : enable_validation{Settings::values.renderer_debug},
-      dump_command_buffers{Settings::values.dump_command_buffers} {
-    const Frontend::EmuWindow::WindowSystemInfo window_info = window.GetWindowInfo();
-
-    // Fetch instance independant function pointers
-    auto vkGetInstanceProcAddr =
-        GetVulkanLoader().getProcAddress<PFN_vkGetInstanceProcAddr>("vkGetInstanceProcAddr");
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(vkGetInstanceProcAddr);
-
-    // Enable the instance extensions the backend uses
-    const std::vector extensions = GetInstanceExtensions(window_info.type, enable_validation);
-
-#if defined(__APPLE__) && defined(__aarch64__)
-    // On iOS ARM64, MoltenVK might report a higher version, but we should be more conservative
-    // to ensure better compatibility
-    LOG_INFO(Render_Vulkan, "Initializing Vulkan for iOS ARM64 device");
-    
-    // We require a Vulkan 1.1 driver
-    const u32 available_version = vk::enumerateInstanceVersion();
-    if (available_version < VK_API_VERSION_1_1) {
-        LOG_CRITICAL(Render_Vulkan, "Vulkan 1.0 is not supported on iOS, 1.1 is required!");
-        return;
-    }
-    
-    // Log MoltenVK version information for debugging
-    LOG_INFO(Render_Vulkan, "MoltenVK reports Vulkan version {}.{}.{}", 
-             VK_VERSION_MAJOR(available_version),
-             VK_VERSION_MINOR(available_version),
-             VK_VERSION_PATCH(available_version));
-#else
-    // We require a Vulkan 1.1 driver
-    const u32 available_version = vk::enumerateInstanceVersion();
-    if (available_version < VK_API_VERSION_1_1) {
-        LOG_CRITICAL(Render_Vulkan, "Vulkan 1.0 is not supported, 1.1 is required!");
-        return;
-    }
-#endif
-
-    const vk::ApplicationInfo application_info = {
-        .pApplicationName = "Citra",
-        .applicationVersion = VK_MAKE_VERSION(1, 0, 0),
-        .pEngineName = "Citra Vulkan",
-        .engineVersion = VK_MAKE_VERSION(1, 0, 0),
-        .apiVersion = VK_API_VERSION_1_3
-    };
-
-    std::array<const char*, 3> layers;
-    u32 layer_count = 0;
-
-    if (enable_validation) {
-        layers[layer_count++] = "VK_LAYER_KHRONOS_validation";
-    }
-    if (dump_command_buffers) {
-        layers[layer_count++] = "VK_LAYER_LUNARG_api_dump";
-    }
-
-    vk::StructureChain instance_chain = {
-        vk::InstanceCreateInfo{
-            .flags = GetInstanceFlags(),
-            .pApplicationInfo = &application_info,
-            .enabledLayerCount = layer_count,
-            .ppEnabledLayerNames = layers.data(),
-            .enabledExtensionCount = static_cast<u32>(extensions.size()),
-            .ppEnabledExtensionNames = extensions.data(),
-        },
-        MakeDebugUtilsMessengerInfo(),
-    };
-
-    const auto is_supported = [&extensions](std::string_view requested) {
-        const auto it =
-            std::find_if(extensions.begin(), extensions.end(),
-                         [requested](const char* extension) { return requested == extension; });
-
-        return it != extensions.end();
-    };
-
-    debug_messenger_supported = is_supported(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
-    debug_report_supported = is_supported(VK_EXT_DEBUG_REPORT_EXTENSION_NAME);
-    if (!debug_messenger_supported || !enable_validation) {
-        instance_chain.unlink<vk::DebugUtilsMessengerCreateInfoEXT>();
-    }
-
-    try {
-        instance = vk::createInstance(instance_chain.get());
-    } catch (vk::LayerNotPresentError& err) {
-        LOG_CRITICAL(Render_Vulkan, "Validation requested but layer is not available {}",
-                     err.what());
-        UNREACHABLE();
-    }
-
-    LoadInstanceFunctions(instance);
-
-    // If validation is enabled attempt to also enable debug messenger
-    if (enable_validation) {
-        if (debug_messenger_supported) {
-            debug_messenger = instance.createDebugUtilsMessengerEXT(MakeDebugUtilsMessengerInfo());
-        } else if (debug_report_supported) {
-            callback = instance.createDebugReportCallbackEXT(MakeDebugReportCallbackInfo());
-        }
-    }
-
-    // Pick physical device
-    physical_devices = instance.enumeratePhysicalDevices();
-    if (const u16 physical_device_count = static_cast<u16>(physical_devices.size());
-        physical_device_index >= physical_devices.size()) [[unlikely]] {
-        LOG_CRITICAL(Render_Vulkan,
-                     "Invalid physical device index {} provided when only {} devices exist",
-                     physical_device_index, physical_device_count);
-        UNREACHABLE();
-    }
+    : library{OpenLibrary(&window)},
+      instance{CreateInstance(*library, window.GetWindowInfo().type,
+                              Settings::values.renderer_debug.GetValue(),
+                              Settings::values.dump_command_buffers.GetValue())},
+      debug_callback{CreateDebugCallback(*instance, debug_utils_supported)},
+      physical_devices{instance->enumeratePhysicalDevices()} {
+    const std::size_t num_physical_devices = static_cast<u16>(physical_devices.size());
+    ASSERT_MSG(physical_device_index < num_physical_devices,
+               "Invalid physical device index {} provided when only {} devices exist",
+               physical_device_index, num_physical_devices);
 
     physical_device = physical_devices[physical_device_index];
+    available_extensions = GetSupportedExtensions(physical_device);
     properties = physical_device.getProperties();
-    limits = properties.limits;
+    if (properties.apiVersion < TargetVulkanApiVersion) {
+        throw std::runtime_error(fmt::format(
+            "Vulkan {}.{} is required, but only {}.{} is supported by device!",
+            VK_VERSION_MAJOR(TargetVulkanApiVersion), VK_VERSION_MINOR(TargetVulkanApiVersion),
+            VK_VERSION_MAJOR(properties.apiVersion), VK_VERSION_MINOR(properties.apiVersion)));
+    }
 
-    CollectTelemetryParameters();
     CreateDevice();
+    CollectToolingInfo();
     CreateFormatTable();
     CreateCustomFormatTable();
     CreateAttribTable();
 }
 
 Instance::~Instance() {
-    if (device) {
-        vmaDestroyAllocator(allocator);
-        device.destroy();
-
-        if (debug_messenger) {
-            instance.destroyDebugUtilsMessengerEXT(debug_messenger);
-        }
-        if (callback) {
-            instance.destroyDebugReportCallbackEXT(callback);
-        }
-    }
-
-    instance.destroy();
+    vmaDestroyAllocator(allocator);
 }
 
 const FormatTraits& Instance::GetTraits(VideoCore::PixelFormat pixel_format) const {
     if (pixel_format == VideoCore::PixelFormat::Invalid) [[unlikely]] {
-        constexpr static FormatTraits null_traits{};
         return null_traits;
     }
-
-    const u32 index = static_cast<u32>(pixel_format);
-    return format_table[index];
+    return format_table[static_cast<u32>(pixel_format)];
 }
 
 const FormatTraits& Instance::GetTraits(VideoCore::CustomPixelFormat pixel_format) const {
-    const u32 index = static_cast<u32>(pixel_format);
-    return custom_format_table[index];
+    return custom_format_table[static_cast<u32>(pixel_format)];
 }
 
 const FormatTraits& Instance::GetTraits(Pica::PipelineRegs::VertexAttributeFormat format,
@@ -421,9 +186,27 @@ const FormatTraits& Instance::GetTraits(Pica::PipelineRegs::VertexAttributeForma
     if (count == 0) [[unlikely]] {
         ASSERT_MSG(false, "Unable to retrieve traits for invalid attribute component count");
     }
-
     const u32 index = static_cast<u32>(format);
     return attrib_table[index * 4 + count - 1];
+}
+
+std::string Instance::GetDriverVersionName() {
+    // Extracted from
+    // https://github.com/SaschaWillems/vulkan.gpuinfo.org/blob/5dddea46ea1120b0df14eef8f15ff8e318e35462/functions.php#L308-L314
+    const u32 version = properties.driverVersion;
+    if (driver_id == vk::DriverId::eNvidiaProprietary) {
+        const u32 major = (version >> 22) & 0x3ff;
+        const u32 minor = (version >> 14) & 0x0ff;
+        const u32 secondary = (version >> 6) & 0x0ff;
+        const u32 tertiary = version & 0x003f;
+        return fmt::format("{}.{}.{}.{}", major, minor, secondary, tertiary);
+    }
+    if (driver_id == vk::DriverId::eIntelProprietaryWindows) {
+        const u32 major = version >> 14;
+        const u32 minor = version & 0x3fff;
+        return fmt::format("{}.{}", major, minor);
+    }
+    return GetReadableVersion(version);
 }
 
 FormatTraits Instance::DetermineTraits(VideoCore::PixelFormat pixel_format, vk::Format format) {
@@ -448,7 +231,7 @@ FormatTraits Instance::DetermineTraits(VideoCore::PixelFormat pixel_format, vk::
         pixel_format != VideoCore::PixelFormat::RGB8;
     const bool supports_storage =
         (format_properties.optimalTilingFeatures & storage_usage) == storage_usage;
-    const bool requires_conversion =
+    const bool needs_conversion =
         // Requires component flip.
         pixel_format == VideoCore::PixelFormat::RGBA8 ||
         // Requires (de)interleaving.
@@ -460,12 +243,16 @@ FormatTraits Instance::DetermineTraits(VideoCore::PixelFormat pixel_format, vk::
         best_usage |= vk::ImageUsageFlagBits::eSampled | vk::ImageUsageFlagBits::eTransferDst |
                       vk::ImageUsageFlagBits::eTransferSrc;
     }
-    if (supports_attachment) {
+    // Attachment flag is only needed for color and depth formats.
+    if (supports_attachment &&
+        VideoCore::GetFormatType(pixel_format) != VideoCore::SurfaceType::Texture) {
         best_usage |= (format_aspect & vk::ImageAspectFlagBits::eDepth)
                           ? vk::ImageUsageFlagBits::eDepthStencilAttachment
                           : vk::ImageUsageFlagBits::eColorAttachment;
     }
-    if (supports_storage) {
+    // Storage flag is only needed for shadow rendering with RGBA8 texture.
+    // Keeping it disables can boost performance on mobile drivers.
+    if (supports_storage && pixel_format == VideoCore::PixelFormat::RGBA8) {
         best_usage |= vk::ImageUsageFlagBits::eStorage;
     }
 
@@ -474,7 +261,7 @@ FormatTraits Instance::DetermineTraits(VideoCore::PixelFormat pixel_format, vk::
         .blit_support = supports_blit,
         .attachment_support = supports_attachment,
         .storage_support = supports_storage,
-        .requires_conversion = requires_conversion,
+        .needs_conversion = needs_conversion,
         .usage = best_usage,
         .aspect = format_aspect,
         .native = format,
@@ -501,6 +288,7 @@ void Instance::CreateFormatTable() {
         const bool is_suitable =
             traits.transfer_support && traits.attachment_support &&
             (traits.blit_support || traits.aspect & vk::ImageAspectFlagBits::eDepth);
+
         // Fall back if the native format is not suitable.
         if (!is_suitable) {
             // Always fallback to RGBA8 or D32(S8) for convenience
@@ -515,7 +303,7 @@ void Instance::CreateFormatTable() {
                         vk::to_string(format), vk::to_string(fallback));
             traits = DetermineTraits(pixel_format, fallback);
             // Always requires conversion if backing format does not match.
-            traits.requires_conversion = true;
+            traits.needs_conversion = true;
         }
 
         const u32 index = static_cast<u32>(pixel_format);
@@ -562,8 +350,8 @@ void Instance::CreateCustomFormatTable() {
 void Instance::DetermineEmulation(Pica::PipelineRegs::VertexAttributeFormat format,
                                   bool& needs_cast) {
     // Check if (u)scaled formats can be used to emulate the 3 component format
-    vk::Format two_comp_format = MakeAttributeFormat(format, 2);
-    vk::FormatProperties format_properties = physical_device.getFormatProperties(two_comp_format);
+    vk::Format four_comp_format = MakeAttributeFormat(format, 4);
+    vk::FormatProperties format_properties = physical_device.getFormatProperties(four_comp_format);
     needs_cast = !(format_properties.bufferFeatures & vk::FormatFeatureFlagBits::eVertexBuffer);
 }
 
@@ -598,8 +386,8 @@ void Instance::CreateAttribTable() {
 
             const u32 index = static_cast<u32>(format) * 4 + count - 1;
             attrib_table[index] = FormatTraits{
-                .requires_conversion = needs_cast,
-                .requires_emulation = needs_emulation,
+                .needs_conversion = needs_cast,
+                .needs_emulation = needs_emulation,
                 .native = attrib_format,
             };
         }
@@ -607,17 +395,6 @@ void Instance::CreateAttribTable() {
 }
 
 bool Instance::CreateDevice() {
-#if defined(__APPLE__) && defined(__aarch64__)
-    // On iOS ARM64, we need to be more selective about which features we request
-    // to avoid performance issues with MoltenVK
-    LOG_INFO(Render_Vulkan, "Configuring device features for iOS ARM64");
-    
-    const vk::StructureChain feature_chain = physical_device.getFeatures2<
-        vk::PhysicalDeviceFeatures2, vk::PhysicalDevicePortabilitySubsetFeaturesKHR,
-        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR,
-        vk::PhysicalDeviceCustomBorderColorFeaturesEXT, vk::PhysicalDeviceIndexTypeUint8FeaturesEXT,
-        vk::PhysicalDeviceDynamicRenderingFeaturesKHR>();
-#else
     const vk::StructureChain feature_chain = physical_device.getFeatures2<
         vk::PhysicalDeviceFeatures2, vk::PhysicalDevicePortabilitySubsetFeaturesKHR,
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT,
@@ -625,27 +402,27 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT,
         vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR,
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT, vk::PhysicalDeviceIndexTypeUint8FeaturesEXT,
+        vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT,
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
-        vk::PhysicalDeviceDynamicRenderingFeaturesKHR>();
-#endif
+        vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR>();
     const vk::StructureChain properties_chain =
-        physical_device.getProperties2<vk::PhysicalDeviceProperties2,
-                                       vk::PhysicalDevicePortabilitySubsetPropertiesKHR>();
+        physical_device
+            .getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties,
+                            vk::PhysicalDevicePortabilitySubsetPropertiesKHR,
+                            vk::PhysicalDeviceExternalMemoryHostPropertiesEXT>();
+    const vk::PhysicalDeviceDriverProperties driver =
+        properties_chain.get<vk::PhysicalDeviceDriverProperties>();
 
-    // Not having geometry shaders will cause issues with accelerated rendering.
+    driver_id = driver.driverID;
+    vendor_name = driver.driverName.data();
+
     features = feature_chain.get().features;
-    if (!features.geometryShader) {
-        LOG_WARNING(Render_Vulkan,
-                    "Geometry shaders not availabe! Accelerated rendering not possible!");
-    }
-
-    available_extensions = GetSupportedExtensions(physical_device);
     if (available_extensions.empty()) {
         LOG_CRITICAL(Render_Vulkan, "No extensions supported by device.");
         return false;
     }
 
-    std::vector<const char*> enabled_extensions;
+    boost::container::static_vector<const char*, 13> enabled_extensions;
     const auto add_extension = [&](std::string_view extension, bool blacklist = false,
                                    std::string_view reason = "") -> bool {
         const auto result =
@@ -659,32 +436,46 @@ bool Instance::CreateDevice() {
         } else if (blacklist) {
             LOG_WARNING(Render_Vulkan, "Extension {} has been blacklisted because {}", extension,
                         reason);
+            return false;
         }
 
         LOG_WARNING(Render_Vulkan, "Extension {} unavailable.", extension);
         return false;
     };
 
+    const bool is_nvidia = driver_id == vk::DriverIdKHR::eNvidiaProprietary;
+    const bool is_moltenvk = driver_id == vk::DriverIdKHR::eMoltenvk;
     const bool is_arm = driver_id == vk::DriverIdKHR::eArmProprietary;
     const bool is_qualcomm = driver_id == vk::DriverIdKHR::eQualcommProprietary;
+    const bool is_turnip = driver_id == vk::DriverIdKHR::eMesaTurnip;
 
     add_extension(VK_KHR_SWAPCHAIN_EXTENSION_NAME);
     image_format_list = add_extension(VK_KHR_IMAGE_FORMAT_LIST_EXTENSION_NAME);
-    pipeline_creation_feedback = add_extension(VK_EXT_PIPELINE_CREATION_FEEDBACK_EXTENSION_NAME);
     shader_stencil_export = add_extension(VK_EXT_SHADER_STENCIL_EXPORT_EXTENSION_NAME);
-    bool has_timeline_semaphores = add_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME);
-    bool has_portability_subset = add_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
-    bool has_dynamic_rendering = add_extension(VK_KHR_DYNAMIC_RENDERING_EXTENSION_NAME);
-    bool has_extended_dynamic_state =
+    external_memory_host = add_extension(VK_EXT_EXTERNAL_MEMORY_HOST_EXTENSION_NAME);
+    tooling_info = add_extension(VK_EXT_TOOLING_INFO_EXTENSION_NAME);
+    const bool has_timeline_semaphores =
+        add_extension(VK_KHR_TIMELINE_SEMAPHORE_EXTENSION_NAME, is_qualcomm || is_turnip,
+                      "it is broken on Qualcomm drivers");
+    const bool has_portability_subset = add_extension(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+    const bool has_extended_dynamic_state =
         add_extension(VK_EXT_EXTENDED_DYNAMIC_STATE_EXTENSION_NAME, is_arm || is_qualcomm,
                       "it is broken on Qualcomm and ARM drivers");
-    bool has_custom_border_color = add_extension(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME);
-    bool has_index_type_uint8 = add_extension(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME);
-    bool has_pipeline_creation_cache_control =
-        add_extension(VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME);
+    const bool has_custom_border_color =
+        add_extension(VK_EXT_CUSTOM_BORDER_COLOR_EXTENSION_NAME, is_qualcomm,
+                      "it is broken on most Qualcomm driver versions");
+    const bool has_index_type_uint8 = add_extension(VK_EXT_INDEX_TYPE_UINT8_EXTENSION_NAME);
+    const bool has_fragment_shader_interlock =
+        add_extension(VK_EXT_FRAGMENT_SHADER_INTERLOCK_EXTENSION_NAME, is_nvidia,
+                      "it is broken on Nvidia drivers");
+    const bool has_pipeline_creation_cache_control =
+        add_extension(VK_EXT_PIPELINE_CREATION_CACHE_CONTROL_EXTENSION_NAME, is_nvidia,
+                      "it is broken on Nvidia drivers");
+    const bool has_fragment_shader_barycentric =
+        add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, is_moltenvk,
+                      "the PerVertexKHR attribute is not supported by MoltenVK");
 
-    // Search queue families for graphics and present queues
-    auto family_properties = physical_device.getQueueFamilyProperties();
+    const auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
         LOG_CRITICAL(Render_Vulkan, "Physical device reported no queues.");
         return false;
@@ -692,7 +483,6 @@ bool Instance::CreateDevice() {
 
     bool graphics_queue_found = false;
     for (std::size_t i = 0; i < family_properties.size(); i++) {
-        // Check if queue supports graphics
         const u32 index = static_cast<u32>(i);
         if (family_properties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
             queue_family_index = index;
@@ -705,17 +495,14 @@ bool Instance::CreateDevice() {
         return false;
     }
 
-    static constexpr float queue_priorities[] = {1.0f};
+    static constexpr std::array<f32, 1> queue_priorities = {1.0f};
 
     const vk::DeviceQueueCreateInfo queue_info = {
         .queueFamilyIndex = queue_family_index,
-        .queueCount = 1,
-        .pQueuePriorities = queue_priorities,
+        .queueCount = static_cast<u32>(queue_priorities.size()),
+        .pQueuePriorities = queue_priorities.data(),
     };
 
-#if defined(__APPLE__) && defined(__aarch64__)
-    // For iOS ARM64, we create a more streamlined device chain with only the features
-    // that are well-supported by MoltenVK
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -725,35 +512,9 @@ bool Instance::CreateDevice() {
         },
         vk::PhysicalDeviceFeatures2{
             .features{
-                // Geometry shaders may not be well supported on all iOS devices
-                .geometryShader = features.geometryShader,
-                // These features are generally well-supported on Metal
-                .depthClamp = features.depthClamp,
-                .samplerAnisotropy = features.samplerAnisotropy,
-                // Carefully select features that work well on iOS
-                .shaderClipDistance = features.shaderClipDistance,
-            },
-        },
-        vk::PhysicalDevicePortabilitySubsetFeaturesKHR{},
-        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR{},
-        vk::PhysicalDeviceDynamicRenderingFeaturesKHR{},
-        vk::PhysicalDeviceCustomBorderColorFeaturesEXT{},
-        vk::PhysicalDeviceIndexTypeUint8FeaturesEXT{},
-    };
-#else
-    vk::StructureChain device_chain = {
-        vk::DeviceCreateInfo{
-            .queueCreateInfoCount = 1u,
-            .pQueueCreateInfos = &queue_info,
-            .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
-            .ppEnabledExtensionNames = enabled_extensions.data(),
-        },
-        vk::PhysicalDeviceFeatures2{
-            .features{
+                .robustBufferAccess = features.robustBufferAccess,
                 .geometryShader = features.geometryShader,
                 .logicOp = features.logicOp,
-                .depthClamp = features.depthClamp,
-                .largePoints = features.largePoints,
                 .samplerAnisotropy = features.samplerAnisotropy,
                 .fragmentStoresAndAtomics = features.fragmentStoresAndAtomics,
                 .shaderClipDistance = features.shaderClipDistance,
@@ -764,12 +525,12 @@ bool Instance::CreateDevice() {
         vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT{},
         vk::PhysicalDeviceExtendedDynamicState2FeaturesEXT{},
         vk::PhysicalDeviceExtendedDynamicState3FeaturesEXT{},
-        vk::PhysicalDeviceDynamicRenderingFeaturesKHR{},
         vk::PhysicalDeviceCustomBorderColorFeaturesEXT{},
         vk::PhysicalDeviceIndexTypeUint8FeaturesEXT{},
+        vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT{},
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT{},
+        vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR{},
     };
-#endif
 
 #define PROP_GET(structName, prop, property) property = properties_chain.get<structName>().prop;
 
@@ -806,23 +567,18 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceIndexTypeUint8FeaturesEXT>();
     }
 
-#if defined(__APPLE__) && defined(__aarch64__)
-    // On iOS ARM64, we don't use extended dynamic state features as they may not be well-supported
-    extended_dynamic_state = false;
-#else
+    if (has_fragment_shader_interlock) {
+        FEAT_SET(vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT, fragmentShaderPixelInterlock,
+                 fragment_shader_interlock)
+    } else {
+        device_chain.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
+    }
+
     if (has_extended_dynamic_state) {
         FEAT_SET(vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, extendedDynamicState,
                  extended_dynamic_state)
     } else {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
-    }
-#endif
-
-    if (has_dynamic_rendering) {
-        FEAT_SET(vk::PhysicalDeviceDynamicRenderingFeaturesKHR, dynamicRendering,
-                 dynamic_rendering);
-    } else {
-        device_chain.unlink<vk::PhysicalDeviceDynamicRenderingFeaturesKHR>();
     }
 
     if (has_custom_border_color) {
@@ -834,32 +590,39 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
     }
 
-#if defined(__APPLE__) && defined(__aarch64__)
-    // On iOS ARM64, we don't use pipeline creation cache control as it's not part of our streamlined feature set
-    pipeline_creation_cache_control = false;
-#else
     if (has_pipeline_creation_cache_control) {
         FEAT_SET(vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
                  pipelineCreationCacheControl, pipeline_creation_cache_control)
     } else {
         device_chain.unlink<vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>();
     }
-#endif
+
+    if (external_memory_host) {
+        PROP_GET(vk::PhysicalDeviceExternalMemoryHostPropertiesEXT, minImportedHostPointerAlignment,
+                 min_imported_host_pointer_alignment);
+    }
+
+    if (has_fragment_shader_barycentric) {
+        FEAT_SET(vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR, fragmentShaderBarycentric,
+                 fragment_shader_barycentric)
+    } else {
+        device_chain.unlink<vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR>();
+    }
 
 #undef PROP_GET
 #undef FEAT_SET
 
     try {
-        device = physical_device.createDevice(device_chain.get());
+        device = physical_device.createDeviceUnique(device_chain.get());
     } catch (vk::ExtensionNotPresentError& err) {
         LOG_CRITICAL(Render_Vulkan, "Some required extensions are not available {}", err.what());
-        UNREACHABLE();
+        return false;
     }
 
-    VULKAN_HPP_DEFAULT_DISPATCHER.init(device);
+    VULKAN_HPP_DEFAULT_DISPATCHER.init(*device);
 
-    graphics_queue = device.getQueue(queue_family_index, 0);
-    present_queue = device.getQueue(queue_family_index, 0);
+    graphics_queue = device->getQueue(queue_family_index, 0);
+    present_queue = device->getQueue(queue_family_index, 0);
 
     CreateAllocator();
     return true;
@@ -871,38 +634,31 @@ void Instance::CreateAllocator() {
         .vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,
     };
 
-    VmaAllocatorCreateInfo allocator_info = {
+    const VmaAllocatorCreateInfo allocator_info = {
         .physicalDevice = physical_device,
-        .device = device,
+        .device = *device,
         .pVulkanFunctions = &functions,
-        .instance = instance,
-        .vulkanApiVersion = VK_API_VERSION_1_1,
+        .instance = *instance,
+        .vulkanApiVersion = TargetVulkanApiVersion,
     };
-    
-#if defined(__APPLE__) && defined(__aarch64__)
-    // iOS ARM64 optimization: Use dedicated allocations for better performance on mobile GPUs
-    // and reduce memory fragmentation which is critical on memory-constrained devices
-    allocator_info.flags |= VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
-    
-    // Prefer smaller memory block sizes on iOS to reduce memory pressure
-    allocator_info.preferredLargeHeapBlockSize = 128 * 1024 * 1024; // 128MB instead of default 256MB
-#endif
 
-    if (VkResult result = vmaCreateAllocator(&allocator_info, &allocator); result != VK_SUCCESS) {
-        LOG_CRITICAL(Render_Vulkan, "Failed to initialize VMA with error {}", result);
-        UNREACHABLE();
+    const VkResult result = vmaCreateAllocator(&allocator_info, &allocator);
+    if (result != VK_SUCCESS) {
+        UNREACHABLE_MSG("Failed to initialize VMA with error {}", result);
     }
 }
 
-void Instance::CollectTelemetryParameters() {
-    const vk::StructureChain property_chain =
-        physical_device
-            .getProperties2<vk::PhysicalDeviceProperties2, vk::PhysicalDeviceDriverProperties>();
-    const vk::PhysicalDeviceDriverProperties driver =
-        property_chain.get<vk::PhysicalDeviceDriverProperties>();
-
-    driver_id = driver.driverID;
-    vendor_name = driver.driverName.data();
+void Instance::CollectToolingInfo() {
+    if (!tooling_info) {
+        return;
+    }
+    const auto tools = physical_device.getToolPropertiesEXT();
+    for (const vk::PhysicalDeviceToolProperties& tool : tools) {
+        const std::string_view name = tool.name;
+        LOG_INFO(Render_Vulkan, "Attached debugging tool: {}", name);
+        has_renderdoc = has_renderdoc || name == "RenderDoc";
+        has_nsight_graphics = has_nsight_graphics || name == "NVIDIA Nsight Graphics";
+    }
 }
 
 } // namespace Vulkan

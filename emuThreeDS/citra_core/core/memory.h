@@ -18,6 +18,10 @@ namespace Kernel {
 class Process;
 }
 
+namespace Core {
+class System;
+}
+
 namespace AudioCore {
 class DspInterface;
 }
@@ -287,7 +291,7 @@ void RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode);
 
 class MemorySystem {
 public:
-    MemorySystem();
+    explicit MemorySystem(Core::System& system);
     ~MemorySystem();
 
     /**

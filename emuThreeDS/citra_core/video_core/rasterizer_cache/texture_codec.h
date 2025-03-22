@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #pragma once
+
 #include <algorithm>
 #include <bit>
 #include <span>
@@ -264,6 +265,7 @@ static constexpr void MortonCopy(u32 width, u32 height, u32 start_offset, u32 en
     const u32 aligned_down_start_offset = Common::AlignDown(start_offset, tile_size);
     const u32 aligned_start_offset = Common::AlignUp(start_offset, tile_size);
     const u32 aligned_end_offset = Common::AlignDown(end_offset, tile_size);
+    const u32 begin_pixel_index = aligned_down_start_offset * 8 / GetFormatBpp(format);
 
     ASSERT(!morton_to_linear ||
            (aligned_start_offset == start_offset && aligned_end_offset == end_offset));
@@ -271,12 +273,12 @@ static constexpr void MortonCopy(u32 width, u32 height, u32 start_offset, u32 en
     // In OpenGL the texture origin is in the bottom left corner as opposed to other
     // APIs that have it at the top left. To avoid flipping texture coordinates in
     // the shader we read/write the linear buffer from the bottom up
-    u32 linear_offset = ((height - 8) * width) * aligned_bytes_per_pixel;
+    u32 x = (begin_pixel_index % (width * 8)) / 8;
+    u32 y = (begin_pixel_index / (width * 8)) * 8;
+    u32 linear_offset = ((height - 8 - y) * width + x) * aligned_bytes_per_pixel;
     u32 tiled_offset = 0;
-    u32 x = 0;
-    u32 y = 0;
 
-    const auto LinearNextTile = [&] {
+    const auto linear_next_tile = [&] {
         x = (x + 8) % width;
         linear_offset += 8 * aligned_bytes_per_pixel;
         if (!x) {
@@ -300,7 +302,7 @@ static constexpr void MortonCopy(u32 width, u32 height, u32 start_offset, u32 en
                     std::min(aligned_start_offset, end_offset) - start_offset);
 
         tiled_offset += aligned_start_offset - start_offset;
-        LinearNextTile();
+        linear_next_tile();
     }
 
     // If the copy spans multiple tiles, copy the fully aligned tiles in between.
@@ -313,7 +315,7 @@ static constexpr void MortonCopy(u32 width, u32 height, u32 start_offset, u32 en
             auto tiled_data = tiled_buffer.subspan(tiled_offset, tile_size);
             MortonCopyTile<morton_to_linear, format, converted>(width, tiled_data, linear_data);
             tiled_offset += tile_size;
-            LinearNextTile();
+            linear_next_tile();
         }
     }
 
@@ -339,8 +341,8 @@ static constexpr void MortonCopy(u32 width, u32 height, u32 start_offset, u32 en
  */
 template <bool decode, PixelFormat format, bool converted = false>
 static constexpr void LinearCopy(std::span<u8> src_buffer, std::span<u8> dst_buffer) {
-    const std::size_t src_size = src_buffer.size();
-    const std::size_t dst_size = dst_buffer.size();
+    std::size_t src_size = src_buffer.size();
+    std::size_t dst_size = dst_buffer.size();
 
     if constexpr (converted) {
         constexpr u32 encoded_bytes_per_pixel = GetFormatBpp(format) / 8;
@@ -349,6 +351,9 @@ static constexpr void LinearCopy(std::span<u8> src_buffer, std::span<u8> dst_buf
             decode ? encoded_bytes_per_pixel : decoded_bytes_per_pixel;
         constexpr u32 dst_bytes_per_pixel =
             decode ? decoded_bytes_per_pixel : encoded_bytes_per_pixel;
+
+        src_size = Common::AlignDown(src_size, src_bytes_per_pixel);
+        dst_size = Common::AlignDown(dst_size, dst_bytes_per_pixel);
 
         for (std::size_t src_index = 0, dst_index = 0; src_index < src_size && dst_index < dst_size;
              src_index += src_bytes_per_pixel, dst_index += dst_bytes_per_pixel) {

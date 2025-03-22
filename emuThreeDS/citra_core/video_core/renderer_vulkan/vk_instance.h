@@ -5,10 +5,14 @@
 #pragma once
 
 #include <span>
-#include <vector>
+
+#include "video_core/pica/regs_pipeline.h"
 #include "video_core/rasterizer_cache/pixel_format.h"
-#include "video_core/regs_pipeline.h"
-#include "video_core/renderer_vulkan/vk_common.h"
+#include "video_core/renderer_vulkan/vk_platform.h"
+
+namespace Core {
+class TelemetrySession;
+}
 
 namespace Frontend {
 class EmuWindow;
@@ -23,16 +27,15 @@ VK_DEFINE_HANDLE(VmaAllocator)
 namespace Vulkan {
 
 struct FormatTraits {
-    bool transfer_support = false;   ///< True if the format supports transfer operations
-    bool blit_support = false;       ///< True if the format supports blit operations
-    bool attachment_support = false; ///< True if the format supports being used as an attachment
-    bool storage_support = false;    ///< True if the format supports storage operations
-    bool requires_conversion =
-        false; ///< True if the format requires conversion to the native format
-    bool requires_emulation = false;            ///< True if the format requires emulation
-    vk::ImageUsageFlags usage{};                ///< Most supported usage for the native format
-    vk::ImageAspectFlags aspect;                ///< Aspect flags of the format
-    vk::Format native = vk::Format::eUndefined; ///< Closest possible native format
+    bool transfer_support = false;
+    bool blit_support = false;
+    bool attachment_support = false;
+    bool storage_support = false;
+    bool needs_conversion = false;
+    bool needs_emulation = false;
+    vk::ImageUsageFlags usage{};
+    vk::ImageAspectFlags aspect;
+    vk::Format native = vk::Format::eUndefined;
 };
 
 class Instance {
@@ -49,9 +52,12 @@ public:
     const FormatTraits& GetTraits(Pica::PipelineRegs::VertexAttributeFormat format,
                                   u32 count) const;
 
+    /// Returns a formatted string for the driver version
+    std::string GetDriverVersionName();
+
     /// Returns the Vulkan instance
     vk::Instance GetInstance() const {
-        return instance;
+        return *instance;
     }
 
     /// Returns the current physical device
@@ -61,7 +67,7 @@ public:
 
     /// Returns the Vulkan device
     vk::Device GetDevice() const {
-        return device;
+        return *device;
     }
 
     /// Returns the VMA allocator handle
@@ -91,18 +97,28 @@ public:
         return present_queue;
     }
 
+    /// Returns true when a known debugging tool is attached.
+    bool HasDebuggingToolAttached() const {
+        return has_renderdoc || has_nsight_graphics;
+    }
+
+    /// Returns true when VK_EXT_debug_utils is supported.
+    bool IsExtDebugUtilsSupported() const {
+        return debug_utils_supported;
+    }
+
     /// Returns true if logic operations need shader emulation
     bool NeedsLogicOpEmulation() const {
         return !features.logicOp;
     }
 
     bool UseGeometryShaders() const {
-#ifndef __ANDROID__
-        return features.geometryShader;
-#else
+#ifdef __ANDROID__
         // Geometry shaders are extremely expensive on tilers to avoid them at all
         // cost even if it hurts accuracy somewhat. TODO: Make this an option
         return false;
+#else
+        return features.geometryShader;
 #endif
     }
 
@@ -121,16 +137,6 @@ public:
         return extended_dynamic_state;
     }
 
-    /// Returns true when VK_KHR_dynamic_rendering is supported
-    bool IsDynamicRenderingSupported() const {
-        return dynamic_rendering;
-    }
-
-    /// Returns true when VK_KHR_push_descriptors is supported
-    bool IsPushDescriptorsSupported() const {
-        return push_descriptors;
-    }
-
     /// Returns true when VK_EXT_custom_border_color is supported
     bool IsCustomBorderColorSupported() const {
         return custom_border_color;
@@ -139,6 +145,11 @@ public:
     /// Returns true when VK_EXT_index_type_uint8 is supported
     bool IsIndexTypeUint8Supported() const {
         return index_type_uint8;
+    }
+
+    /// Returns true when VK_EXT_fragment_shader_interlock is supported
+    bool IsFragmentShaderInterlockSupported() const {
+        return fragment_shader_interlock;
     }
 
     /// Returns true when VK_KHR_image_format_list is supported
@@ -151,16 +162,11 @@ public:
         return pipeline_creation_cache_control;
     }
 
-    /// Returns true when VK_EXT_pipeline_creation_feedback is supported
-    bool IsPipelineCreationFeedbackSupported() const {
-        return pipeline_creation_feedback;
-    }
-
     /// Returns true when VK_EXT_shader_stencil_export is supported
     bool IsShaderStencilExportSupported() const {
         return shader_stencil_export;
     }
-    
+
     /// Returns true when VK_EXT_external_memory_host is supported
     bool IsExternalMemoryHostSupported() const {
         return external_memory_host;
@@ -169,10 +175,6 @@ public:
     /// Returns true when VK_KHR_fragment_shader_barycentric is supported
     bool IsFragmentShaderBarycentricSupported() const {
         return fragment_shader_barycentric;
-    }
-    /// Returns true if VK_EXT_debug_utils is supported
-    bool IsExtDebugUtilsSupported() const {
-        return debug_messenger_supported;
     }
 
     /// Returns the vendor ID of the physical device
@@ -206,7 +208,7 @@ public:
     }
 
     /// Returns the list of available extensions.
-    const std::vector<std::string>& GetAvailableExtensions() const {
+    std::span<const std::string> GetAvailableExtensions() const {
         return available_extensions;
     }
 
@@ -222,12 +224,17 @@ public:
 
     /// Returns the minimum required alignment for uniforms
     vk::DeviceSize UniformMinAlignment() const {
-        return limits.minUniformBufferOffsetAlignment;
+        return properties.limits.minUniformBufferOffsetAlignment;
+    }
+
+    /// Returns the minimum alignemt required for accessing host-mapped device memory
+    vk::DeviceSize NonCoherentAtomSize() const {
+        return properties.limits.nonCoherentAtomSize;
     }
 
     /// Returns the maximum supported elements in a texel buffer
     u32 MaxTexelBufferElements() const {
-        return limits.maxTexelBufferElements;
+        return properties.limits.maxTexelBufferElements;
     }
 
     /// Returns true if shaders can declare the ClipDistance attribute
@@ -240,9 +247,19 @@ public:
         return triangle_fan_supported;
     }
 
+    /// Returns true if dynamic indices can be used inside shaders.
+    bool IsImageArrayDynamicIndexSupported() const {
+        return features.shaderSampledImageArrayDynamicIndexing;
+    }
+
     /// Returns the minimum vertex stride alignment
     u32 GetMinVertexStrideAlignment() const {
         return min_vertex_stride_alignment;
+    }
+
+    /// Returns the minimum imported host pointer alignment
+    u64 GetMinImportedHostPointerAlignment() const {
+        return min_imported_host_pointer_alignment;
     }
 
     /// Returns true if commands should be flushed at the end of each major renderpass
@@ -273,23 +290,24 @@ private:
     void CreateAllocator();
 
     /// Collects telemetry information from the device.
-    void CollectTelemetryParameters();
+    void CollectTelemetryParameters(Core::TelemetrySession& telemetry);
+    void CollectToolingInfo();
 
 private:
-    vk::Device device;
+    std::shared_ptr<Common::DynamicLibrary> library;
+    vk::UniqueInstance instance;
     vk::PhysicalDevice physical_device;
-    vk::Instance instance;
+    vk::UniqueDevice device;
     vk::PhysicalDeviceProperties properties;
     vk::PhysicalDeviceFeatures features;
-    vk::PhysicalDeviceLimits limits;
     vk::DriverIdKHR driver_id;
-    vk::DebugUtilsMessengerEXT debug_messenger;
-    vk::DebugReportCallbackEXT callback;
+    DebugCallback debug_callback;
     std::string vendor_name;
-    VmaAllocator allocator;
+    VmaAllocator allocator{};
     vk::Queue present_queue;
     vk::Queue graphics_queue;
     std::vector<vk::PhysicalDevice> physical_devices;
+    FormatTraits null_traits;
     std::array<FormatTraits, VideoCore::PIXEL_FORMAT_COUNT> format_table;
     std::array<FormatTraits, 10> custom_format_table;
     std::array<FormatTraits, 16> attrib_table;
@@ -300,20 +318,19 @@ private:
     u32 min_vertex_stride_alignment{1};
     bool timeline_semaphores{};
     bool extended_dynamic_state{};
-    bool push_descriptors{};
-    bool dynamic_rendering{};
     bool custom_border_color{};
     bool index_type_uint8{};
+    bool fragment_shader_interlock{};
     bool image_format_list{};
     bool pipeline_creation_cache_control{};
-    bool pipeline_creation_feedback{};
+    bool fragment_shader_barycentric{};
     bool shader_stencil_export{};
     bool external_memory_host{};
-    bool fragment_shader_barycentric{};
-    bool enable_validation{};
-    bool dump_command_buffers{};
-    bool debug_messenger_supported{};
-    bool debug_report_supported{};
+    u64 min_imported_host_pointer_alignment{};
+    bool tooling_info{};
+    bool debug_utils_supported{};
+    bool has_nsight_graphics{};
+    bool has_renderdoc{};
 };
 
 } // namespace Vulkan

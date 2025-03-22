@@ -4,10 +4,10 @@
 
 #pragma once
 
-#include "core/hw/gpu.h"
 #include "video_core/rasterizer_accelerated.h"
+#include "video_core/renderer_vulkan/vk_descriptor_update_queue.h"
 #include "video_core/renderer_vulkan/vk_pipeline_cache.h"
-#include "video_core/renderer_vulkan/vk_renderpass_cache.h"
+#include "video_core/renderer_vulkan/vk_render_manager.h"
 #include "video_core/renderer_vulkan/vk_stream_buffer.h"
 #include "video_core/renderer_vulkan/vk_texture_runtime.h"
 
@@ -20,25 +20,28 @@ class CustomTexManager;
 class RendererBase;
 } // namespace VideoCore
 
+namespace Pica {
+struct DisplayTransferConfig;
+struct MemoryFillConfig;
+struct FramebufferConfig;
+} // namespace Pica
+
 namespace Vulkan {
 
 struct ScreenInfo;
 
 class Instance;
 class Scheduler;
-class RenderpassCache;
-class DescriptorManager;
+class RenderManager;
 
 class RasterizerVulkan : public VideoCore::RasterizerAccelerated {
-    friend class RendererVulkan;
-
 public:
-    explicit RasterizerVulkan(Memory::MemorySystem& memory,
+    explicit RasterizerVulkan(Memory::MemorySystem& memory, Pica::PicaCore& pica,
                               VideoCore::CustomTexManager& custom_tex_manager,
                               VideoCore::RendererBase& renderer, Frontend::EmuWindow& emu_window,
                               const Instance& instance, Scheduler& scheduler,
-                              DescriptorManager& desc_manager, TextureRuntime& runtime,
-                              RenderpassCache& renderpass_cache);
+                              RenderManager& renderpass_cache, DescriptorUpdateQueue& update_queue,
+                              u32 image_count);
     ~RasterizerVulkan() override;
 
     void TickFrame();
@@ -47,15 +50,14 @@ public:
 
     void DrawTriangles() override;
     void FlushAll() override;
-    void FlushCommands();
     void FlushRegion(PAddr addr, u32 size) override;
     void InvalidateRegion(PAddr addr, u32 size) override;
     void FlushAndInvalidateRegion(PAddr addr, u32 size) override;
     void ClearAll(bool flush) override;
-    bool AccelerateDisplayTransfer(const GPU::Regs::DisplayTransferConfig& config) override;
-    bool AccelerateTextureCopy(const GPU::Regs::DisplayTransferConfig& config) override;
-    bool AccelerateFill(const GPU::Regs::MemoryFillConfig& config) override;
-    bool AccelerateDisplay(const GPU::Regs::FramebufferConfig& config, PAddr framebuffer_addr,
+    bool AccelerateDisplayTransfer(const Pica::DisplayTransferConfig& config) override;
+    bool AccelerateTextureCopy(const Pica::DisplayTransferConfig& config) override;
+    bool AccelerateFill(const Pica::MemoryFillConfig& config) override;
+    bool AccelerateDisplay(const Pica::FramebufferConfig& config, PAddr framebuffer_addr,
                            u32 pixel_stride, ScreenInfo& screen_info);
     bool AccelerateDrawBatch(bool is_indexed) override;
 
@@ -63,9 +65,6 @@ public:
 
 private:
     void NotifyFixedFunctionPicaRegisterChanged(u32 id) override;
-
-    /// Syncs the clip enabled status to match the PICA register
-    void SyncClipEnabled();
 
     /// Syncs the cull mode to match the PICA register
     void SyncCullMode();
@@ -102,20 +101,18 @@ private:
     void SyncAndUploadLUTsLF();
 
     /// Syncs all enabled PICA texture units
-    void SyncTextureUnits(const Framebuffer& framebuffer);
+    void SyncTextureUnits(const Framebuffer* framebuffer);
+
+    /// Syncs all utility textures in the fragment shader.
+    void SyncUtilityTextures(const Framebuffer* framebuffer);
 
     /// Binds the PICA shadow cube required for shadow mapping
-    void BindShadowCube(const Pica::TexturingRegs::FullTextureConfig& texture);
+    void BindShadowCube(const Pica::TexturingRegs::FullTextureConfig& texture,
+                        vk::DescriptorSet texture_set);
 
     /// Binds a texture cube to texture unit 0
-    void BindTextureCube(const Pica::TexturingRegs::FullTextureConfig& texture);
-
-    /// Makes a temporary copy of the framebuffer if a feedback loop is detected
-    bool IsFeedbackLoop(u32 texture_index, const Framebuffer& framebuffer, Surface& surface,
-                        Sampler& sampler);
-
-    /// Unbinds all special texture unit 0 texture configurations
-    void UnbindSpecial();
+    void BindTextureCube(const Pica::TexturingRegs::FullTextureConfig& texture,
+                         vk::DescriptorSet texture_set);
 
     /// Upload the uniform blocks to the uniform buffer object
     void UploadUniforms(bool accelerate_draw);
@@ -147,29 +144,30 @@ private:
 private:
     const Instance& instance;
     Scheduler& scheduler;
-    TextureRuntime& runtime;
-    RenderpassCache& renderpass_cache;
-    DescriptorManager& desc_manager;
-    RasterizerCache res_cache;
+    RenderManager& renderpass_cache;
+    DescriptorUpdateQueue& update_queue;
     PipelineCache pipeline_cache;
+    TextureRuntime runtime;
+    RasterizerCache res_cache;
 
     VertexLayout software_layout;
     std::array<u32, 16> binding_offsets{};
     std::array<bool, 16> enable_attributes{};
     std::array<vk::Buffer, 16> vertex_buffers;
     VertexArrayInfo vertex_info;
-    PipelineInfo pipeline_info;
+    PipelineInfo pipeline_info{};
 
     StreamBuffer stream_buffer;     ///< Vertex+Index buffer
     StreamBuffer uniform_buffer;    ///< Uniform buffer
     StreamBuffer texture_buffer;    ///< Texture buffer
     StreamBuffer texture_lf_buffer; ///< Texture Light-Fog buffer
-    vk::BufferView texture_lf_view;
-    vk::BufferView texture_rg_view;
-    vk::BufferView texture_rgba_view;
-    u64 uniform_buffer_alignment;
-    u64 uniform_size_aligned_vs;
-    u64 uniform_size_aligned_fs;
+    vk::UniqueBufferView texture_lf_view;
+    vk::UniqueBufferView texture_rg_view;
+    vk::UniqueBufferView texture_rgba_view;
+    vk::DeviceSize uniform_buffer_alignment;
+    u32 uniform_size_aligned_vs_pica;
+    u32 uniform_size_aligned_vs;
+    u32 uniform_size_aligned_fs;
     bool async_shaders{false};
 };
 

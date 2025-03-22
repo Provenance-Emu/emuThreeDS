@@ -16,8 +16,7 @@ class Scheduler;
 
 class Swapchain {
 public:
-    explicit Swapchain(const Instance& instance, Scheduler& scheduler, u32 width, u32 height,
-                       vk::SurfaceKHR surface);
+    explicit Swapchain(const Instance& instance, u32 width, u32 height, vk::SurfaceKHR surface);
     ~Swapchain();
 
     /// Creates (or recreates) the swapchain with a given size.
@@ -53,6 +52,10 @@ public:
         return height;
     }
 
+    u32 GetImageCount() const {
+        return image_count;
+    }
+
     vk::Extent2D GetExtent() const {
         return extent;
     }
@@ -86,7 +89,6 @@ private:
 
 private:
     const Instance& instance;
-    Scheduler& scheduler;
     vk::SwapchainKHR swapchain{};
     vk::SurfaceKHR surface{};
     vk::SurfaceFormatKHR surface_format;

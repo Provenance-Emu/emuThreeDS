@@ -2,7 +2,10 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-#include <limits>
+#include "common/alignment.h"
+#include "core/memory.h"
+#include "video_core/pica/pica_core.h"
+#include "video_core/rasterizer_accelerated.h"
 
 #define USE_GEOMETRY_CULLING 1
 
@@ -10,77 +13,97 @@
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
 #endif
-#include <cmath>
-#include "common/alignment.h"
-#include "core/memory.h"
-#include "video_core/pica_state.h"
-#include "video_core/rasterizer_accelerated.h"
-
-#if defined(__ARM_NEON) || defined(__aarch64__)
-#include <arm_neon.h>
-#endif
 
 namespace VideoCore {
 
-static Common::Vec4f ColorRGBA8(const u32 color) {
-    const auto rgba =
-        Common::Vec4u{color >> 0 & 0xFF, color >> 8 & 0xFF, color >> 16 & 0xFF, color >> 24 & 0xFF};
-    return rgba / 255.0f;
+using Pica::f24;
+
+RasterizerAccelerated::RasterizerAccelerated(Memory::MemorySystem& memory_, Pica::PicaCore& pica_)
+    : memory{memory_}, pica{pica_}, regs{pica.regs.internal} {
+    fs_uniform_block_data.lighting_lut_dirty.fill(true);
+#if USE_GEOMETRY_CULLING
+    // Initialize frustum planes for culling
+    // In a real implementation, these would be calculated from the view-projection matrix
+    // For now, we'll use a default frustum that's updated when needed
+    frustum_dirty = true;
+    camera_dirty = true;
+
+    // Initialize culling statistics
+    culling_stats.Reset();
+#endif
 }
 
-static Common::Vec3f LightColor(const Pica::LightingRegs::LightColor& color) {
-    return Common::Vec3u{color.r, color.g, color.b} / 255.0f;
-}
-
-RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::Shader::OutputVertex& v,
+RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::OutputVertex& v,
                                                       bool flip_quaternion) {
-#if defined(__ARM_NEON) && defined(__aarch64__)
-    // Optimized vertex conversion using NEON
-    // Convert position vector
-    position[0] = v.pos.x.ToFloat32();
-    position[1] = v.pos.y.ToFloat32();
-    position[2] = v.pos.z.ToFloat32();
-    position[3] = v.pos.w.ToFloat32();
+#if defined(ARCHITECTURE_ARM64) && defined(__ARM_NEON) || defined(__ARM_NEON__)
+    // Load position
+    const float32x4_t pos = {v.pos.x.ToFloat32(), v.pos.y.ToFloat32(), v.pos.z.ToFloat32(),
+                             v.pos.w.ToFloat32()};
+    vst1q_f32(&position[0], pos);
 
-    // Convert color vector
-    color[0] = v.color.x.ToFloat32();
-    color[1] = v.color.y.ToFloat32();
-    color[2] = v.color.z.ToFloat32();
-    color[3] = v.color.w.ToFloat32();
+    // Load color
+    const float32x4_t col = {v.color.x.ToFloat32(), v.color.y.ToFloat32(), v.color.z.ToFloat32(),
+                             v.color.w.ToFloat32()};
+    vst1q_f32(&color[0], col);
 
-    // Convert texture coordinates with NEON
-    float32x2_t tc0 = {v.tc0.x.ToFloat32(), v.tc0.y.ToFloat32()};
-    float32x2_t tc1 = {v.tc1.x.ToFloat32(), v.tc1.y.ToFloat32()};
-    float32x2_t tc2 = {v.tc2.x.ToFloat32(), v.tc2.y.ToFloat32()};
-
-    vst1_f32(tex_coord0.AsArray(), tc0);
-    vst1_f32(tex_coord1.AsArray(), tc1);
-    vst1_f32(tex_coord2.AsArray(), tc2);
-
+    // Load texture coordinates
+    const float32x2_t tc0 = {v.tc0.x.ToFloat32(), v.tc0.y.ToFloat32()};
+    const float32x2_t tc1 = {v.tc1.x.ToFloat32(), v.tc1.y.ToFloat32()};
+    const float32x2_t tc2 = {v.tc2.x.ToFloat32(), v.tc2.y.ToFloat32()};
+    vst1_f32(&tex_coord0[0], tc0);
+    vst1_f32(&tex_coord1[0], tc1);
+    vst1_f32(&tex_coord2[0], tc2);
     tex_coord0_w = v.tc0_w.ToFloat32();
 
-    // Convert quaternion with NEON
-    float32x4_t quat = {v.quat.x.ToFloat32(), v.quat.y.ToFloat32(),
-                        v.quat.z.ToFloat32(), v.quat.w.ToFloat32()};
-
-    // Handle quaternion flipping
+    // Load quaternion
+    float32x4_t quat = {v.quat.x.ToFloat32(), v.quat.y.ToFloat32(), v.quat.z.ToFloat32(),
+                        v.quat.w.ToFloat32()};
     if (flip_quaternion) {
-        // Negate quaternion in a single SIMD operation
-        float32x4_t neg_quat = vnegq_f32(quat);
-        vst1q_f32(normquat.AsArray(), neg_quat);
-    } else {
-        vst1q_f32(normquat.AsArray(), quat);
+        quat = vnegq_f32(quat);
     }
+    vst1q_f32(&normquat[0], quat);
 
-    // Convert view vector with NEON
-    float32x4_t view_vec = {v.view.x.ToFloat32(), v.view.y.ToFloat32(),
-                           v.view.z.ToFloat32(), 0.0f};
+    // Load view
+    const float32x4_t view_vec = {v.view.x.ToFloat32(), v.view.y.ToFloat32(), v.view.z.ToFloat32(),
+                                  0.0f};
+    vst1q_f32(&view[0], view_vec);
 
-    // Store only the first 3 components
-    vst1q_lane_f32(&view[0], view_vec, 0);
-    vst1q_lane_f32(&view[1], view_vec, 1);
-    vst1q_lane_f32(&view[2], view_vec, 2);
+#elif defined(ARCHITECTURE_X64) && defined(__SSE3__)
+    // Load position
+    __m128 pos = _mm_set_ps(v.pos.w.ToFloat32(), v.pos.z.ToFloat32(), v.pos.y.ToFloat32(),
+                            v.pos.x.ToFloat32());
+    _mm_store_ps(&position[0], pos);
+
+    // Load color
+    __m128 col = _mm_set_ps(v.color.w.ToFloat32(), v.color.z.ToFloat32(), v.color.y.ToFloat32(),
+                            v.color.x.ToFloat32());
+    _mm_store_ps(&color[0], col);
+
+    // Load texture coordinates
+    __m128 tc0_1 = _mm_set_ps(v.tc1.y.ToFloat32(), v.tc1.x.ToFloat32(), v.tc0.y.ToFloat32(),
+                              v.tc0.x.ToFloat32());
+    _mm_storel_pi((__m64*)&tex_coord0[0], tc0_1);
+    _mm_storeh_pi((__m64*)&tex_coord1[0], tc0_1);
+
+    __m128 tc2_w = _mm_set_ps(0.0f, v.tc0_w.ToFloat32(), v.tc2.y.ToFloat32(), v.tc2.x.ToFloat32());
+    _mm_storel_pi((__m64*)&tex_coord2[0], tc2_w);
+    tex_coord0_w = v.tc0_w.ToFloat32();
+
+    // Load quaternion
+    __m128 quat = _mm_set_ps(v.quat.w.ToFloat32(), v.quat.z.ToFloat32(), v.quat.y.ToFloat32(),
+                             v.quat.x.ToFloat32());
+    if (flip_quaternion) {
+        quat = _mm_xor_ps(quat, _mm_set1_ps(-0.0f));
+    }
+    _mm_store_ps(&normquat[0], quat);
+
+    // Load view
+    __m128 view_vec =
+        _mm_set_ps(0.0f, v.view.z.ToFloat32(), v.view.y.ToFloat32(), v.view.x.ToFloat32());
+    _mm_store_ps(&view[0], view_vec);
+
 #else
+    // Scalar fallback
     position[0] = v.pos.x.ToFloat32();
     position[1] = v.pos.y.ToFloat32();
     position[2] = v.pos.z.ToFloat32();
@@ -110,49 +133,8 @@ RasterizerAccelerated::HardwareVertex::HardwareVertex(const Pica::Shader::Output
 #endif
 }
 
-RasterizerAccelerated::RasterizerAccelerated(Memory::MemorySystem& memory_)
-    : memory{memory_}, regs{Pica::g_state.regs} {
-    uniform_block_data.lighting_lut_dirty.fill(true);
-#if USE_GEOMETRY_CULLING
-    // Initialize frustum planes for culling
-    // In a real implementation, these would be calculated from the view-projection matrix
-    // For now, we'll use a default frustum that's updated when needed
-    frustum_dirty = true;
-    camera_dirty = true;
-
-    // Initialize culling statistics
-    culling_stats.Reset();
-#endif
-}
-
-/**
- * This is a helper function to resolve an issue when interpolating opposite quaternions. See below
- * for a detailed description of this issue (yuriks):
- *
- * For any rotation, there are two quaternions Q, and -Q, that represent the same rotation. If you
- * interpolate two quaternions that are opposite, instead of going from one rotation to another
- * using the shortest path, you'll go around the longest path. You can test if two quaternions are
- * opposite by checking if Dot(Q1, Q2) < 0. In that case, you can flip either of them, therefore
- * making Dot(Q1, -Q2) positive.
- *
- * This solution corrects this issue per-vertex before passing the quaternions to OpenGL. This is
- * correct for most cases but can still rotate around the long way sometimes. An implementation
- * which did `lerp(lerp(Q1, Q2), Q3)` (with proper weighting), applying the dot product check
- * between each step would work for those cases at the cost of being more complex to implement.
- *
- * Fortunately however, the 3DS hardware happens to also use this exact same logic to work around
- * these issues, making this basic implementation actually more accurate to the hardware.
- */
-static bool AreQuaternionsOpposite(Common::Vec4<Pica::float24> qa, Common::Vec4<Pica::float24> qb) {
-    Common::Vec4f a{qa.x.ToFloat32(), qa.y.ToFloat32(), qa.z.ToFloat32(), qa.w.ToFloat32()};
-    Common::Vec4f b{qb.x.ToFloat32(), qb.y.ToFloat32(), qb.z.ToFloat32(), qb.w.ToFloat32()};
-
-    return (Common::Dot(a, b) < 0.f);
-}
-
-void RasterizerAccelerated::AddTriangle(const Pica::Shader::OutputVertex& v0,
-                                         const Pica::Shader::OutputVertex& v1,
-                                         const Pica::Shader::OutputVertex& v2) {
+void RasterizerAccelerated::AddTriangle(const Pica::OutputVertex& v0, const Pica::OutputVertex& v1,
+                                        const Pica::OutputVertex& v2) {
 #if USE_GEOMETRY_CULLING
     // Update culling statistics
     culling_state.stats.triangles_drawn++;
@@ -348,7 +330,7 @@ void RasterizerAccelerated::SyncEntireState() {
     SyncFixedState();
 
     // Sync uniforms
-    SyncClipCoef();
+    SyncClipPlane();
     SyncDepthScale();
     SyncDepthOffset();
     SyncAlphaTest();
@@ -357,7 +339,6 @@ void RasterizerAccelerated::SyncEntireState() {
     for (std::size_t index = 0; index < tev_stages.size(); ++index) {
         SyncTevConstColor(index, tev_stages[index]);
     }
-
 #if USE_GEOMETRY_CULLING
 #if defined(__ARM_NEON) || defined(__aarch64__)
     // Extract view and projection matrices from the uniform state
@@ -680,7 +661,7 @@ void RasterizerAccelerated::SyncEntireState() {
 #endif // USE_NEON
 #endif // USE_GEOMETRY_CULLING
     SyncGlobalAmbient();
-    for (unsigned light_index = 0; light_index < 8; light_index++) {
+    for (u32 light_index = 0; light_index < 8; light_index++) {
         SyncLightSpecular0(light_index);
         SyncLightSpecular1(light_index);
         SyncLightDiffuse(light_index);
@@ -696,7 +677,7 @@ void RasterizerAccelerated::SyncEntireState() {
     SyncShadowBias();
     SyncShadowTextureBias();
 
-    for (unsigned tex_index = 0; tex_index < 3; tex_index++) {
+    for (u32 tex_index = 0; tex_index < 3; tex_index++) {
         SyncTextureLodBias(tex_index);
     }
 #if USE_GEOMETRY_CULLING
@@ -746,7 +727,7 @@ void RasterizerAccelerated::NotifyPicaRegisterChanged(u32 id) {
     case PICA_REG_INDEX(texturing.fog_lut_data[5]):
     case PICA_REG_INDEX(texturing.fog_lut_data[6]):
     case PICA_REG_INDEX(texturing.fog_lut_data[7]):
-        uniform_block_data.fog_lut_dirty = true;
+        fs_uniform_block_data.fog_lut_dirty = true;
         break;
 
     // ProcTex state
@@ -774,21 +755,26 @@ void RasterizerAccelerated::NotifyPicaRegisterChanged(u32 id) {
         using Pica::TexturingRegs;
         switch (regs.texturing.proctex_lut_config.ref_table.Value()) {
         case TexturingRegs::ProcTexLutTable::Noise:
-            uniform_block_data.proctex_noise_lut_dirty = true;
+            fs_uniform_block_data.proctex_noise_lut_dirty = true;
             break;
         case TexturingRegs::ProcTexLutTable::ColorMap:
-            uniform_block_data.proctex_color_map_dirty = true;
+            fs_uniform_block_data.proctex_color_map_dirty = true;
             break;
         case TexturingRegs::ProcTexLutTable::AlphaMap:
-            uniform_block_data.proctex_alpha_map_dirty = true;
+            fs_uniform_block_data.proctex_alpha_map_dirty = true;
             break;
         case TexturingRegs::ProcTexLutTable::Color:
-            uniform_block_data.proctex_lut_dirty = true;
+            fs_uniform_block_data.proctex_lut_dirty = true;
             break;
         case TexturingRegs::ProcTexLutTable::ColorDiff:
-            uniform_block_data.proctex_diff_lut_dirty = true;
+            fs_uniform_block_data.proctex_diff_lut_dirty = true;
             break;
         }
+        break;
+
+    // Fragment operation mode
+    case PICA_REG_INDEX(framebuffer.output_merger.fragment_operation_mode):
+        shader_dirty = true;
         break;
 
     // Alpha test
@@ -1130,8 +1116,8 @@ void RasterizerAccelerated::NotifyPicaRegisterChanged(u32 id) {
     case PICA_REG_INDEX(lighting.lut_data[6]):
     case PICA_REG_INDEX(lighting.lut_data[7]): {
         const auto& lut_config = regs.lighting.lut_config;
-        uniform_block_data.lighting_lut_dirty[lut_config.type] = true;
-        uniform_block_data.lighting_lut_dirty_any = true;
+        fs_uniform_block_data.lighting_lut_dirty[lut_config.type] = true;
+        fs_uniform_block_data.lighting_lut_dirty_any = true;
         break;
     }
 
@@ -1146,36 +1132,46 @@ void RasterizerAccelerated::NotifyPicaRegisterChanged(u32 id) {
         SyncTextureLodBias(2);
         break;
 
+    // Texture borders
+    case PICA_REG_INDEX(texturing.texture0.border_color):
+        SyncTextureBorderColor(0);
+        break;
+    case PICA_REG_INDEX(texturing.texture1.border_color):
+        SyncTextureBorderColor(1);
+        break;
+    case PICA_REG_INDEX(texturing.texture2.border_color):
+        SyncTextureBorderColor(2);
+        break;
+
     // Clipping plane
+    case PICA_REG_INDEX(rasterizer.clip_enable):
     case PICA_REG_INDEX(rasterizer.clip_coef[0]):
     case PICA_REG_INDEX(rasterizer.clip_coef[1]):
     case PICA_REG_INDEX(rasterizer.clip_coef[2]):
     case PICA_REG_INDEX(rasterizer.clip_coef[3]):
-        SyncClipCoef();
+        SyncClipPlane();
         break;
-
-    default:
-        // Forward registers that map to fixed function API features to the video backend
-        NotifyFixedFunctionPicaRegisterChanged(id);
     }
+
+    // Forward registers that map to fixed function API features to the video backend
+    NotifyFixedFunctionPicaRegisterChanged(id);
 }
 
 void RasterizerAccelerated::SyncDepthScale() {
-    float depth_scale = Pica::float24::FromRaw(regs.rasterizer.viewport_depth_range).ToFloat32();
+    const f32 depth_scale = f24::FromRaw(regs.rasterizer.viewport_depth_range).ToFloat32();
 
-    if (depth_scale != uniform_block_data.data.depth_scale) {
-        uniform_block_data.data.depth_scale = depth_scale;
-        uniform_block_data.dirty = true;
+    if (depth_scale != fs_uniform_block_data.data.depth_scale) {
+        fs_uniform_block_data.data.depth_scale = depth_scale;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncDepthOffset() {
-    float depth_offset =
-        Pica::float24::FromRaw(regs.rasterizer.viewport_depth_near_plane).ToFloat32();
+    const f32 depth_offset = f24::FromRaw(regs.rasterizer.viewport_depth_near_plane).ToFloat32();
 
-    if (depth_offset != uniform_block_data.data.depth_offset) {
-        uniform_block_data.data.depth_offset = depth_offset;
-        uniform_block_data.dirty = true;
+    if (depth_offset != fs_uniform_block_data.data.depth_offset) {
+        fs_uniform_block_data.data.depth_offset = depth_offset;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
@@ -1187,124 +1183,124 @@ void RasterizerAccelerated::SyncFogColor() {
         fog_color_regs.b.Value() / 255.0f,
     };
 
-    if (fog_color != uniform_block_data.data.fog_color) {
-        uniform_block_data.data.fog_color = fog_color;
-        uniform_block_data.dirty = true;
+    if (fog_color != fs_uniform_block_data.data.fog_color) {
+        fs_uniform_block_data.data.fog_color = fog_color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncProcTexNoise() {
     const Common::Vec2f proctex_noise_f = {
-        Pica::float16::FromRaw(regs.texturing.proctex_noise_frequency.u).ToFloat32(),
-        Pica::float16::FromRaw(regs.texturing.proctex_noise_frequency.v).ToFloat32(),
+        Pica::f16::FromRaw(regs.texturing.proctex_noise_frequency.u).ToFloat32(),
+        Pica::f16::FromRaw(regs.texturing.proctex_noise_frequency.v).ToFloat32(),
     };
     const Common::Vec2f proctex_noise_a = {
         regs.texturing.proctex_noise_u.amplitude / 4095.0f,
         regs.texturing.proctex_noise_v.amplitude / 4095.0f,
     };
     const Common::Vec2f proctex_noise_p = {
-        Pica::float16::FromRaw(regs.texturing.proctex_noise_u.phase).ToFloat32(),
-        Pica::float16::FromRaw(regs.texturing.proctex_noise_v.phase).ToFloat32(),
+        Pica::f16::FromRaw(regs.texturing.proctex_noise_u.phase).ToFloat32(),
+        Pica::f16::FromRaw(regs.texturing.proctex_noise_v.phase).ToFloat32(),
     };
 
-    if (proctex_noise_f != uniform_block_data.data.proctex_noise_f ||
-        proctex_noise_a != uniform_block_data.data.proctex_noise_a ||
-        proctex_noise_p != uniform_block_data.data.proctex_noise_p) {
-        uniform_block_data.data.proctex_noise_f = proctex_noise_f;
-        uniform_block_data.data.proctex_noise_a = proctex_noise_a;
-        uniform_block_data.data.proctex_noise_p = proctex_noise_p;
-        uniform_block_data.dirty = true;
+    if (proctex_noise_f != fs_uniform_block_data.data.proctex_noise_f ||
+        proctex_noise_a != fs_uniform_block_data.data.proctex_noise_a ||
+        proctex_noise_p != fs_uniform_block_data.data.proctex_noise_p) {
+        fs_uniform_block_data.data.proctex_noise_f = proctex_noise_f;
+        fs_uniform_block_data.data.proctex_noise_a = proctex_noise_a;
+        fs_uniform_block_data.data.proctex_noise_p = proctex_noise_p;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncProcTexBias() {
-    const auto proctex_bias = Pica::float16::FromRaw(regs.texturing.proctex.bias_low |
-                                                     (regs.texturing.proctex_lut.bias_high << 8))
+    const auto proctex_bias = Pica::f16::FromRaw(regs.texturing.proctex.bias_low |
+                                                 (regs.texturing.proctex_lut.bias_high << 8))
                                   .ToFloat32();
-    if (proctex_bias != uniform_block_data.data.proctex_bias) {
-        uniform_block_data.data.proctex_bias = proctex_bias;
-        uniform_block_data.dirty = true;
+    if (proctex_bias != fs_uniform_block_data.data.proctex_bias) {
+        fs_uniform_block_data.data.proctex_bias = proctex_bias;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncAlphaTest() {
     if (regs.framebuffer.output_merger.alpha_test.ref !=
-        static_cast<u32>(uniform_block_data.data.alphatest_ref)) {
-        uniform_block_data.data.alphatest_ref = regs.framebuffer.output_merger.alpha_test.ref;
-        uniform_block_data.dirty = true;
+        static_cast<u32>(fs_uniform_block_data.data.alphatest_ref)) {
+        fs_uniform_block_data.data.alphatest_ref = regs.framebuffer.output_merger.alpha_test.ref;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncCombinerColor() {
-    auto combiner_color = ColorRGBA8(regs.texturing.tev_combiner_buffer_color.raw);
-    if (combiner_color != uniform_block_data.data.tev_combiner_buffer_color) {
-        uniform_block_data.data.tev_combiner_buffer_color = combiner_color;
-        uniform_block_data.dirty = true;
+    const auto combiner_color = ColorRGBA8(regs.texturing.tev_combiner_buffer_color.raw);
+    if (combiner_color != fs_uniform_block_data.data.tev_combiner_buffer_color) {
+        fs_uniform_block_data.data.tev_combiner_buffer_color = combiner_color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncTevConstColor(
-    std::size_t stage_index, const Pica::TexturingRegs::TevStageConfig& tev_stage) {
+    const std::size_t stage_index, const Pica::TexturingRegs::TevStageConfig& tev_stage) {
     const auto const_color = ColorRGBA8(tev_stage.const_color);
 
-    if (const_color == uniform_block_data.data.const_color[stage_index]) {
+    if (const_color == fs_uniform_block_data.data.const_color[stage_index]) {
         return;
     }
 
-    uniform_block_data.data.const_color[stage_index] = const_color;
-    uniform_block_data.dirty = true;
+    fs_uniform_block_data.data.const_color[stage_index] = const_color;
+    fs_uniform_block_data.dirty = true;
 }
 
 void RasterizerAccelerated::SyncGlobalAmbient() {
-    auto color = LightColor(regs.lighting.global_ambient);
-    if (color != uniform_block_data.data.lighting_global_ambient) {
-        uniform_block_data.data.lighting_global_ambient = color;
-        uniform_block_data.dirty = true;
+    const auto color = LightColor(regs.lighting.global_ambient);
+    if (color != fs_uniform_block_data.data.lighting_global_ambient) {
+        fs_uniform_block_data.data.lighting_global_ambient = color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightSpecular0(int light_index) {
-    auto color = LightColor(regs.lighting.light[light_index].specular_0);
-    if (color != uniform_block_data.data.light_src[light_index].specular_0) {
-        uniform_block_data.data.light_src[light_index].specular_0 = color;
-        uniform_block_data.dirty = true;
+    const auto color = LightColor(regs.lighting.light[light_index].specular_0);
+    if (color != fs_uniform_block_data.data.light_src[light_index].specular_0) {
+        fs_uniform_block_data.data.light_src[light_index].specular_0 = color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightSpecular1(int light_index) {
-    auto color = LightColor(regs.lighting.light[light_index].specular_1);
-    if (color != uniform_block_data.data.light_src[light_index].specular_1) {
-        uniform_block_data.data.light_src[light_index].specular_1 = color;
-        uniform_block_data.dirty = true;
+    const auto color = LightColor(regs.lighting.light[light_index].specular_1);
+    if (color != fs_uniform_block_data.data.light_src[light_index].specular_1) {
+        fs_uniform_block_data.data.light_src[light_index].specular_1 = color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightDiffuse(int light_index) {
-    auto color = LightColor(regs.lighting.light[light_index].diffuse);
-    if (color != uniform_block_data.data.light_src[light_index].diffuse) {
-        uniform_block_data.data.light_src[light_index].diffuse = color;
-        uniform_block_data.dirty = true;
+    const auto color = LightColor(regs.lighting.light[light_index].diffuse);
+    if (color != fs_uniform_block_data.data.light_src[light_index].diffuse) {
+        fs_uniform_block_data.data.light_src[light_index].diffuse = color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightAmbient(int light_index) {
-    auto color = LightColor(regs.lighting.light[light_index].ambient);
-    if (color != uniform_block_data.data.light_src[light_index].ambient) {
-        uniform_block_data.data.light_src[light_index].ambient = color;
-        uniform_block_data.dirty = true;
+    const auto color = LightColor(regs.lighting.light[light_index].ambient);
+    if (color != fs_uniform_block_data.data.light_src[light_index].ambient) {
+        fs_uniform_block_data.data.light_src[light_index].ambient = color;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightPosition(int light_index) {
     const Common::Vec3f position = {
-        Pica::float16::FromRaw(regs.lighting.light[light_index].x).ToFloat32(),
-        Pica::float16::FromRaw(regs.lighting.light[light_index].y).ToFloat32(),
-        Pica::float16::FromRaw(regs.lighting.light[light_index].z).ToFloat32(),
+        Pica::f16::FromRaw(regs.lighting.light[light_index].x).ToFloat32(),
+        Pica::f16::FromRaw(regs.lighting.light[light_index].y).ToFloat32(),
+        Pica::f16::FromRaw(regs.lighting.light[light_index].z).ToFloat32(),
     };
 
-    if (position != uniform_block_data.data.light_src[light_index].position) {
-        uniform_block_data.data.light_src[light_index].position = position;
-        uniform_block_data.dirty = true;
+    if (position != fs_uniform_block_data.data.light_src[light_index].position) {
+        fs_uniform_block_data.data.light_src[light_index].position = position;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
@@ -1313,69 +1309,82 @@ void RasterizerAccelerated::SyncLightSpotDirection(int light_index) {
     const auto spot_direction =
         Common::Vec3f{light.spot_x / 2047.0f, light.spot_y / 2047.0f, light.spot_z / 2047.0f};
 
-    if (spot_direction != uniform_block_data.data.light_src[light_index].spot_direction) {
-        uniform_block_data.data.light_src[light_index].spot_direction = spot_direction;
-        uniform_block_data.dirty = true;
+    if (spot_direction != fs_uniform_block_data.data.light_src[light_index].spot_direction) {
+        fs_uniform_block_data.data.light_src[light_index].spot_direction = spot_direction;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightDistanceAttenuationBias(int light_index) {
-    float dist_atten_bias =
-        Pica::float20::FromRaw(regs.lighting.light[light_index].dist_atten_bias).ToFloat32();
+    const f32 dist_atten_bias =
+        Pica::f20::FromRaw(regs.lighting.light[light_index].dist_atten_bias).ToFloat32();
 
-    if (dist_atten_bias != uniform_block_data.data.light_src[light_index].dist_atten_bias) {
-        uniform_block_data.data.light_src[light_index].dist_atten_bias = dist_atten_bias;
-        uniform_block_data.dirty = true;
+    if (dist_atten_bias != fs_uniform_block_data.data.light_src[light_index].dist_atten_bias) {
+        fs_uniform_block_data.data.light_src[light_index].dist_atten_bias = dist_atten_bias;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncLightDistanceAttenuationScale(int light_index) {
-    float dist_atten_scale =
-        Pica::float20::FromRaw(regs.lighting.light[light_index].dist_atten_scale).ToFloat32();
+    const f32 dist_atten_scale =
+        Pica::f20::FromRaw(regs.lighting.light[light_index].dist_atten_scale).ToFloat32();
 
-    if (dist_atten_scale != uniform_block_data.data.light_src[light_index].dist_atten_scale) {
-        uniform_block_data.data.light_src[light_index].dist_atten_scale = dist_atten_scale;
-        uniform_block_data.dirty = true;
+    if (dist_atten_scale != fs_uniform_block_data.data.light_src[light_index].dist_atten_scale) {
+        fs_uniform_block_data.data.light_src[light_index].dist_atten_scale = dist_atten_scale;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncShadowBias() {
     const auto& shadow = regs.framebuffer.shadow;
-    float constant = Pica::float16::FromRaw(shadow.constant).ToFloat32();
-    float linear = Pica::float16::FromRaw(shadow.linear).ToFloat32();
+    const f32 constant = Pica::f16::FromRaw(shadow.constant).ToFloat32();
+    const f32 linear = Pica::f16::FromRaw(shadow.linear).ToFloat32();
 
-    if (constant != uniform_block_data.data.shadow_bias_constant ||
-        linear != uniform_block_data.data.shadow_bias_linear) {
-        uniform_block_data.data.shadow_bias_constant = constant;
-        uniform_block_data.data.shadow_bias_linear = linear;
-        uniform_block_data.dirty = true;
+    if (constant != fs_uniform_block_data.data.shadow_bias_constant ||
+        linear != fs_uniform_block_data.data.shadow_bias_linear) {
+        fs_uniform_block_data.data.shadow_bias_constant = constant;
+        fs_uniform_block_data.data.shadow_bias_linear = linear;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncShadowTextureBias() {
-    int bias = regs.texturing.shadow.bias << 1;
-    if (bias != uniform_block_data.data.shadow_texture_bias) {
-        uniform_block_data.data.shadow_texture_bias = bias;
-        uniform_block_data.dirty = true;
+    const s32 bias = regs.texturing.shadow.bias << 1;
+    if (bias != fs_uniform_block_data.data.shadow_texture_bias) {
+        fs_uniform_block_data.data.shadow_texture_bias = bias;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
 void RasterizerAccelerated::SyncTextureLodBias(int tex_index) {
     const auto pica_textures = regs.texturing.GetTextures();
-    const float bias = pica_textures[tex_index].config.lod.bias / 256.0f;
-    if (bias != uniform_block_data.data.tex_lod_bias[tex_index]) {
-        uniform_block_data.data.tex_lod_bias[tex_index] = bias;
-        uniform_block_data.dirty = true;
+    const f32 bias = pica_textures[tex_index].config.lod.bias / 256.0f;
+    if (bias != fs_uniform_block_data.data.tex_lod_bias[tex_index]) {
+        fs_uniform_block_data.data.tex_lod_bias[tex_index] = bias;
+        fs_uniform_block_data.dirty = true;
     }
 }
 
-void RasterizerAccelerated::SyncClipCoef() {
+void RasterizerAccelerated::SyncTextureBorderColor(int tex_index) {
+    const auto pica_textures = regs.texturing.GetTextures();
+    const auto params = pica_textures[tex_index].config;
+    const Common::Vec4f border_color = ColorRGBA8(params.border_color.raw);
+    if (border_color != fs_uniform_block_data.data.tex_border_color[tex_index]) {
+        fs_uniform_block_data.data.tex_border_color[tex_index] = border_color;
+        fs_uniform_block_data.dirty = true;
+    }
+}
+
+void RasterizerAccelerated::SyncClipPlane() {
+    const u32 enable_clip1 = regs.rasterizer.clip_enable != 0;
     const auto raw_clip_coef = regs.rasterizer.GetClipCoef();
     const Common::Vec4f new_clip_coef = {raw_clip_coef.x.ToFloat32(), raw_clip_coef.y.ToFloat32(),
                                          raw_clip_coef.z.ToFloat32(), raw_clip_coef.w.ToFloat32()};
-    if (new_clip_coef != uniform_block_data.data.clip_coef) {
-        uniform_block_data.data.clip_coef = new_clip_coef;
-        uniform_block_data.dirty = true;
+    if (enable_clip1 != vs_uniform_block_data.data.enable_clip1 ||
+        new_clip_coef != vs_uniform_block_data.data.clip_coef) {
+        vs_uniform_block_data.data.enable_clip1 = enable_clip1;
+        vs_uniform_block_data.data.clip_coef = new_clip_coef;
+        vs_uniform_block_data.dirty = true;
     }
 }
 
