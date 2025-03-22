@@ -221,7 +221,10 @@ inline vk::PrimitiveTopology PrimitiveTopology(Pica::PipelineRegs::TriangleTopol
         return vk::PrimitiveTopology::eTriangleList;
     case Pica::PipelineRegs::TriangleTopology::Strip:
         return vk::PrimitiveTopology::eTriangleStrip;
+    default:
+        UNREACHABLE_MSG("Unknown triangle topology {}", topology);
     }
+    return vk::PrimitiveTopology::eTriangleList;
 }
 
 inline vk::CullModeFlags CullMode(Pica::RasterizerRegs::CullMode mode) {
@@ -231,7 +234,10 @@ inline vk::CullModeFlags CullMode(Pica::RasterizerRegs::CullMode mode) {
     case Pica::RasterizerRegs::CullMode::KeepClockWise:
     case Pica::RasterizerRegs::CullMode::KeepCounterClockWise:
         return vk::CullModeFlagBits::eBack;
+    default:
+        UNREACHABLE_MSG("Unknown cull mode {}", mode);
     }
+    return vk::CullModeFlagBits::eNone;
 }
 
 inline vk::FrontFace FrontFace(Pica::RasterizerRegs::CullMode mode) {
@@ -241,7 +247,10 @@ inline vk::FrontFace FrontFace(Pica::RasterizerRegs::CullMode mode) {
         return vk::FrontFace::eCounterClockwise;
     case Pica::RasterizerRegs::CullMode::KeepCounterClockWise:
         return vk::FrontFace::eClockwise;
+    default:
+        UNREACHABLE_MSG("Unknown cull mode {}", mode);
     }
+    return vk::FrontFace::eClockwise;
 }
 
 inline Common::Vec4f ColorRGBA8(const u32 color) {
