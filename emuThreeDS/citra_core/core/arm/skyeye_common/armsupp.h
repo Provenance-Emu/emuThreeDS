@@ -15,11 +15,12 @@
 // Use ARM NEON intrinsics for ARM64 platforms
 #if defined(__ARM_NEON) || defined(__aarch64__)
 #include <arm_neon.h>
+#define ARM_SUPP_NEON 1
 #endif
 
 // Unsigned sum of absolute difference
 inline u8 ARMul_UnsignedAbsoluteDifference(u8 left, u8 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for absolute difference
     uint8x8_t v_left = vdup_n_u8(left);
     uint8x8_t v_right = vdup_n_u8(right);
@@ -37,7 +38,8 @@ inline u8 ARMul_UnsignedAbsoluteDifference(u8 left, u8 right) {
 // Add with carry, indicates if a carry-out or signed overflow occurred.
 inline u32 AddWithCarry(u32 left, u32 right, u32 carry_in, bool* carry_out_occurred,
                  bool* overflow_occurred) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
+#if 0 // This arm code is broken, sometimes you get flipped textures
     u32 result;
     u32 carry_out = 0;
     u32 overflow = 0;
@@ -79,6 +81,58 @@ inline u32 AddWithCarry(u32 left, u32 right, u32 carry_in, bool* carry_out_occur
     
     return result;
 #else
+    // Use ARM intrinsics for more efficient addition with carry
+    uint32x2_t v_left = vdup_n_u32(left);
+    uint32x2_t v_right = vdup_n_u32(right);
+    
+    // First add left and right
+    uint32x2_t v_result = vadd_u32(v_left, v_right);
+    
+    // Check for carry from first addition
+    uint32x2_t v_carry = vclt_u32(v_result, v_left);  // result < left means carry occurred
+    uint32_t first_carry = vget_lane_u32(v_carry, 0);
+    
+    // Add carry_in if needed
+    if (carry_in) {
+        uint32x2_t v_carry_in = vdup_n_u32(1);
+        uint32x2_t v_prev_result = v_result;
+        v_result = vadd_u32(v_result, v_carry_in);
+        
+        // Check for additional carry from adding carry_in
+        uint32x2_t v_second_carry = vclt_u32(v_result, v_prev_result);
+        uint32_t second_carry = vget_lane_u32(v_second_carry, 0);
+        
+        // Combine carries
+        first_carry = first_carry | second_carry;
+    }
+    
+    uint32_t result = vget_lane_u32(v_result, 0);
+    
+    if (carry_out_occurred) [[unlikely]]
+        *carry_out_occurred = (first_carry != 0);
+    
+    if (overflow_occurred) [[unlikely]] {
+        // Check for signed overflow: result has different sign than both inputs
+        // when inputs have the same sign
+        int32x2_t v_left_s = vreinterpret_s32_u32(v_left);
+        int32x2_t v_right_s = vreinterpret_s32_u32(v_right);
+        int32x2_t v_result_s = vreinterpret_s32_u32(v_result);
+        
+        // Check if left and right have the same sign
+        uint32x2_t v_same_sign = vceq_s32(vshr_n_s32(v_left_s, 31), vshr_n_s32(v_right_s, 31));
+        
+        // Check if result has different sign than left
+        uint32x2_t v_diff_sign = vceq_s32(vshr_n_s32(v_left_s, 31), vshr_n_s32(v_result_s, 31));
+        v_diff_sign = vmvn_u32(v_diff_sign);  // Invert to get different sign
+        
+        // Overflow occurred if inputs have same sign but result has different sign
+        uint32x2_t v_overflow = vand_u32(v_same_sign, v_diff_sign);
+        *overflow_occurred = vget_lane_u32(v_overflow, 0) != 0;
+    }
+    
+    return result;
+#endif
+#else
     // Fallback for non-ARM platforms
     u64 unsigned_sum = (u64)left + (u64)right + (u64)carry_in;
     s64 signed_sum = (s64)(s32)left + (s64)(s32)right + (s64)carry_in;
@@ -115,7 +169,7 @@ inline bool ARMul_AddOverflowQ(u32 a, u32 b) {
 
 // 8-bit signed saturated addition
 inline u8 ARMul_SignedSaturatedAdd8(u8 left, u8 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for signed saturated addition
     // We use NEON intrinsics as they're more portable across ARM compilers
     int8x8_t v_left = vdup_n_s8((s8)left);
@@ -139,7 +193,7 @@ inline u8 ARMul_SignedSaturatedAdd8(u8 left, u8 right) {
 
 // 8-bit signed saturated subtraction
 inline u8 ARMul_SignedSaturatedSub8(u8 left, u8 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for signed saturated subtraction
     // We use NEON intrinsics as they're more portable across ARM compilers
     int8x8_t v_left = vdup_n_s8((s8)left);
@@ -163,7 +217,7 @@ inline u8 ARMul_SignedSaturatedSub8(u8 left, u8 right) {
 
 // 16-bit signed saturated addition
 inline u16 ARMul_SignedSaturatedAdd16(u16 left, u16 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for signed saturated addition
     // We use NEON intrinsics as they're more portable across ARM compilers
     int16x4_t v_left = vdup_n_s16((s16)left);
@@ -187,7 +241,7 @@ inline u16 ARMul_SignedSaturatedAdd16(u16 left, u16 right) {
 
 // 16-bit signed saturated subtraction
 inline u16 ARMul_SignedSaturatedSub16(u16 left, u16 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for signed saturated subtraction
     // We use NEON intrinsics as they're more portable across ARM compilers
     int16x4_t v_left = vdup_n_s16((s16)left);
@@ -211,7 +265,7 @@ inline u16 ARMul_SignedSaturatedSub16(u16 left, u16 right) {
 
 // 8-bit unsigned saturated addition
 inline u8 ARMul_UnsignedSaturatedAdd8(u8 left, u8 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for unsigned saturated addition
     // We use NEON intrinsics as they're more portable across ARM compilers
     uint8x8_t v_left = vdup_n_u8(left);
@@ -231,7 +285,7 @@ inline u8 ARMul_UnsignedSaturatedAdd8(u8 left, u8 right) {
 
 // 16-bit unsigned saturated addition
 inline u16 ARMul_UnsignedSaturatedAdd16(u16 left, u16 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for unsigned saturated addition
     // We use NEON intrinsics as they're more portable across ARM compilers
     uint16x4_t v_left = vdup_n_u16(left);
@@ -251,7 +305,7 @@ inline u16 ARMul_UnsignedSaturatedAdd16(u16 left, u16 right) {
 
 // 8-bit unsigned saturated subtraction
 inline u8 ARMul_UnsignedSaturatedSub8(u8 left, u8 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for unsigned saturated subtraction
     // We use NEON intrinsics as they're more portable across ARM compilers
     uint8x8_t v_left = vdup_n_u8(left);
@@ -269,7 +323,7 @@ inline u8 ARMul_UnsignedSaturatedSub8(u8 left, u8 right) {
 
 // 16-bit unsigned saturated subtraction
 inline u16 ARMul_UnsignedSaturatedSub16(u16 left, u16 right) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use ARM NEON intrinsics for unsigned saturated subtraction
     // We use NEON intrinsics as they're more portable across ARM compilers
     uint16x4_t v_left = vdup_n_u16(left);
@@ -287,7 +341,7 @@ inline u16 ARMul_UnsignedSaturatedSub16(u16 left, u16 right) {
 
 // Signed saturation.
 inline u32 ARMul_SignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use a more portable approach with NEON intrinsics
     const u32 max = (1 << shift) - 1;
     const s32 min = -(1 << shift);
@@ -328,7 +382,7 @@ inline u32 ARMul_SignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
 
 // Unsigned saturation
 inline u32 ARMul_UnsignedSatQ(s32 value, u8 shift, bool* saturation_occurred) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if ARM_SUPP_NEON
     // Use a more portable approach
     const u32 max = (1 << shift) - 1;
     u32 result;
