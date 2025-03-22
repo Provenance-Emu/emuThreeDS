@@ -370,7 +370,7 @@ void SOC_U::CleanupSockets() {
 }
 
 void SOC_U::Socket(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x02, 3, 2);
+    IPC::RequestParser rp(ctx);
     u32 domain = rp.Pop<u32>(); // Address family
     u32 type = rp.Pop<u32>();
     u32 protocol = rp.Pop<u32>();
@@ -411,7 +411,7 @@ void SOC_U::Socket(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Bind(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x05, 2, 4);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -439,7 +439,7 @@ void SOC_U::Bind(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Fcntl(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x13, 3, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -509,7 +509,7 @@ void SOC_U::Fcntl(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Listen(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x03, 2, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -533,7 +533,7 @@ void SOC_U::Accept(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Calling this function on a blocking socket will block the emu thread,
     // preventing graceful shutdown when closing the emulator, this can be fixed by always
     // performing nonblocking operations and spinlock until the data is available
-    IPC::RequestParser rp(ctx, 0x04, 2, 2);
+    IPC::RequestParser rp(ctx);
     const auto socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -569,7 +569,7 @@ void SOC_U::Accept(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetHostId(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x16, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     char name[128];
     gethostname(name, sizeof(name));
@@ -588,7 +588,7 @@ void SOC_U::GetHostId(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Close(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0B, 1, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -615,7 +615,7 @@ void SOC_U::Close(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::SendTo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0A, 4, 6);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -653,7 +653,7 @@ void SOC_U::SendTo(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::RecvFromOther(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x7, 4, 4);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -705,7 +705,7 @@ void SOC_U::RecvFrom(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Calling this function on a blocking socket will block the emu thread,
     // preventing graceful shutdown when closing the emulator, this can be fixed by always
     // performing nonblocking operations and spinlock until the data is available
-    IPC::RequestParser rp(ctx, 0x08, 4, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -759,7 +759,7 @@ void SOC_U::RecvFrom(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Poll(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x14, 2, 4);
+    IPC::RequestParser rp(ctx);
     u32 nfds = rp.Pop<u32>();
     s32 timeout = rp.Pop<s32>();
     rp.PopPID();
@@ -802,7 +802,7 @@ void SOC_U::Poll(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetSockName(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x17, 2, 2);
+    IPC::RequestParser rp(ctx);
     const auto socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -831,7 +831,7 @@ void SOC_U::GetSockName(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::Shutdown(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0C, 2, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -851,7 +851,7 @@ void SOC_U::Shutdown(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetPeerName(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x18, 2, 2);
+    IPC::RequestParser rp(ctx);
     const auto socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -885,7 +885,7 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Calling this function on a blocking socket will block the emu thread,
     // preventing graceful shutdown when closing the emulator, this can be fixed by always
     // performing nonblocking operations and spinlock until the data is available
-    IPC::RequestParser rp(ctx, 0x06, 2, 4);
+    IPC::RequestParser rp(ctx);
     const auto socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -914,7 +914,7 @@ void SOC_U::Connect(Kernel::HLERequestContext& ctx) {
 
 void SOC_U::InitializeSockets(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Implement
-    IPC::RequestParser rp(ctx, 0x01, 1, 4);
+    IPC::RequestParser rp(ctx);
     [[maybe_unused]] const auto memory_block_size = rp.Pop<u32>();
     rp.PopPID();
     rp.PopObject<Kernel::SharedMemory>();
@@ -925,7 +925,7 @@ void SOC_U::InitializeSockets(Kernel::HLERequestContext& ctx) {
 
 void SOC_U::ShutdownSockets(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Implement
-    IPC::RequestParser rp(ctx, 0x19, 0, 0);
+    IPC::RequestParser rp(ctx);
     CleanupSockets();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -933,7 +933,7 @@ void SOC_U::ShutdownSockets(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetSockOpt(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 4, 2);
+    IPC::RequestParser rp(ctx);
     u32 socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -972,7 +972,7 @@ void SOC_U::GetSockOpt(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::SetSockOpt(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x12, 4, 4);
+    IPC::RequestParser rp(ctx);
     const auto socket_handle = rp.Pop<u32>();
     auto fd_info = open_sockets.find(socket_handle);
     if (fd_info == open_sockets.end()) {
@@ -1009,7 +1009,7 @@ void SOC_U::SetSockOpt(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetAddrInfoImpl(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0F, 4, 6);
+    IPC::RequestParser rp(ctx);
     u32 node_length = rp.Pop<u32>();
     u32 service_length = rp.Pop<u32>();
     u32 hints_size = rp.Pop<u32>();
@@ -1070,7 +1070,7 @@ void SOC_U::GetAddrInfoImpl(Kernel::HLERequestContext& ctx) {
 }
 
 void SOC_U::GetNameInfoImpl(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x10, 4, 2);
+    IPC::RequestParser rp(ctx);
     u32 socklen = rp.Pop<u32>();
     u32 hostlen = rp.Pop<u32>();
     u32 servlen = rp.Pop<u32>();

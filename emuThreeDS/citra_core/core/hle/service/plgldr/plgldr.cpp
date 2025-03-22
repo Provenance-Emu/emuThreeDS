@@ -156,7 +156,7 @@ void PLG_LDR::OnMemoryChanged(Kernel::Process& process, Kernel::KernelSystem& ke
 }
 
 void PLG_LDR::IsEnabled(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 2, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -164,7 +164,7 @@ void PLG_LDR::IsEnabled(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::SetEnabled(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 3, 1, 0);
+    IPC::RequestParser rp(ctx);
     bool enabled = rp.Pop<u32>() == 1;
 
     bool can_change = enabled == plgldr_context.is_enabled || allow_game_change;
@@ -177,7 +177,7 @@ void PLG_LDR::SetEnabled(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::SetLoadSettings(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 4, 2, 4);
+    IPC::RequestParser rp(ctx);
 
     plgldr_context.use_user_load_parameters = true;
     plgldr_context.user_load_parameters.no_flash = rp.Pop<u32>() == 1;
@@ -201,7 +201,7 @@ void PLG_LDR::SetLoadSettings(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::DisplayErrorMessage(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 7, 1, 4);
+    IPC::RequestParser rp(ctx);
     u32 error_code = rp.Pop<u32>();
     auto title = rp.PopMappedBuffer();
     auto desc = rp.PopMappedBuffer();
@@ -223,7 +223,7 @@ void PLG_LDR::DisplayErrorMessage(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::GetPLGLDRVersion(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 8, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -231,7 +231,7 @@ void PLG_LDR::GetPLGLDRVersion(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::GetArbiter(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 9, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     // NOTE: It doesn't make sense to send an arbiter in HLE, as it's used to
@@ -242,7 +242,7 @@ void PLG_LDR::GetArbiter(Kernel::HLERequestContext& ctx) {
 }
 
 void PLG_LDR::GetPluginPath(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 10, 0, 2);
+    IPC::RequestParser rp(ctx);
     auto path = rp.PopMappedBuffer();
 
     // Same behaviour as strncpy

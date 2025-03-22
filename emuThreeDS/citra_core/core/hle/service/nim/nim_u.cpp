@@ -186,7 +186,7 @@ NIM_U::NIM_U(Core::System& system) : ServiceFramework("nim:u", 2) {
 NIM_U::~NIM_U() = default;
 
 void NIM_U::StartNetworkUpdate(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1, 0, 0); // 0x10000
+    IPC::RequestParser rp(ctx); // 0x10000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -195,7 +195,7 @@ void NIM_U::StartNetworkUpdate(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetProgress(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2, 0, 0); // 0x20000
+    IPC::RequestParser rp(ctx); // 0x20000
 
     SystemUpdateProgress progress{};
     std::memset(&progress, 0, sizeof(progress));
@@ -210,7 +210,7 @@ void NIM_U::GetProgress(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::Cancel(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x3, 0, 0); // 0x30000
+    IPC::RequestParser rp(ctx); // 0x30000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -219,7 +219,7 @@ void NIM_U::Cancel(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::CommitSystemTitles(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x4, 0, 0); // 0x40000
+    IPC::RequestParser rp(ctx); // 0x40000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -228,7 +228,7 @@ void NIM_U::CommitSystemTitles(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetBackgroundEventForMenu(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x5, 0, 0); // 0x50000
+    IPC::RequestParser rp(ctx); // 0x50000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     rb.Push(RESULT_SUCCESS);
@@ -238,7 +238,7 @@ void NIM_U::GetBackgroundEventForMenu(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetBackgroundEventForNews(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x6, 0, 0); // 0x60000
+    IPC::RequestParser rp(ctx); // 0x60000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     rb.Push(RESULT_SUCCESS);
@@ -248,7 +248,7 @@ void NIM_U::GetBackgroundEventForNews(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::FormatSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x7, 0, 0); // 0x70000
+    IPC::RequestParser rp(ctx); // 0x70000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -257,7 +257,7 @@ void NIM_U::FormatSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetCustomerSupportCode(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x8, 0, 0); // 0x80000
+    IPC::RequestParser rp(ctx); // 0x80000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -267,7 +267,7 @@ void NIM_U::GetCustomerSupportCode(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::IsCommittableAllSystemTitles(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x9, 0, 0); // 0x90000
+    IPC::RequestParser rp(ctx); // 0x90000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -277,7 +277,7 @@ void NIM_U::IsCommittableAllSystemTitles(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetBackgroundProgress(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xA, 0, 0); // 0xA0000
+    IPC::RequestParser rp(ctx); // 0xA0000
 
     SystemUpdateProgress progress{};
     std::memset(&progress, 0, sizeof(progress));
@@ -292,7 +292,7 @@ void NIM_U::GetBackgroundProgress(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetSavedHash(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xB, 0, 0); // 0xB0000
+    IPC::RequestParser rp(ctx); // 0xB0000
 
     std::array<char, 0x24> hash{};
     std::memset(&hash, 0, sizeof(hash));
@@ -305,7 +305,7 @@ void NIM_U::GetSavedHash(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::UnregisterTask(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xC, 2, 2); // 0xC0082
+    IPC::RequestParser rp(ctx); // 0xC0082
 
     const u64 title_id = rp.Pop<u64>();
     const u32 process_id = rp.PopPID();
@@ -319,7 +319,7 @@ void NIM_U::UnregisterTask(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::IsRegistered(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xD, 2, 0); // 0xD0080
+    IPC::RequestParser rp(ctx); // 0xD0080
 
     const u64 title_id = rp.Pop<u64>();
 
@@ -331,7 +331,7 @@ void NIM_U::IsRegistered(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::FindTaskInfo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xE, 2, 0); // 0xE0080
+    IPC::RequestParser rp(ctx); // 0xE0080
 
     const u64 title_id = rp.Pop<u64>();
 
@@ -346,7 +346,7 @@ void NIM_U::FindTaskInfo(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetTaskInfos(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xF, 1, 2); // 0xF0042
+    IPC::RequestParser rp(ctx); // 0xF0042
 
     const u64 max_task_infos = rp.Pop<u32>();
     auto& task_infos_buffer = rp.PopMappedBuffer();
@@ -361,7 +361,7 @@ void NIM_U::GetTaskInfos(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::DeleteUnmanagedContexts(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x10, 0, 0); // 0x100000
+    IPC::RequestParser rp(ctx); // 0x100000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -370,7 +370,7 @@ void NIM_U::DeleteUnmanagedContexts(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::UpdateAutoTitleDownloadTasksAsync(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 0, 0); // 0x110000
+    IPC::RequestParser rp(ctx); // 0x110000
 
     // Since this is a stub, signal the completion event so the caller won't get stuck waiting.
     nim_async_completion_event->Signal();
@@ -383,7 +383,7 @@ void NIM_U::UpdateAutoTitleDownloadTasksAsync(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::StartPendingAutoTitleDownloadTasksAsync(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 0, 0); // 0x120000
+    IPC::RequestParser rp(ctx); // 0x120000
 
     // Since this is a stub, signal the completion event so the caller won't get stuck waiting.
     nim_async_completion_event->Signal();
@@ -396,7 +396,7 @@ void NIM_U::StartPendingAutoTitleDownloadTasksAsync(Kernel::HLERequestContext& c
 }
 
 void NIM_U::GetAsyncResult(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x13, 0, 0); // 0x130000
+    IPC::RequestParser rp(ctx); // 0x130000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(RESULT_SUCCESS);
@@ -407,7 +407,7 @@ void NIM_U::GetAsyncResult(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::CancelAsyncCall(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x14, 0, 0); // 0x140000
+    IPC::RequestParser rp(ctx); // 0x140000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -416,7 +416,7 @@ void NIM_U::CancelAsyncCall(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::IsPendingAutoTitleDownloadTasks(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x15, 0, 0); // 0x150000
+    IPC::RequestParser rp(ctx); // 0x150000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -426,7 +426,7 @@ void NIM_U::IsPendingAutoTitleDownloadTasks(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetNumAutoTitleDownloadTasks(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x16, 0, 0); // 0x160000
+    IPC::RequestParser rp(ctx); // 0x160000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -436,7 +436,7 @@ void NIM_U::GetNumAutoTitleDownloadTasks(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetAutoTitleDownloadTaskInfos(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x17, 1, 2); // 0x170042
+    IPC::RequestParser rp(ctx); // 0x170042
 
     const u64 max_task_infos = rp.Pop<u32>();
     auto& task_infos_buffer = rp.PopMappedBuffer();
@@ -451,7 +451,7 @@ void NIM_U::GetAutoTitleDownloadTaskInfos(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::CancelAutoTitleDownloadTask(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x18, 2, 0); // 0x180080
+    IPC::RequestParser rp(ctx); // 0x180080
 
     const u64 task_id = rp.Pop<u64>();
 
@@ -462,7 +462,7 @@ void NIM_U::CancelAutoTitleDownloadTask(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::SetAutoDbgDat(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x19, 0, 2); // 0x190002
+    IPC::RequestParser rp(ctx); // 0x190002
 
     auto& auto_dbg_dat_buffer = rp.PopMappedBuffer();
 
@@ -475,7 +475,7 @@ void NIM_U::SetAutoDbgDat(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetAutoDbgDat(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1A, 0, 2); // 0x1A0002
+    IPC::RequestParser rp(ctx); // 0x1A0002
 
     auto& auto_dbg_dat_buffer = rp.PopMappedBuffer();
 
@@ -488,7 +488,7 @@ void NIM_U::GetAutoDbgDat(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::SetDbgTasks(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1B, 1, 2); // 0x1B0042
+    IPC::RequestParser rp(ctx); // 0x1B0042
 
     const u64 max_task_infos = rp.Pop<u32>();
     auto& task_infos_buffer = rp.PopMappedBuffer();
@@ -502,7 +502,7 @@ void NIM_U::SetDbgTasks(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetDbgTasks(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1C, 1, 2); // 0x1C0042
+    IPC::RequestParser rp(ctx); // 0x1C0042
 
     const u64 max_task_infos = rp.Pop<u32>();
     auto& task_infos_buffer = rp.PopMappedBuffer();
@@ -517,7 +517,7 @@ void NIM_U::GetDbgTasks(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::DeleteDbgData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1D, 0, 0); // 0x1D0000
+    IPC::RequestParser rp(ctx); // 0x1D0000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -526,7 +526,7 @@ void NIM_U::DeleteDbgData(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::SetTslXml(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1E, 1, 2); // 0x1E0042
+    IPC::RequestParser rp(ctx); // 0x1E0042
 
     const u32 buffer_size = rp.Pop<u32>();
     auto& xml_buffer = rp.PopMappedBuffer();
@@ -540,7 +540,7 @@ void NIM_U::SetTslXml(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetTslXmlSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1F, 0, 0); // 0x1F0000
+    IPC::RequestParser rp(ctx); // 0x1F0000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(RESULT_SUCCESS);
@@ -550,7 +550,7 @@ void NIM_U::GetTslXmlSize(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetTslXml(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x20, 1, 2); // 0x200042
+    IPC::RequestParser rp(ctx); // 0x200042
 
     const u32 buffer_capacity = rp.Pop<u32>();
     auto& xml_buffer = rp.PopMappedBuffer();
@@ -564,7 +564,7 @@ void NIM_U::GetTslXml(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::DeleteTslXml(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x21, 0, 0); // 0x210000
+    IPC::RequestParser rp(ctx); // 0x210000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -573,7 +573,7 @@ void NIM_U::DeleteTslXml(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::SetDtlXml(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x22, 1, 2); // 0x220042
+    IPC::RequestParser rp(ctx); // 0x220042
 
     const u32 buffer_size = rp.Pop<u32>();
     auto& xml_buffer = rp.PopMappedBuffer();
@@ -587,7 +587,7 @@ void NIM_U::SetDtlXml(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetDtlXmlSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x23, 0, 0); // 0x230000
+    IPC::RequestParser rp(ctx); // 0x230000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(RESULT_SUCCESS);
@@ -597,7 +597,7 @@ void NIM_U::GetDtlXmlSize(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetDtlXml(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x24, 1, 2); // 0x240042
+    IPC::RequestParser rp(ctx); // 0x240042
 
     const u32 buffer_capacity = rp.Pop<u32>();
     auto& xml_buffer = rp.PopMappedBuffer();
@@ -611,7 +611,7 @@ void NIM_U::GetDtlXml(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::UpdateAccountStatus(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x25, 0, 0); // 0x250000
+    IPC::RequestParser rp(ctx); // 0x250000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(RESULT_SUCCESS);
@@ -622,7 +622,7 @@ void NIM_U::UpdateAccountStatus(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::StartTitleDownload(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x26, 6, 0); // 0x260180
+    IPC::RequestParser rp(ctx); // 0x260180
 
     const auto& download_config = rp.PopRaw<TitleDownloadConfig>();
 
@@ -633,7 +633,7 @@ void NIM_U::StartTitleDownload(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::StopTitleDownload(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x27, 0, 0); // 0x270000
+    IPC::RequestParser rp(ctx); // 0x270000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -642,7 +642,7 @@ void NIM_U::StopTitleDownload(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::GetTitleDownloadProgress(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x28, 0, 0); // 0x280000
+    IPC::RequestParser rp(ctx); // 0x280000
 
     TitleDownloadProgress progress{};
     std::memset(&progress, 0, sizeof(progress));
@@ -657,7 +657,7 @@ void NIM_U::GetTitleDownloadProgress(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::RegisterTask(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x29, 9, 6); // 0x290246
+    IPC::RequestParser rp(ctx); // 0x290246
 
     const auto& download_config = rp.PopRaw<TitleDownloadConfig>();
     const u32 unknown_1 = rp.Pop<u32>();
@@ -686,7 +686,7 @@ void NIM_U::RegisterTask(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::IsSystemUpdateAvailable(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2A, 0, 0); // 0x2A0000
+    IPC::RequestParser rp(ctx); // 0x2A0000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(4, 0);
     rb.Push(RESULT_SUCCESS);
@@ -698,7 +698,7 @@ void NIM_U::IsSystemUpdateAvailable(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::Unknown2B(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2B, 0, 0); // 0x2B0000
+    IPC::RequestParser rp(ctx); // 0x2B0000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -707,7 +707,7 @@ void NIM_U::Unknown2B(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::UpdateTickets(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2C, 0, 0); // 0x2C0000
+    IPC::RequestParser rp(ctx); // 0x2C0000
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
     rb.Push(RESULT_SUCCESS);
@@ -718,7 +718,7 @@ void NIM_U::UpdateTickets(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::DownloadTitleSeedAsync(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2D, 3, 0); // 0x2D00C0
+    IPC::RequestParser rp(ctx); // 0x2D00C0
 
     const u64 title_id = rp.Pop<u64>();
     const u16 country_code = rp.Pop<u16>();
@@ -735,7 +735,7 @@ void NIM_U::DownloadTitleSeedAsync(Kernel::HLERequestContext& ctx) {
 }
 
 void NIM_U::DownloadMissingTitleSeedsAsync(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x2E, 0, 0); // 0x2E0000
+    IPC::RequestParser rp(ctx); // 0x2E0000
 
     // Since this is a stub, signal the completion event so the caller won't get stuck waiting.
     nim_async_completion_event->Signal();

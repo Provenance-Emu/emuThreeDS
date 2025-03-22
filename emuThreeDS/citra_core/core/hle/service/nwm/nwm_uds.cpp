@@ -569,7 +569,7 @@ boost::optional<Network::MacAddress> NWM_UDS::GetNodeMacAddress(u16 dest_node_id
 }
 
 void NWM_UDS::Shutdown(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x03, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     initialized = false;
 
@@ -587,7 +587,7 @@ void NWM_UDS::Shutdown(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::RecvBeaconBroadcastData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0F, 16, 4);
+    IPC::RequestParser rp(ctx);
 
     u32 out_buffer_size = rp.Pop<u32>();
     u32 unk1 = rp.Pop<u32>();
@@ -677,7 +677,7 @@ ResultVal<std::shared_ptr<Kernel::Event>> NWM_UDS::Initialize(
 }
 
 void NWM_UDS::InitializeWithVersion(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1B, 12, 2);
+    IPC::RequestParser rp(ctx);
     u32 sharedmem_size = rp.Pop<u32>();
     auto node = rp.PopRaw<NodeInfo>();
     u16 version = rp.Pop<u16>();
@@ -694,7 +694,7 @@ void NWM_UDS::InitializeWithVersion(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::InitializeDeprecated(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 11, 2);
+    IPC::RequestParser rp(ctx);
     u32 sharedmem_size = rp.Pop<u32>();
     auto node = rp.PopRaw<NodeInfo>();
     auto sharedmem = rp.PopObject<Kernel::SharedMemory>();
@@ -710,7 +710,7 @@ void NWM_UDS::InitializeDeprecated(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::GetConnectionStatus(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xB, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(13, 0);
 
     rb.Push(RESULT_SUCCESS);
@@ -729,7 +729,7 @@ void NWM_UDS::GetConnectionStatus(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::GetNodeInformation(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xD, 1, 0);
+    IPC::RequestParser rp(ctx);
     u16 network_node_id = rp.Pop<u16>();
 
     if (!initialized) {
@@ -760,7 +760,7 @@ void NWM_UDS::GetNodeInformation(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::Bind(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x12, 4, 0);
+    IPC::RequestParser rp(ctx);
 
     u32 bind_node_id = rp.Pop<u32>();
     u32 recv_buffer_size = rp.Pop<u32>();
@@ -811,7 +811,7 @@ void NWM_UDS::Bind(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::Unbind(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x12, 1, 0);
+    IPC::RequestParser rp(ctx);
 
     u32 bind_node_id = rp.Pop<u32>();
     if (bind_node_id == 0) {
@@ -911,7 +911,7 @@ ResultCode NWM_UDS::BeginHostingNetwork(const u8* network_info_buffer,
 }
 
 void NWM_UDS::BeginHostingNetwork(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1D, 1, 4);
+    IPC::RequestParser rp(ctx);
 
     const u32 passphrase_size = rp.Pop<u32>();
 
@@ -930,7 +930,7 @@ void NWM_UDS::BeginHostingNetwork(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::BeginHostingNetworkDeprecated(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x04, 0x10, 2);
+    IPC::RequestParser rp(ctx);
     // Real NWM module reads 0x108 bytes from the command buffer into the network info, where the
     // last 0xCC bytes (application_data and size) are undefined values. Here we just read the first
     // 0x3C defined bytes and zero application_data in BeginHostingNetwork.
@@ -949,7 +949,7 @@ void NWM_UDS::BeginHostingNetworkDeprecated(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::EjectClient(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x05, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u16 network_node_id = rp.Pop<u16>();
 
     LOG_WARNING(Service_NWM, "(stubbed) called");
@@ -1000,7 +1000,7 @@ void NWM_UDS::EjectClient(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::UpdateNetworkAttribute(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x07, 2, 0);
+    IPC::RequestParser rp(ctx);
     rp.Skip(2, false);
     LOG_WARNING(Service_NWM, "stubbed");
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -1008,7 +1008,7 @@ void NWM_UDS::UpdateNetworkAttribute(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::DestroyNetwork(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x08, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     // Unschedule the beacon broadcast event.
     system.CoreTiming().UnscheduleEvent(beacon_broadcast_event, 0);
@@ -1046,7 +1046,7 @@ void NWM_UDS::DestroyNetwork(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::DisconnectNetwork(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0xA, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
 
     using Network::WifiPacket;
@@ -1091,7 +1091,7 @@ void NWM_UDS::DisconnectNetwork(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::SendTo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x17, 6, 2);
+    IPC::RequestParser rp(ctx);
 
     rp.Skip(1, false);
     u16 dest_node_id = rp.Pop<u16>();
@@ -1169,7 +1169,7 @@ void NWM_UDS::SendTo(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::PullPacket(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x14, 3, 0);
+    IPC::RequestParser rp(ctx);
 
     u32 bind_node_id = rp.Pop<u32>();
     u32 max_out_buff_size_aligned = rp.Pop<u32>();
@@ -1238,7 +1238,7 @@ void NWM_UDS::PullPacket(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::GetChannel(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1A, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
 
     std::lock_guard lock(connection_status_mutex);
@@ -1294,7 +1294,7 @@ void NWM_UDS::ConnectToNetwork(Kernel::HLERequestContext& ctx, u16 command_id,
 }
 
 void NWM_UDS::ConnectToNetwork(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1E, 2, 4);
+    IPC::RequestParser rp(ctx);
 
     const auto connection_type = rp.Pop<u8>();
     [[maybe_unused]] const auto passphrase_size = rp.Pop<u32>();
@@ -1311,7 +1311,7 @@ void NWM_UDS::ConnectToNetwork(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::ConnectToNetworkDeprecated(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x09, 0x11, 2);
+    IPC::RequestParser rp(ctx);
 
     // Similar to BeginHostingNetworkDeprecated, we only read the first 0x3C bytes into the network
     // info
@@ -1329,7 +1329,7 @@ void NWM_UDS::ConnectToNetworkDeprecated(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::SetApplicationData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x10, 1, 2);
+    IPC::RequestParser rp(ctx);
 
     u32 size = rp.Pop<u32>();
 
@@ -1353,7 +1353,7 @@ void NWM_UDS::SetApplicationData(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::GetApplicationData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 1, 0);
+    IPC::RequestParser rp(ctx);
     u32 input_size = rp.Pop<u32>();
     u8 appdata_size = network_info.application_data_size;
 
@@ -1372,7 +1372,7 @@ void NWM_UDS::GetApplicationData(Kernel::HLERequestContext& ctx) {
 }
 
 void NWM_UDS::DecryptBeaconData(Kernel::HLERequestContext& ctx, u16 command_id) {
-    IPC::RequestParser rp(ctx, command_id, 0, 6);
+    IPC::RequestParser rp(ctx);
 
     const std::vector<u8> network_struct_buffer = rp.PopStaticBuffer();
     ASSERT(network_struct_buffer.size() == sizeof(NetworkInfo));

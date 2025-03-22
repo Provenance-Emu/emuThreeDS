@@ -14,7 +14,7 @@ SERIALIZE_EXPORT_IMPL(Service::DLP::DLP_SRVR)
 namespace Service::DLP {
 
 void DLP_SRVR::IsChild(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0E, 1, 0);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);

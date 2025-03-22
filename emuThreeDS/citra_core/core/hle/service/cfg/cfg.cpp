@@ -205,7 +205,7 @@ Module::Interface::Interface(std::shared_ptr<Module> cfg, const char* name, u32 
 Module::Interface::~Interface() = default;
 
 void Module::Interface::GetCountryCodeString(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x09, 1, 0);
+    IPC::RequestParser rp(ctx);
     u16 country_code_id = rp.Pop<u16>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -227,7 +227,7 @@ std::shared_ptr<Module> Module::Interface::Interface::GetModule() const {
 }
 
 void Module::Interface::GetCountryCodeID(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0A, 1, 0);
+    IPC::RequestParser rp(ctx);
     u16 country_code = rp.Pop<u16>();
     u16 country_code_id = 0;
 
@@ -263,7 +263,7 @@ u32 Module::GetRegionValue() {
 }
 
 void Module::Interface::SecureInfoGetRegion(Kernel::HLERequestContext& ctx, u16 id) {
-    IPC::RequestParser rp(ctx, id, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -271,7 +271,7 @@ void Module::Interface::SecureInfoGetRegion(Kernel::HLERequestContext& ctx, u16 
 }
 
 void Module::Interface::GenHashConsoleUnique(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x03, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u32 app_id_salt = rp.Pop<u32>() & 0x000FFFFF;
 
     IPC::RequestBuilder rb = rp.MakeBuilder(3, 0);
@@ -297,7 +297,7 @@ void Module::Interface::GenHashConsoleUnique(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetRegionCanadaUSA(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x04, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
 
     rb.Push(RESULT_SUCCESS);
@@ -311,7 +311,7 @@ void Module::Interface::GetRegionCanadaUSA(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetSystemModel(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x05, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     u32 data{};
 
@@ -333,7 +333,7 @@ void Module::Interface::GetSystemModel(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetModelNintendo2DS(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x06, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     u32 data{};
 
@@ -344,7 +344,7 @@ void Module::Interface::GetModelNintendo2DS(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetConfigInfoBlk2(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 2, 2);
+    IPC::RequestParser rp(ctx);
     u32 size = rp.Pop<u32>();
     u32 block_id = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
@@ -357,7 +357,7 @@ void Module::Interface::GetConfigInfoBlk2(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetConfigInfoBlk8(Kernel::HLERequestContext& ctx, u16 id) {
-    IPC::RequestParser rp(ctx, id, 2, 2);
+    IPC::RequestParser rp(ctx);
     u32 size = rp.Pop<u32>();
     u32 block_id = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
@@ -370,7 +370,7 @@ void Module::Interface::GetConfigInfoBlk8(Kernel::HLERequestContext& ctx, u16 id
 }
 
 void Module::Interface::SetConfigInfoBlk4(Kernel::HLERequestContext& ctx, u16 id) {
-    IPC::RequestParser rp(ctx, id, 2, 2);
+    IPC::RequestParser rp(ctx);
     u32 block_id = rp.Pop<u32>();
     u32 size = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
@@ -384,13 +384,13 @@ void Module::Interface::SetConfigInfoBlk4(Kernel::HLERequestContext& ctx, u16 id
 }
 
 void Module::Interface::UpdateConfigNANDSavegame(Kernel::HLERequestContext& ctx, u16 id) {
-    IPC::RequestParser rp(ctx, id, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(cfg->UpdateConfigNANDSavegame());
 }
 
 void Module::Interface::FormatConfig(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0806, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(cfg->FormatConfig());
 }

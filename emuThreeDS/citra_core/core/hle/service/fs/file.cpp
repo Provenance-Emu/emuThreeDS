@@ -54,7 +54,7 @@ File::File(Kernel::KernelSystem& kernel)
 }
 
 void File::Read(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0802, 3, 2);
+    IPC::RequestParser rp(ctx);
     u64 offset = rp.Pop<u64>();
     u32 length = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
@@ -95,7 +95,7 @@ void File::Read(Kernel::HLERequestContext& ctx) {
 }
 
 void File::Write(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0803, 4, 2);
+    IPC::RequestParser rp(ctx);
     u64 offset = rp.Pop<u64>();
     u32 length = rp.Pop<u32>();
     u32 flush = rp.Pop<u32>();
@@ -133,7 +133,7 @@ void File::Write(Kernel::HLERequestContext& ctx) {
 }
 
 void File::GetSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0804, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     const FileSessionSlot* file = GetSessionData(ctx.Session());
 
@@ -143,7 +143,7 @@ void File::GetSize(Kernel::HLERequestContext& ctx) {
 }
 
 void File::SetSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0805, 2, 0);
+    IPC::RequestParser rp(ctx);
     u64 size = rp.Pop<u64>();
 
     FileSessionSlot* file = GetSessionData(ctx.Session());
@@ -162,7 +162,7 @@ void File::SetSize(Kernel::HLERequestContext& ctx) {
 }
 
 void File::Close(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0808, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     // TODO(Subv): Only close the backend if this client is the only one left.
     if (connected_sessions.size() > 1)
@@ -175,7 +175,7 @@ void File::Close(Kernel::HLERequestContext& ctx) {
 }
 
 void File::Flush(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0809, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
 
@@ -192,7 +192,7 @@ void File::Flush(Kernel::HLERequestContext& ctx) {
 }
 
 void File::SetPriority(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x080A, 1, 0);
+    IPC::RequestParser rp(ctx);
 
     FileSessionSlot* file = GetSessionData(ctx.Session());
     file->priority = rp.Pop<u32>();
@@ -202,7 +202,7 @@ void File::SetPriority(Kernel::HLERequestContext& ctx) {
 }
 
 void File::GetPriority(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x080B, 0, 0);
+    IPC::RequestParser rp(ctx);
     const FileSessionSlot* file = GetSessionData(ctx.Session());
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -214,7 +214,7 @@ void File::OpenLinkFile(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_FS, "(STUBBED) File command OpenLinkFile {}", GetName());
     using Kernel::ClientSession;
     using Kernel::ServerSession;
-    IPC::RequestParser rp(ctx, 0x080C, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     auto [server, client] = kernel.CreateSessionPair(GetName());
     ClientConnected(server);
@@ -232,7 +232,7 @@ void File::OpenLinkFile(Kernel::HLERequestContext& ctx) {
 }
 
 void File::OpenSubFile(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0801, 4, 0);
+    IPC::RequestParser rp(ctx);
     s64 offset = rp.PopRaw<s64>();
     s64 size = rp.PopRaw<s64>();
 

@@ -164,7 +164,7 @@ static void LogGenericInfo(const ErrInfo::ErrInfoCommon& errinfo_common) {
 }
 
 void ERR_F::ThrowFatalError(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 1, 32, 0);
+    IPC::RequestParser rp(ctx);
 
     LOG_CRITICAL(Service_ERR, "Fatal error");
     const ErrInfo errinfo = rp.PopRaw<ErrInfo>();

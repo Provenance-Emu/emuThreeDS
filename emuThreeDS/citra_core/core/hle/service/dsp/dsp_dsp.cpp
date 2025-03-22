@@ -25,7 +25,7 @@ enum class DspPipe;
 namespace Service::DSP {
 
 void DSP_DSP::RecvData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u32 register_number = rp.Pop<u32>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -36,7 +36,7 @@ void DSP_DSP::RecvData(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::RecvDataIsReady(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x02, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u32 register_number = rp.Pop<u32>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -47,7 +47,7 @@ void DSP_DSP::RecvDataIsReady(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::SetSemaphore(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x07, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u16 semaphore_value = rp.Pop<u16>();
 
     system.DSP().SetSemaphore(semaphore_value);
@@ -59,7 +59,7 @@ void DSP_DSP::SetSemaphore(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::ConvertProcessAddressFromDspDram(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0C, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u32 address = rp.Pop<u32>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
@@ -73,7 +73,7 @@ void DSP_DSP::ConvertProcessAddressFromDspDram(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::WriteProcessPipe(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0D, 2, 2);
+    IPC::RequestParser rp(ctx);
     const u32 channel = rp.Pop<u32>();
     const u32 size = rp.Pop<u32>();
     auto buffer = rp.PopStaticBuffer();
@@ -111,7 +111,7 @@ void DSP_DSP::WriteProcessPipe(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::ReadPipe(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0E, 3, 0);
+    IPC::RequestParser rp(ctx);
     const u32 channel = rp.Pop<u32>();
     const u32 peer = rp.Pop<u32>();
     const u16 size = rp.Pop<u16>();
@@ -134,7 +134,7 @@ void DSP_DSP::ReadPipe(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::GetPipeReadableSize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0F, 2, 0);
+    IPC::RequestParser rp(ctx);
     const u32 channel = rp.Pop<u32>();
     const u32 peer = rp.Pop<u32>();
 
@@ -150,7 +150,7 @@ void DSP_DSP::GetPipeReadableSize(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::ReadPipeIfPossible(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x10, 3, 0);
+    IPC::RequestParser rp(ctx);
     const u32 channel = rp.Pop<u32>();
     const u32 peer = rp.Pop<u32>();
     const u16 size = rp.Pop<u16>();
@@ -173,7 +173,7 @@ void DSP_DSP::ReadPipeIfPossible(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::LoadComponent(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 3, 2);
+    IPC::RequestParser rp(ctx);
     const u32 size = rp.Pop<u32>();
     const u32 prog_mask = rp.Pop<u32>();
     const u32 data_mask = rp.Pop<u32>();
@@ -194,7 +194,7 @@ void DSP_DSP::LoadComponent(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::UnloadComponent(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x12, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     system.DSP().UnloadComponent();
 
@@ -205,7 +205,7 @@ void DSP_DSP::UnloadComponent(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::FlushDataCache(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x13, 2, 2);
+    IPC::RequestParser rp(ctx);
     [[maybe_unused]] const VAddr address = rp.Pop<u32>();
     [[maybe_unused]] const u32 size = rp.Pop<u32>();
     const auto process = rp.PopObject<Kernel::Process>();
@@ -218,7 +218,7 @@ void DSP_DSP::FlushDataCache(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::InvalidateDataCache(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x14, 2, 2);
+    IPC::RequestParser rp(ctx);
     [[maybe_unused]] const VAddr address = rp.Pop<u32>();
     [[maybe_unused]] const u32 size = rp.Pop<u32>();
     const auto process = rp.PopObject<Kernel::Process>();
@@ -231,7 +231,7 @@ void DSP_DSP::InvalidateDataCache(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::RegisterInterruptEvents(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x15, 2, 2);
+    IPC::RequestParser rp(ctx);
     const u32 interrupt = rp.Pop<u32>();
     const u32 channel = rp.Pop<u32>();
     auto event = rp.PopObject<Kernel::Event>();
@@ -267,7 +267,7 @@ void DSP_DSP::RegisterInterruptEvents(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::GetSemaphoreEventHandle(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x16, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     rb.Push(RESULT_SUCCESS);
@@ -277,7 +277,7 @@ void DSP_DSP::GetSemaphoreEventHandle(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::SetSemaphoreMask(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x17, 1, 0);
+    IPC::RequestParser rp(ctx);
     preset_semaphore = rp.Pop<u16>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -287,7 +287,7 @@ void DSP_DSP::SetSemaphoreMask(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::GetHeadphoneStatus(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1F, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -297,7 +297,7 @@ void DSP_DSP::GetHeadphoneStatus(Kernel::HLERequestContext& ctx) {
 }
 
 void DSP_DSP::ForceHeadphoneOut(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x20, 1, 0);
+    IPC::RequestParser rp(ctx);
     const u8 force = rp.Pop<u8>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);

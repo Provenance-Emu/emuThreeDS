@@ -13,7 +13,7 @@ SERIALIZE_EXPORT_IMPL(Service::SSL::SSL_C)
 namespace Service::SSL {
 
 void SSL_C::Initialize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 0, 2);
+    IPC::RequestParser rp(ctx);
     rp.PopPID();
 
     // Seed random number generator when the SSL service is initialized
@@ -26,7 +26,7 @@ void SSL_C::Initialize(Kernel::HLERequestContext& ctx) {
 }
 
 void SSL_C::GenerateRandomData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 1, 2);
+    IPC::RequestParser rp(ctx);
     u32 size = rp.Pop<u32>();
     auto buffer = rp.PopMappedBuffer();
 

@@ -39,7 +39,7 @@ using Kernel::ServerSession;
 namespace Service::FS {
 
 void FS_USER::Initialize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0801, 0, 2);
+    IPC::RequestParser rp(ctx);
     u32 pid = rp.PopPID();
 
     ClientSlot* slot = GetSessionData(ctx.Session());
@@ -50,7 +50,7 @@ void FS_USER::Initialize(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0802, 7, 2);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // Transaction.
 
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
@@ -80,7 +80,7 @@ void FS_USER::OpenFile(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::OpenFileDirectly(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x803, 8, 4);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // Transaction
 
     const auto archive_id = rp.PopEnum<ArchiveIdCode>();
@@ -132,7 +132,7 @@ void FS_USER::OpenFileDirectly(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::DeleteFile(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x804, 5, 2);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // TransactionId
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
     const auto filename_type = rp.PopEnum<FileSys::LowPathType>();
@@ -150,7 +150,7 @@ void FS_USER::DeleteFile(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x805, 9, 4);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // TransactionId
 
     const auto src_archive_handle = rp.PopRaw<ArchiveHandle>();
@@ -178,7 +178,7 @@ void FS_USER::RenameFile(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::DeleteDirectory(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x806, 5, 2);
+    IPC::RequestParser rp(ctx);
 
     rp.Skip(1, false); // TransactionId
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
@@ -197,7 +197,7 @@ void FS_USER::DeleteDirectory(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::DeleteDirectoryRecursively(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x807, 5, 2);
+    IPC::RequestParser rp(ctx);
 
     rp.Skip(1, false); // TransactionId
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
@@ -216,7 +216,7 @@ void FS_USER::DeleteDirectoryRecursively(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x808, 8, 2);
+    IPC::RequestParser rp(ctx);
 
     rp.Skip(1, false); // TransactionId
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
@@ -237,7 +237,7 @@ void FS_USER::CreateFile(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x809, 6, 2);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // TransactionId
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
     const auto dirname_type = rp.PopEnum<FileSys::LowPathType>();
@@ -255,7 +255,7 @@ void FS_USER::CreateDirectory(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::RenameDirectory(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x80A, 9, 4);
+    IPC::RequestParser rp(ctx);
     rp.Skip(1, false); // TransactionId
     const auto src_archive_handle = rp.PopRaw<ArchiveHandle>();
     const auto src_dirname_type = rp.PopEnum<FileSys::LowPathType>();
@@ -282,7 +282,7 @@ void FS_USER::RenameDirectory(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x80B, 4, 2);
+    IPC::RequestParser rp(ctx);
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
     const auto dirname_type = rp.PopEnum<FileSys::LowPathType>();
     const auto dirname_size = rp.Pop<u32>();
@@ -311,7 +311,7 @@ void FS_USER::OpenDirectory(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x80C, 3, 2);
+    IPC::RequestParser rp(ctx);
     const auto archive_id = rp.PopEnum<FS::ArchiveIdCode>();
     const auto archivename_type = rp.PopEnum<FileSys::LowPathType>();
     const auto archivename_size = rp.Pop<u32>();
@@ -338,7 +338,7 @@ void FS_USER::OpenArchive(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CloseArchive(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x80E, 2, 0);
+    IPC::RequestParser rp(ctx);
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -346,14 +346,14 @@ void FS_USER::CloseArchive(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::IsSdmcDetected(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x817, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
     rb.Push(Settings::values.use_virtual_sd.GetValue());
 }
 
 void FS_USER::IsSdmcWriteable(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x818, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
     // If the SD isn't enabled, it can't be writeable...else, stubbed true
@@ -364,7 +364,7 @@ void FS_USER::IsSdmcWriteable(Kernel::HLERequestContext& ctx) {
 void FS_USER::FormatSaveData(Kernel::HLERequestContext& ctx) {
     LOG_WARNING(Service_FS, "(STUBBED)");
 
-    IPC::RequestParser rp(ctx, 0x84C, 9, 2);
+    IPC::RequestParser rp(ctx);
     const auto archive_id = rp.PopEnum<ArchiveIdCode>();
     const auto archivename_type = rp.PopEnum<FileSys::LowPathType>();
     const auto archivename_size = rp.Pop<u32>();
@@ -406,7 +406,7 @@ void FS_USER::FormatSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::FormatThisUserSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x80F, 6, 0);
+    IPC::RequestParser rp(ctx);
     const auto block_size = rp.Pop<u32>();
     const auto number_directories = rp.Pop<u32>();
     const auto number_files = rp.Pop<u32>();
@@ -429,7 +429,7 @@ void FS_USER::FormatThisUserSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetFreeBytes(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x812, 2, 0);
+    IPC::RequestParser rp(ctx);
     const auto archive_handle = rp.PopRaw<ArchiveHandle>();
     ResultVal<u64> bytes_res = archives.GetFreeBytesInArchive(archive_handle);
 
@@ -443,7 +443,7 @@ void FS_USER::GetFreeBytes(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetSdmcArchiveResource(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x814, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     LOG_WARNING(Service_FS, "(STUBBED) called");
 
@@ -461,7 +461,7 @@ void FS_USER::GetSdmcArchiveResource(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetNandArchiveResource(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x815, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     LOG_WARNING(Service_FS, "(STUBBED) called");
 
@@ -479,7 +479,7 @@ void FS_USER::GetNandArchiveResource(Kernel::HLERequestContext& ctx) {
 
 void FS_USER::CreateExtSaveData(Kernel::HLERequestContext& ctx) {
     // TODO(Subv): Figure out the other parameters.
-    IPC::RequestParser rp(ctx, 0x0851, 9, 2);
+    IPC::RequestParser rp(ctx);
     MediaType media_type = static_cast<MediaType>(rp.Pop<u32>()); // the other bytes are unknown
     u32 save_low = rp.Pop<u32>();
     u32 save_high = rp.Pop<u32>();
@@ -512,7 +512,7 @@ void FS_USER::CreateExtSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::DeleteExtSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x852, 4, 0);
+    IPC::RequestParser rp(ctx);
     MediaType media_type = static_cast<MediaType>(rp.Pop<u32>()); // the other bytes are unknown
     u32 save_low = rp.Pop<u32>();
     u32 save_high = rp.Pop<u32>();
@@ -527,7 +527,7 @@ void FS_USER::DeleteExtSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CardSlotIsInserted(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x821, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
     rb.Push(false);
@@ -535,7 +535,7 @@ void FS_USER::CardSlotIsInserted(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::DeleteSystemSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x857, 2, 0);
+    IPC::RequestParser rp(ctx);
     u32 savedata_high = rp.Pop<u32>();
     u32 savedata_low = rp.Pop<u32>();
 
@@ -544,7 +544,7 @@ void FS_USER::DeleteSystemSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CreateSystemSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x856, 9, 0);
+    IPC::RequestParser rp(ctx);
     u32 savedata_high = rp.Pop<u32>();
     u32 savedata_low = rp.Pop<u32>();
     u32 total_size = rp.Pop<u32>();
@@ -567,7 +567,7 @@ void FS_USER::CreateSystemSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::CreateLegacySystemSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x810, 8, 0);
+    IPC::RequestParser rp(ctx);
     u32 savedata_id = rp.Pop<u32>();
     u32 total_size = rp.Pop<u32>();
     u32 block_size = rp.Pop<u32>();
@@ -589,7 +589,7 @@ void FS_USER::CreateLegacySystemSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::InitializeWithSdkVersion(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x861, 1, 2);
+    IPC::RequestParser rp(ctx);
     const u32 version = rp.Pop<u32>();
     u32 pid = rp.PopPID();
 
@@ -603,7 +603,7 @@ void FS_USER::InitializeWithSdkVersion(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::SetPriority(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x862, 1, 0);
+    IPC::RequestParser rp(ctx);
 
     priority = rp.Pop<u32>();
 
@@ -614,7 +614,7 @@ void FS_USER::SetPriority(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetPriority(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x863, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     if (priority == UINT32_MAX) {
         LOG_INFO(Service_FS, "priority was not set, priority=0x{:X}", priority);
@@ -628,7 +628,7 @@ void FS_USER::GetPriority(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetArchiveResource(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x849, 1, 0);
+    IPC::RequestParser rp(ctx);
     auto media_type = rp.PopEnum<MediaType>();
 
     LOG_WARNING(Service_FS, "(STUBBED) called Media type=0x{:08X}", media_type);
@@ -646,7 +646,7 @@ void FS_USER::GetArchiveResource(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetFormatInfo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x845, 3, 2);
+    IPC::RequestParser rp(ctx);
     const auto archive_id = rp.PopEnum<FS::ArchiveIdCode>();
     const auto archivename_type = rp.PopEnum<FileSys::LowPathType>();
     const auto archivename_size = rp.Pop<u32>();
@@ -674,7 +674,7 @@ void FS_USER::GetFormatInfo(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetProgramLaunchInfo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x82F, 1, 0);
+    IPC::RequestParser rp(ctx);
 
     u32 process_id = rp.Pop<u32>();
 
@@ -702,7 +702,7 @@ void FS_USER::GetProgramLaunchInfo(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::ObsoletedCreateExtSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x830, 6, 2);
+    IPC::RequestParser rp(ctx);
     MediaType media_type = static_cast<MediaType>(rp.Pop<u8>());
     u32 save_low = rp.Pop<u32>();
     u32 save_high = rp.Pop<u32>();
@@ -733,7 +733,7 @@ void FS_USER::ObsoletedCreateExtSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::ObsoletedDeleteExtSaveData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x835, 2, 0);
+    IPC::RequestParser rp(ctx);
     MediaType media_type = static_cast<MediaType>(rp.Pop<u8>());
     u32 save_low = rp.Pop<u32>();
 
@@ -744,7 +744,7 @@ void FS_USER::ObsoletedDeleteExtSaveData(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetSpecialContentIndex(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x83A, 4, 0);
+    IPC::RequestParser rp(ctx);
     const MediaType media_type = static_cast<MediaType>(rp.Pop<u8>());
     const u64 title_id = rp.Pop<u64>();
     const auto type = rp.PopEnum<SpecialContentType>();
@@ -785,7 +785,7 @@ void FS_USER::AddSeed(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::SetSaveDataSecureValue(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x865, 5, 0);
+    IPC::RequestParser rp(ctx);
     u64 value = rp.Pop<u64>();
     u32 secure_value_slot = rp.Pop<u32>();
     u32 unique_id = rp.Pop<u32>();
@@ -804,7 +804,7 @@ void FS_USER::SetSaveDataSecureValue(Kernel::HLERequestContext& ctx) {
 }
 
 void FS_USER::GetSaveDataSecureValue(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x866, 3, 0);
+    IPC::RequestParser rp(ctx);
 
     u32 secure_value_slot = rp.Pop<u32>();
     u32 unique_id = rp.Pop<u32>();

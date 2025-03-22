@@ -128,14 +128,14 @@ void IR_RST::UpdateCallback(std::uintptr_t user_data, s64 cycles_late) {
 }
 
 void IR_RST::GetHandles(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 0, 0);
+    IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 3);
     rb.Push(RESULT_SUCCESS);
     rb.PushMoveObjects(shared_memory, update_event);
 }
 
 void IR_RST::Initialize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x02, 2, 0);
+    IPC::RequestParser rp(ctx);
     update_period = static_cast<int>(rp.Pop<u32>());
     raw_c_stick = rp.Pop<bool>();
 
@@ -153,7 +153,7 @@ void IR_RST::Initialize(Kernel::HLERequestContext& ctx) {
 }
 
 void IR_RST::Shutdown(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x03, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     system.CoreTiming().UnscheduleEvent(update_callback_id, 0);
     UnloadInputDevices();

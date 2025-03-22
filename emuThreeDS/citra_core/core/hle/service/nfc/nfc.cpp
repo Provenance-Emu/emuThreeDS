@@ -63,7 +63,7 @@ static_assert(sizeof(IdentificationBlockReply) == 0x36,
               "IdentificationBlockReply is an invalid size");
 
 void Module::Interface::Initialize(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x01, 1, 0);
+    IPC::RequestParser rp(ctx);
     u8 param = rp.Pop<u8>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -81,7 +81,7 @@ void Module::Interface::Initialize(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Shutdown(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x02, 1, 0);
+    IPC::RequestParser rp(ctx);
     u8 param = rp.Pop<u8>();
 
     nfc->nfc_tag_state = TagState::NotInitialized;
@@ -92,7 +92,7 @@ void Module::Interface::Shutdown(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::StartCommunication(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x03, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -100,7 +100,7 @@ void Module::Interface::StartCommunication(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::StopCommunication(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x04, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     rb.Push(RESULT_SUCCESS);
@@ -108,7 +108,7 @@ void Module::Interface::StopCommunication(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::StartTagScanning(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x05, 1, 0); // 0x00050040
+    IPC::RequestParser rp(ctx); // 0x00050040
     u16 in_val = rp.Pop<u16>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
@@ -128,7 +128,7 @@ void Module::Interface::StartTagScanning(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetTagInfo(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x11, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     if (nfc->nfc_tag_state != TagState::TagInRange &&
         nfc->nfc_tag_state != TagState::TagDataLoaded && nfc->nfc_tag_state != TagState::Unknown6) {
@@ -152,7 +152,7 @@ void Module::Interface::GetTagInfo(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetAmiiboConfig(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x18, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     AmiiboConfig amiibo_config{};
     amiibo_config.lastwritedate_year = 2017;
@@ -174,7 +174,7 @@ void Module::Interface::GetAmiiboConfig(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::StopTagScanning(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x06, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     if (nfc->nfc_tag_state == TagState::NotInitialized ||
@@ -192,7 +192,7 @@ void Module::Interface::StopTagScanning(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::LoadAmiiboData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x07, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     // TODO(FearlessTobi): Add state checking when this function gets properly implemented
 
@@ -204,7 +204,7 @@ void Module::Interface::LoadAmiiboData(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::ResetTagScanState(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x08, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     if (nfc->nfc_tag_state != TagState::TagDataLoaded && nfc->nfc_tag_state != TagState::Unknown6) {
@@ -222,7 +222,7 @@ void Module::Interface::ResetTagScanState(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetTagInRangeEvent(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0B, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     if (nfc->nfc_tag_state != TagState::NotScanning) {
         LOG_ERROR(Service_NFC, "Invalid TagState {}", nfc->nfc_tag_state);
@@ -239,7 +239,7 @@ void Module::Interface::GetTagInRangeEvent(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetTagOutOfRangeEvent(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0C, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     if (nfc->nfc_tag_state != TagState::NotScanning) {
         LOG_ERROR(Service_NFC, "Invalid TagState {}", nfc->nfc_tag_state);
@@ -256,7 +256,7 @@ void Module::Interface::GetTagOutOfRangeEvent(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetTagState(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0D, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -265,7 +265,7 @@ void Module::Interface::GetTagState(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::CommunicationGetStatus(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x0F, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
     rb.Push(RESULT_SUCCESS);
@@ -274,7 +274,7 @@ void Module::Interface::CommunicationGetStatus(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::Unknown0x1A(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1A, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
     if (nfc->nfc_tag_state != TagState::TagInRange) {
@@ -291,7 +291,7 @@ void Module::Interface::Unknown0x1A(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetIdentificationBlock(Kernel::HLERequestContext& ctx) {
-    IPC::RequestParser rp(ctx, 0x1B, 0, 0);
+    IPC::RequestParser rp(ctx);
 
     if (nfc->nfc_tag_state != TagState::TagDataLoaded && nfc->nfc_tag_state != TagState::Unknown6) {
         LOG_ERROR(Service_NFC, "Invalid TagState {}", nfc->nfc_tag_state);
