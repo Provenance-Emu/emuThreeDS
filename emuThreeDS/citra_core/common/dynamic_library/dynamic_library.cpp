@@ -75,6 +75,7 @@ std::string DynamicLibrary::GetLibraryName(std::string_view name, int major, int
         return fmt::format("{}.dll", name);
     }
 #elif defined(__APPLE__)
+    // TODO: This is sus, needs .framework most likely @JoeMatt
     auto prefix = name.starts_with("lib") ? "" : "lib";
     if (major >= 0 && minor >= 0) {
         return fmt::format("{}{}.{}.{}.dylib", prefix, name, major, minor);

@@ -24,7 +24,7 @@ class CheatBase;
 
 class CheatEngine {
 public:
-    explicit CheatEngine(u64 title_id_, Core::System& system);
+    explicit CheatEngine(Core::System& system);
     ~CheatEngine();
     void Connect();
     std::vector<std::shared_ptr<CheatBase>> GetCheats() const;

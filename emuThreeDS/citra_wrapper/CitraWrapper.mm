@@ -148,8 +148,10 @@ static void InitializeLogging() {
     Settings::values.current_input_profile.motion_device="engine:motion_device";
     Input::RegisterFactory<Input::MotionDevice>("motion_emu", std::make_shared<MotionFactory>());
 
-    Settings::Apply();
-    
+    Core::System& system{Core::System::GetInstance()};
+
+    system.ApplySettings();
+//    Settings::Apply();
     
     _path = path;
 }

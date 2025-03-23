@@ -193,7 +193,7 @@ void AutoCpuClockAdjuster::Update() {
     last_fps_ = current_fps;
 }
 
-// System::System() : movie{*this}, cheat_engine{*this} {}
+System::System() : movie{}, cheat_engine{*this} {}
 
 System::~System() = default;
 

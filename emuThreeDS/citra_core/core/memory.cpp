@@ -595,6 +595,10 @@ std::shared_ptr<PageTable> MemorySystem::GetCurrentPageTable() const {
     return impl->current_page_table;
 }
 
+void MemorySystem::RasterizerFlushVirtualRegion(VAddr start, u32 size, FlushMode mode) {
+    impl->RasterizerFlushVirtualRegion(start, size, mode);
+}
+
 void MemorySystem::MapPages(PageTable& page_table, u32 base, u32 size, MemoryRef memory,
                             PageType type) {
     LOG_DEBUG(HW_Memory, "Mapping {} onto {:08X}-{:08X}", (void*)memory.GetPtr(),

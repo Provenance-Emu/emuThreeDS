@@ -18,8 +18,8 @@ namespace Cheats {
 // we use the same value
 constexpr u64 run_interval_ticks = 50'000'000;
 
-CheatEngine::CheatEngine(u64 title_id_, Core::System& system_)
-    : system(system_), title_id{title_id_} {
+CheatEngine::CheatEngine(Core::System& system_)
+    : system(system_) {
     LoadCheatFile();
     if (system.IsPoweredOn()) {
         Connect();
