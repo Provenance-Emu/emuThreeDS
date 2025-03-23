@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <random>
 #include <tuple>
 #include "common/assert.h"
 #include "common/logging/log.h"
@@ -19,13 +20,26 @@ bool Timing::Event::operator<(const Timing::Event& right) const {
     return std::tie(time, fifo_order) < std::tie(right.time, right.fifo_order);
 }
 
-Timing::Timing(std::size_t num_cores, u32 cpu_clock_percentage) {
+Timing::Timing(std::size_t num_cores, u32 cpu_clock_percentage, s64 override_base_ticks) {
+    // Generate non-zero base tick count to simulate time the system ran before launching the game.
+    // This accounts for games that rely on the system tick to seed randomness.
+    const auto base_ticks = override_base_ticks >= 0 ? override_base_ticks : GenerateBaseTicks();
+
     timers.resize(num_cores);
     for (std::size_t i = 0; i < num_cores; ++i) {
         timers[i] = std::make_shared<Timer>();
     }
     UpdateClockSpeed(cpu_clock_percentage);
     current_timer = timers[0].get();
+}
+
+s64 Timing::GenerateBaseTicks() {
+//    if (Settings::values.init_ticks_type.GetValue() == Settings::InitTicks::Fixed) {
+//        return Settings::values.init_ticks_override.GetValue();
+//    }
+    // Bounded to 32 bits to make sure we don't generate too high of a counter and risk overflowing.
+    std::mt19937 random_gen(std::random_device{}());
+    return random_gen();
 }
 
 void Timing::UpdateClockSpeed(u32 cpu_clock_percentage) {
@@ -35,6 +49,7 @@ void Timing::UpdateClockSpeed(u32 cpu_clock_percentage) {
 }
 
 TimingEventType* Timing::RegisterEvent(const std::string& name, TimedCallback callback) {
+    
     // check for existing type with same name.
     // we want event type names to remain unique so that we can use them for serialization.
     auto info = event_types.emplace(name, TimingEventType{});
@@ -135,7 +150,7 @@ std::shared_ptr<Timing::Timer> Timing::GetTimer(std::size_t cpu_id) {
     return timers[cpu_id];
 }
 
-Timing::Timer::Timer() = default;
+Timing::Timer::Timer(s64 base_ticks) : executed_ticks(base_ticks) {}
 
 Timing::Timer::~Timer() {
     MoveEvents();

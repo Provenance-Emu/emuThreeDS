@@ -93,13 +93,65 @@ public:
      * @return FileType corresponding to the loaded file
      */
     virtual FileType GetFileType() = 0;
-
+    
+    /**
+     * Returns the preferred region codes of this file
+     * @return A vector of the preferred region codes
+     */
+    [[nodiscard]] virtual std::span<const u32> GetPreferredRegions() const {
+        return {};
+    }
+    
     /**
      * Load the application and return the created Process instance
      * @param process The newly created process.
      * @return The status result of the operation.
      */
     virtual ResultStatus Load(std::shared_ptr<Kernel::Process>& process) = 0;
+    
+    /**
+     * Loads the core version (FIRM title ID low) that this application needs.
+     * This function defaults to 0x2 (NATIVE_FIRM) if it can't read the
+     * information.
+     * @returns A pair with the optional core version, and the status.
+     */
+    virtual std::pair<std::optional<u32>, ResultStatus> LoadCoreVersion() {
+        return std::make_pair(0x2, ResultStatus::Success);
+    }
+    
+    /**
+     * Forces the application memory mode to the specified value,
+     * overriding the memory mode specified in the metadata.
+     */
+    void SetKernelMemoryModeOverride(Kernel::MemoryMode mem_override) {
+        memory_mode_override = mem_override;
+    }
+
+    /**
+     * Loads the memory mode that this application needs.
+     * This function defaults to Dev1 (96MB allocated to the application) if it can't read the
+     * information.
+     * @returns A pair with the optional memory mode, and the status.
+     */
+    virtual std::pair<std::optional<Kernel::MemoryMode>, ResultStatus> LoadKernelMemoryMode() {
+        if (memory_mode_override.has_value()) {
+            return std::make_pair(*memory_mode_override, ResultStatus::Success);
+        }
+        // 96MB allocated to the application.
+        return std::make_pair(Kernel::MemoryMode::Dev1, ResultStatus::Success);
+    }
+
+    /**
+     * Loads the N3DS hardware capabilities that this application uses.
+     * It defaults to all disabled (O3DS) if it can't read the information.
+     * @returns A pair with the optional N3DS hardware capabilities, and the status.
+     */
+    virtual std::pair<std::optional<Kernel::New3dsHwCapabilities>, ResultStatus>
+    LoadNew3dsHwCapabilities() {
+        return std::make_pair(
+            Kernel::New3dsHwCapabilities{false, false, Kernel::New3dsMemoryMode::Legacy},
+            ResultStatus::Success);
+    }
 
     /**
      * Loads the system mode that this application needs.
@@ -235,8 +287,10 @@ public:
     }
 
 protected:
+//    Core::System& system;
     FileUtil::IOFile file;
     bool is_loaded = false;
+    std::optional<Kernel::MemoryMode> memory_mode_override = std::nullopt;
 };
 
 /**

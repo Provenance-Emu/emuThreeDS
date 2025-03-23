@@ -459,6 +459,10 @@ u64 Movie::GetOverrideInitTime() const {
     return init_time;
 }
 
+s64 Movie::GetOverrideBaseTicks() const {
+    return base_ticks;
+}
+
 Movie::ValidationResult Movie::ValidateHeader(const CTMHeader& header) const {
     if (header_magic_bytes != header.filetype) {
         LOG_ERROR(Movie, "Playback file does not have valid header");
@@ -494,6 +498,7 @@ void Movie::SaveMovie() {
     header.filetype = header_magic_bytes;
     header.program_id = program_id;
     header.clock_init_time = init_time;
+//    header.timing_base_ticks = base_ticks;
     header.id = id;
 
     std::memcpy(header.author.data(), record_movie_author.data(),

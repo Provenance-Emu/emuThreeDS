@@ -34,9 +34,9 @@ public:
         }
 
     protected:
-        const GraphicsDebugger* GetDebugger() const {
-            return observed;
-        }
+//        const GraphicsDebugger* GetDebugger() const {
+//            return observed;
+//        }
 
     private:
         GraphicsDebugger* observed;

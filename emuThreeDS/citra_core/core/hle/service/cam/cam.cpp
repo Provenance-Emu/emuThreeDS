@@ -945,7 +945,7 @@ void Module::Interface::GetLatestVsyncTiming(Kernel::HLERequestContext& ctx) {
 }
 
 void Module::Interface::GetStereoCameraCalibrationData(Kernel::HLERequestContext& ctx) {
-    IPC::RequestBuilder rb = IPC::RequestParser(ctx, 0x2B, 0, 0).MakeBuilder(17, 0);
+    IPC::RequestBuilder rb = IPC::RequestParser(ctx).MakeBuilder(17, 0);
 
     // Default values taken from yuriks' 3DS. Valid data is required here or games using the
     // calibration get stuck in an infinite CPU loop.

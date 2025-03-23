@@ -3109,7 +3109,7 @@ MCR_INST : {
 
         // Writing to PC (R15) is an error case and should be rare
         if (inst_cream->Rd == 15) [[unlikely]] {
-            DEBUG_MSG;
+//            DEBUG_MSG;
         } else {
             // CP15 is the system control coprocessor - most common case
             if (inst_cream->cp_num == 15) [[likely]] {

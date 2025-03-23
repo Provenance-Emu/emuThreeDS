@@ -90,7 +90,7 @@ public:
     [[nodiscard]] Pica::DebugContext& DebugContext();
 
     /// Returns a mutable reference to the GSP command debugger.
-    [[nodiscard]] GraphicsDebugger& Debugger();
+//    [[nodiscard]] GraphicsDebugger& Debugger();
 
 private:
     void SubmitCmdList(u32 index);

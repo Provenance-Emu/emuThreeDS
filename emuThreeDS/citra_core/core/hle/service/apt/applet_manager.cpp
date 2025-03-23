@@ -1191,7 +1191,7 @@ static void CaptureFrameBuffer(Core::System& system, u32 capture_offset, VAddr s
     static constexpr auto screen_width_pow2 = 256;
     const auto bpp = format < 2 ? 3 : 2;
 
-    Memory::RasterizerFlushVirtualRegion(src, screen_width * height * bpp,
+    system.Memory().RasterizerFlushVirtualRegion(src, screen_width * height * bpp,
                                          Memory::FlushMode::Flush);
 
     auto dst_vaddr = screen_capture_base_vaddr + capture_offset;
@@ -1206,7 +1206,7 @@ static void CaptureFrameBuffer(Core::System& system, u32 capture_offset, VAddr s
         }
     }
 
-    Memory::RasterizerFlushVirtualRegion(dst_vaddr, screen_width_pow2 * height * bpp,
+    system.Memory().RasterizerFlushVirtualRegion(dst_vaddr, screen_width_pow2 * height * bpp,
                                          Memory::FlushMode::Invalidate);
 }
 

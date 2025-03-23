@@ -82,6 +82,58 @@ class TelemetrySession;
 class ExclusiveMonitor;
 class Timing;
 
+/**
+ * Class to handle automatic CPU clock percentage adjustment based on GPU performance.
+ * This adjusts the CPU clock to optimize performance by monitoring the FPS and
+ * adjusting the CPU clock percentage accordingly.
+ */
+class AutoCpuClockAdjuster {
+public:
+    explicit AutoCpuClockAdjuster(System& system);
+    ~AutoCpuClockAdjuster() = default;
+
+    /**
+     * Updates the CPU clock percentage based on current performance metrics.
+     * Should be called periodically (e.g., once per second).
+     */
+    void Update();
+
+    /**
+     * Enables or disables the auto adjustment feature.
+     * @param enabled Whether auto adjustment should be enabled
+     */
+    void SetEnabled(bool enabled) { enabled_ = enabled; }
+
+    /**
+     * Checks if auto adjustment is currently enabled.
+     * @return True if auto adjustment is enabled, false otherwise
+     */
+    bool IsEnabled() const { return enabled_; }
+    
+    /**
+     * Gets the current CPU clock percentage being used.
+     * @return The current CPU clock percentage
+     */
+    s32 GetCurrentPercentage() const { return current_percentage_; }
+
+    static constexpr s32 auto_mode_max_percentage_ = 100; // Maximum for auto mode
+
+private:
+    System& system_;
+    bool enabled_ = false;
+    s32 current_percentage_ = 100;
+    double last_fps_ = 0.0;
+    std::chrono::steady_clock::time_point last_adjustment_time_;
+    
+    // Adjustment parameters
+    static constexpr s32 min_percentage_ = 5;
+    static constexpr s32 max_percentage_ = 400; // Maximum allowed by settings
+    static constexpr s32 adjustment_step_ = 5;
+    static constexpr std::chrono::milliseconds adjustment_interval_{500}; // Adjust every 500ms
+    static constexpr double target_fps_min_ = 50.0; // Target minimum FPS
+    static constexpr double target_fps_max_ = 65.0; // Target maximum FPS
+};
+
 class System {
 public:
     /**

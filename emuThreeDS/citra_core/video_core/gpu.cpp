@@ -328,9 +328,9 @@ Pica::DebugContext& GPU::DebugContext() {
     return *Pica::g_debug_context;
 }
 
-GraphicsDebugger& GPU::Debugger() {
-    return impl->gpu_debugger;
-}
+//GraphicsDebugger& GPU::Debugger() {
+//    return impl->gpu_debugger;
+//}
 
 void GPU::SubmitCmdList(u32 index) {
     // Check if a command list was triggered.

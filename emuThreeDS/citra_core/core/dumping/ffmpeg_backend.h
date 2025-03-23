@@ -25,6 +25,10 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+namespace VideoCore {
+class RendererBase;
+}
+
 namespace VideoDumper {
 
 using VariableAudioFrame = std::vector<s16>;
