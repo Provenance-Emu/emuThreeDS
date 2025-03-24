@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+// Local Changes: Check for isReloaded/isInitialized state
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -114,24 +116,54 @@ DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y) {
 }
 
 void Module::LoadInputDevices() {
-    std::transform(Settings::values.current_input_profile.buttons.begin() +
-                       Settings::NativeButton::BUTTON_HID_BEGIN,
-                   Settings::values.current_input_profile.buttons.begin() +
-                       Settings::NativeButton::BUTTON_HID_END,
-                   buttons.begin(), Input::CreateDevice<Input::ButtonDevice>);
-    circle_pad = Input::CreateDevice<Input::AnalogDevice>(
-        Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CirclePad]);
-    motion_device = Input::CreateDevice<Input::MotionDevice>(
-        Settings::values.current_input_profile.motion_device);
-    touch_device = Input::CreateDevice<Input::TouchDevice>(
-        Settings::values.current_input_profile.touch_device);
-    if (Settings::values.current_input_profile.use_touch_from_button) {
-        touch_btn_device = Input::CreateDevice<Input::TouchDevice>("engine:touch_from_button");
+    if (Settings::values.buttons_initialized || Settings::values.skip_buttons) {
+        return;
     } else {
-        touch_btn_device.reset();
+        Settings::values.m_buttonA = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::A]);
+        Settings::values.m_buttonB = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::B]);
+        Settings::values.m_buttonX = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::X]);
+        Settings::values.m_buttonY = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::Y]);
+        Settings::values.m_buttonL = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::L]);
+        Settings::values.m_buttonR = Input::CreateDevice<Input::ButtonDevice>(
+                                                                              Settings::values.current_input_profile.buttons[Settings::NativeButton::R]);
+        Settings::values.m_buttonStart = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                  Settings::values.current_input_profile.buttons[Settings::NativeButton::Start]);
+        Settings::values.m_buttonSelect = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                   Settings::values.current_input_profile.buttons[Settings::NativeButton::Select]);
+        Settings::values.m_buttonDpadUp = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                   Settings::values.current_input_profile.buttons[Settings::NativeButton::Up]);
+        Settings::values.m_buttonDpadDown = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                     Settings::values.current_input_profile.buttons[Settings::NativeButton::Down]);
+        Settings::values.m_buttonDpadLeft = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                     Settings::values.current_input_profile.buttons[Settings::NativeButton::Left]);
+        Settings::values.m_buttonDpadRight = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                      Settings::values.current_input_profile.buttons[Settings::NativeButton::Right]);
+        Settings::values.m_buttonDummy = Input::CreateDevice<Input::ButtonDevice>(
+                                                                                  Settings::values.current_input_profile.buttons[Settings::NativeButton::Debug]);
+        Settings::values.circle_pad = Input::CreateDevice<Input::AnalogDevice>(
+            Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CirclePad]);
+        Settings::values.motion_device = Input::CreateDevice<Input::MotionDevice>(
+            Settings::values.current_input_profile.motion_device);
+        Settings::values.touch_device = Input::CreateDevice<Input::TouchDevice>(
+            Settings::values.current_input_profile.touch_device);
+        if (Settings::values.current_input_profile.use_touch_from_button) {
+            Settings::values.touch_btn_device = Input::CreateDevice<Input::TouchDevice>("engine:touch_from_button");
+        } else {
+            Settings::values.touch_btn_device.reset();
+        }
+        
+        // enable accelerometer
+        enable_accelerometer_count=1;
+        enable_gyroscope_count=1;
+        
+        Settings::values.buttons_initialized=true;
     }
 }
-
 void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
     SharedMem* mem = reinterpret_cast<SharedMem*>(shared_mem->GetPointer());
 
@@ -309,6 +341,9 @@ void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
 }
 
 void Module::UpdateAccelerometerCallback(std::uintptr_t user_data, s64 cycles_late) {
+    if (Settings::values.isReloading || Settings::values.skip_buttons)
+        return;
+
     SharedMem* mem = reinterpret_cast<SharedMem*>(shared_mem->GetPointer());
 
     mem->accelerometer.index = next_accelerometer_index;
@@ -362,6 +397,9 @@ void Module::UpdateAccelerometerCallback(std::uintptr_t user_data, s64 cycles_la
 }
 
 void Module::UpdateGyroscopeCallback(std::uintptr_t user_data, s64 cycles_late) {
+    if (Settings::values.isReloading || Settings::values.skip_buttons)
+        return;
+    
     SharedMem* mem = reinterpret_cast<SharedMem*>(shared_mem->GetPointer());
 
     mem->gyroscope.index = next_gyroscope_index;

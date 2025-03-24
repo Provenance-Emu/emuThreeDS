@@ -2,6 +2,8 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+// Local Changes: Check for isReloaded/isInitialized state
+
 #include <fmt/format.h>
 #include "common/alignment.h"
 #include "common/settings.h"
@@ -228,6 +230,9 @@ void ExtraHID::OnReceive(std::span<const u8> data) {
 }
 
 void ExtraHID::SendHIDStatus() {
+    if (Settings::values.isReloading || Settings::values.skip_extra_buttons)
+        return;
+
     if (is_device_reload_pending.exchange(false))
         LoadInputDevices();
 
@@ -285,12 +290,17 @@ void ExtraHID::RequestInputDevicesReload() {
 }
 
 void ExtraHID::LoadInputDevices() {
-    zl = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]);
-    zr = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]);
-    c_stick = Input::CreateDevice<Input::AnalogDevice>(
-        Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CStick]);
+    if (Settings::values.extra_buttons_initialized || Settings::values.skip_extra_buttons) {
+        return;
+    } else {
+        zl = Input::CreateDevice<Input::ButtonDevice>(
+                                                      Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]);
+        zr = Input::CreateDevice<Input::ButtonDevice>(
+                                                      Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]);
+        c_stick = Input::CreateDevice<Input::AnalogDevice>(
+                                                           Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CStick]);
+        Settings::values.extra_buttons_initialized=true;
+    }
 }
 
 } // namespace Service::IR
