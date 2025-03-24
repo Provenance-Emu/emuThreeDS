@@ -8,9 +8,10 @@
 #include "common/assert.h"
 #include "common/logging/log.h"
 
+
+#if (defined(__ARM_NEON) || defined(__aarch64__))
 #define USE_NEON 0
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
 #include "audio_core/hle/mixer_neon.h"
 #endif
 
@@ -102,7 +103,7 @@ static std::array<s16, 2> AddAndClampToS16(const std::array<s16, 2>& a,
 
 // Optimized version for adding and clamping multiple stereo samples
 static void AddAndClampToS16Batch(std::array<s16, 2>* dst, const std::array<s16, 2>* src, int count) {
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if USE_NEON
     // Use NEON-optimized version if available
     AddAndClampToS16_NEON(dst, src, count);
 #else
@@ -116,7 +117,7 @@ static void AddAndClampToS16Batch(std::array<s16, 2>* dst, const std::array<s16,
 void Mixers::DownmixAndMixIntoCurrentFrame(float gain, const QuadFrame32& samples) {
     // TODO(merry): Limiter. (Currently we're performing final mixing assuming a disabled limiter.)
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if USE_NEON
     // Use NEON-optimized versions for ARM platforms
     switch (state.output_format) {
     case OutputFormat::Mono:
@@ -174,7 +175,7 @@ void Mixers::AuxReturn(const IntermediateMixSamples& read_samples) {
     // NOTE: read_samples.mix{1,2}.pcm32 annoyingly have their dimensions in reverse order to
     // QuadFrame32.
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if USE_NEON
     if (state.mixer1_enabled) {
         // Process 4 samples at a time using NEON
         for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
@@ -248,7 +249,7 @@ void Mixers::AuxSend(IntermediateMixSamples& write_samples,
 
     state.intermediate_mix_buffer[0] = input[0];
 
-#if (defined(__ARM_NEON) || defined(__aarch64__)) && USE_NEON
+#if USE_NEON
     if (state.mixer1_enabled) {
         // Process 4 samples at a time using NEON
         for (std::size_t sample = 0; sample < samples_per_frame; sample += 4) {
