@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include "common/common_funcs.h"
+#include "common/logging/backend.h"
 #include "common/logging/log.h"
 
 // For asserts we'd like to keep all the junk executed when an assert happens away from the
@@ -15,8 +16,9 @@
 #define ASSERT(_a_)                                                                                \
     do                                                                                             \
         if (!(_a_)) [[unlikely]] {                                                                 \
-            []() CITRA_NO_INLINE CITRA_NO_RETURN {                                                 \
+            []() CYTRUS_NO_INLINE CYTRUS_NO_RETURN {                                               \
                 LOG_CRITICAL(Debug, "Assertion Failed!");                                          \
+                Common::Log::Stop();                                                               \
                 Crash();                                                                           \
                 exit(1);                                                                           \
             }();                                                                                   \
@@ -26,8 +28,9 @@
 #define ASSERT_MSG(_a_, ...)                                                                       \
     do                                                                                             \
         if (!(_a_)) [[unlikely]] {                                                                 \
-            [&]() CITRA_NO_INLINE CITRA_NO_RETURN {                                                \
+            [&]() CYTRUS_NO_INLINE CYTRUS_NO_RETURN {                                              \
                 LOG_CRITICAL(Debug, "Assertion Failed!\n" __VA_ARGS__);                            \
+                Common::Log::Stop();                                                               \
                 Crash();                                                                           \
                 exit(1);                                                                           \
             }();                                                                                   \
@@ -35,15 +38,17 @@
     while (0)
 
 #define UNREACHABLE()                                                                              \
-    ([]() CITRA_NO_INLINE CITRA_NO_RETURN {                                                        \
+    ([]() CYTRUS_NO_INLINE CYTRUS_NO_RETURN {                                                      \
         LOG_CRITICAL(Debug, "Unreachable code!");                                                  \
+        Common::Log::Stop();                                                                       \
         Crash();                                                                                   \
         exit(1);                                                                                   \
     }())
 
 #define UNREACHABLE_MSG(...)                                                                       \
-    ([&]() CITRA_NO_INLINE CITRA_NO_RETURN {                                                       \
+    ([&]() CYTRUS_NO_INLINE CYTRUS_NO_RETURN {                                                     \
         LOG_CRITICAL(Debug, "Unreachable code!\n" __VA_ARGS__);                                    \
+        Common::Log::Stop();                                                                       \
         Crash();                                                                                   \
         exit(1);                                                                                   \
     }())

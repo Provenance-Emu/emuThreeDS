@@ -16,7 +16,6 @@ namespace CiTrace {
 class Recorder {
 public:
     struct InitialState {
-        std::vector<u32> gpu_registers;
         std::vector<u32> lcd_registers;
         std::vector<u32> pica_registers;
         std::vector<u32> default_attributes;
@@ -34,7 +33,7 @@ public:
      */
     explicit Recorder(const InitialState& initial_state);
 
-    /// Finish recording of this Citrace and save it using the given filename.
+    /// Finish recording of this CiTrace and save it using the given filename.
     void Finish(const std::string& filename);
 
     /// Mark end of a frame
@@ -51,8 +50,7 @@ public:
      * Record a register write.
      * @note Use this whenever a GPU-related MMIO register has been written to.
      */
-    template <typename T>
-    void RegisterWritten(u32 physical_address, T value);
+    void RegisterWritten(u32 physical_address, u32 value);
 
 private:
     // Initial state of recording start

@@ -53,6 +53,14 @@ public:
 
     bool DumpRomFS(const std::string& target_path);
 
+    bool AllowsCachedReads() const override {
+        return false;
+    }
+
+    bool CacheReady(std::size_t file_offset, std::size_t length) override {
+        return false;
+    }
+
 private:
     struct File;
     struct Directory {
@@ -133,10 +141,10 @@ private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar& boost::serialization::base_object<RomFSReader>(*this);
-        ar& romfs;
-        ar& patch_path;
-        ar& patch_ext_path;
-        ar& load_relocations;
+        ar & romfs;
+        ar & patch_path;
+        ar & patch_ext_path;
+        ar & load_relocations;
         if (Archive::is_loading::value) {
             Load();
         }

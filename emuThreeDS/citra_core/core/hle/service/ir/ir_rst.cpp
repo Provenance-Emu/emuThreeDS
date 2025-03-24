@@ -23,11 +23,11 @@ namespace Service::IR {
 template <class Archive>
 void IR_RST::serialize(Archive& ar, const unsigned int) {
     ar& boost::serialization::base_object<Kernel::SessionRequestHandler>(*this);
-    ar& update_event;
-    ar& shared_memory;
-    ar& next_pad_index;
-    ar& raw_c_stick;
-    ar& update_period;
+    ar & update_event;
+    ar & shared_memory;
+    ar & next_pad_index;
+    ar & raw_c_stick;
+    ar & update_period;
     // update_callback_id and input devices are set separately
     ReloadInputDevices();
 }
@@ -72,25 +72,41 @@ void IR_RST::UpdateCallback(std::uintptr_t user_data, s64 cycles_late) {
     if (is_device_reload_pending.exchange(false))
         LoadInputDevices();
 
+    constexpr u32 VALID_EXTRAHID_KEYS = 0xF00C000;
+
     PadState state;
-    state.zl.Assign(zl_button->GetStatus());
-    state.zr.Assign(zr_button->GetStatus());
+    s16 c_stick_x, c_stick_y;
 
-    // Get current c-stick position and update c-stick direction
-    float c_stick_x_f, c_stick_y_f;
-    std::tie(c_stick_x_f, c_stick_y_f) = c_stick->GetStatus();
-    constexpr int MAX_CSTICK_RADIUS = 0x9C; // Max value for a c-stick radius
-    s16 c_stick_x = static_cast<s16>(c_stick_x_f * MAX_CSTICK_RADIUS);
-    s16 c_stick_y = static_cast<s16>(c_stick_y_f * MAX_CSTICK_RADIUS);
+    if (artic_controller.get() && artic_controller->IsReady()) {
+        Service::HID::ArticBaseController::ControllerData data =
+            artic_controller->GetControllerData();
 
-    Core::Movie::GetInstance().HandleIrRst(state, c_stick_x, c_stick_y);
+        state.hex = data.pad & VALID_EXTRAHID_KEYS;
 
-    if (!raw_c_stick) {
-        const HID::DirectionState direction = HID::GetStickDirectionState(c_stick_x, c_stick_y);
-        state.c_stick_up.Assign(direction.up);
-        state.c_stick_down.Assign(direction.down);
-        state.c_stick_left.Assign(direction.left);
-        state.c_stick_right.Assign(direction.right);
+        c_stick_x = data.c_stick_x;
+        c_stick_y = data.c_stick_y;
+
+        system.Movie().HandleIrRst(state, c_stick_x, c_stick_y);
+    } else {
+        state.zl.Assign(zl_button->GetStatus());
+        state.zr.Assign(zr_button->GetStatus());
+
+        // Get current c-stick position and update c-stick direction
+        float c_stick_x_f, c_stick_y_f;
+        std::tie(c_stick_x_f, c_stick_y_f) = c_stick->GetStatus();
+        constexpr int MAX_CSTICK_RADIUS = 0x9C; // Max value for a c-stick radius
+        c_stick_x = static_cast<s16>(c_stick_x_f * MAX_CSTICK_RADIUS);
+        c_stick_y = static_cast<s16>(c_stick_y_f * MAX_CSTICK_RADIUS);
+
+        system.Movie().HandleIrRst(state, c_stick_x, c_stick_y);
+
+        if (!raw_c_stick) {
+            const HID::DirectionState direction = HID::GetStickDirectionState(c_stick_x, c_stick_y);
+            state.c_stick_up.Assign(direction.up);
+            state.c_stick_down.Assign(direction.down);
+            state.c_stick_left.Assign(direction.left);
+            state.c_stick_right.Assign(direction.right);
+        }
     }
 
     // TODO (wwylele): implement raw C-stick data for raw_c_stick = true
@@ -130,7 +146,7 @@ void IR_RST::UpdateCallback(std::uintptr_t user_data, s64 cycles_late) {
 void IR_RST::GetHandles(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 3);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushMoveObjects(shared_memory, update_event);
 }
 
@@ -147,7 +163,7 @@ void IR_RST::Initialize(Kernel::HLERequestContext& ctx) {
     system.CoreTiming().ScheduleEvent(msToCycles(update_period), update_callback_id);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_DEBUG(Service_IR, "called. update_period={}, raw_c_stick={}", update_period, raw_c_stick);
 }
@@ -159,11 +175,11 @@ void IR_RST::Shutdown(Kernel::HLERequestContext& ctx) {
     UnloadInputDevices();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     LOG_DEBUG(Service_IR, "called");
 }
 
-IR_RST::IR_RST(Core::System& system) : ServiceFramework("ir:rst", 1), system(system) {
+IR_RST::IR_RST(Core::System& system) : ServiceFramework("ir:rst", 2), system(system) {
     using namespace Kernel;
     // Note: these two kernel objects are even available before Initialize service function is
     // called.
@@ -181,10 +197,10 @@ IR_RST::IR_RST(Core::System& system) : ServiceFramework("ir:rst", 1), system(sys
 
     static const FunctionInfo functions[] = {
         // clang-format off
-        {IPC::MakeHeader(0x0001, 0, 0), &IR_RST::GetHandles, "GetHandles"},
-        {IPC::MakeHeader(0x0002, 2, 0), &IR_RST::Initialize, "Initialize"},
-        {IPC::MakeHeader(0x0003, 0, 0), &IR_RST::Shutdown, "Shutdown"},
-        {IPC::MakeHeader(0x0009, 0, 0), nullptr, "WriteToTwoFields"},
+        {0x0001, &IR_RST::GetHandles, "GetHandles"},
+        {0x0002, &IR_RST::Initialize, "Initialize"},
+        {0x0003, &IR_RST::Shutdown, "Shutdown"},
+        {0x0009, nullptr, "WriteToTwoFields"},
         // clang-format on
     };
     RegisterHandlers(functions);

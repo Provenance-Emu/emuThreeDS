@@ -6,13 +6,13 @@
 
 namespace Common {
 
-const char g_scm_rev[] = "";
-const char g_scm_branch[] = "";
-const char g_scm_desc[] = "";
-const char g_build_name[] = "";
-const char g_build_date[] = "";
-const char g_build_fullname[] = "";
-const char g_build_version[] = "";
-const char g_shader_cache_version[] = "";
+extern const char g_scm_rev[];
+extern const char g_scm_branch[];
+extern const char g_scm_desc[];
+extern const char g_build_name[];
+extern const char g_build_date[];
+extern const char g_build_fullname[];
+extern const char g_build_version[];
+extern const char g_shader_cache_version[];
 
 } // namespace Common

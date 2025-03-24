@@ -18,7 +18,6 @@
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/vector_math_neon.h"
-#include "video_core/pica_state.h"
 #include "video_core/pica_types.h"
 #include "video_core/shader/shader.h"
 #include "video_core/shader/shader_interpreter.h"

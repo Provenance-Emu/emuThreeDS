@@ -19,6 +19,8 @@
 #include "core/hle/kernel/thread.h"
 #include "core/hle/kernel/timer.h"
 
+SERIALIZE_EXPORT_IMPL(Kernel::New3dsHwCapabilities)
+
 namespace Kernel {
 
 /// Initialize the kernel
@@ -87,15 +89,14 @@ void KernelSystem::SetCurrentMemoryPageTable(std::shared_ptr<Memory::PageTable> 
     }
 }
 
-void KernelSystem::SetCPUs(std::vector<std::shared_ptr<ARM_Interface>> cpus) {
+void KernelSystem::SetCPUs(std::vector<std::shared_ptr<Core::ARM_Interface>> cpus) {
     ASSERT(cpus.size() == thread_managers.size());
-    u32 i = 0;
-    for (const auto& cpu : cpus) {
-        thread_managers[i++]->SetCPU(*cpu);
+    for (u32 i = 0; i < cpus.size(); i++) {
+        thread_managers[i]->SetCPU(*cpus[i]);
     }
 }
 
-void KernelSystem::SetRunningCPU(ARM_Interface* cpu) {
+void KernelSystem::SetRunningCPU(Core::ARM_Interface* cpu) {
     if (current_process) {
         stored_processes[current_cpu->GetID()] = current_process;
     }
@@ -138,6 +139,10 @@ const SharedPage::Handler& KernelSystem::GetSharedPageHandler() const {
     return *shared_page_handler;
 }
 
+ConfigMem::Handler& KernelSystem::GetConfigMemHandler() {
+    return *config_mem_handler;
+}
+
 IPCDebugger::Recorder& KernelSystem::GetIPCRecorder() {
     return *ipc_recorder;
 }
@@ -159,25 +164,28 @@ void KernelSystem::ResetThreadIDs() {
 }
 
 template <class Archive>
-void KernelSystem::serialize(Archive& ar, const unsigned int file_version) {
-    ar& memory_regions;
-    ar& named_ports;
+void KernelSystem::serialize(Archive& ar, const unsigned int) {
+    ar & memory_regions;
+    ar & named_ports;
     // current_cpu set externally
     // NB: subsystem references and prepare_reschedule_callback are constant
     ar&* resource_limits.get();
-    ar& next_object_id;
+    ar & next_object_id;
     ar&* timer_manager.get();
-    ar& next_process_id;
-    ar& process_list;
-    ar& current_process;
+    ar & next_process_id;
+    ar & process_list;
+    ar & current_process;
     // NB: core count checked in 'core'
     for (auto& thread_manager : thread_managers) {
         ar&* thread_manager.get();
     }
-    ar& config_mem_handler;
-    ar& shared_page_handler;
-    ar& stored_processes;
-    ar& next_thread_id;
+    ar & config_mem_handler;
+    ar & shared_page_handler;
+    ar & stored_processes;
+    ar & next_thread_id;
+    ar & memory_mode;
+    ar & n3ds_hw_caps;
+    ar & main_thread_extended_sleep;
     // Deliberately don't include debugger info to allow debugging through loads
 
     if (Archive::is_loading::value) {
@@ -189,7 +197,14 @@ void KernelSystem::serialize(Archive& ar, const unsigned int file_version) {
         }
     }
 }
-
 SERIALIZE_IMPL(KernelSystem)
+
+template <class Archive>
+void New3dsHwCapabilities::serialize(Archive& ar, const unsigned int) {
+    ar & enable_l2_cache;
+    ar & enable_804MHz_cpu;
+    ar & memory_mode;
+}
+SERIALIZE_IMPL(New3dsHwCapabilities)
 
 } // namespace Kernel

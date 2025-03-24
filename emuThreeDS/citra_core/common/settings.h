@@ -28,6 +28,11 @@ enum class InitClock : u32 {
     FixedTime = 1,
 };
 
+enum class InitTicks : u32 {
+    Random = 0,
+    Fixed = 1,
+};
+
 enum class LayoutOption : u32 {
     Default,
     SingleScreen,
@@ -72,9 +77,15 @@ enum class TextureFilter : u32 {
     None = 0,
     Anime4K = 1,
     Bicubic = 2,
-    NearestNeighbor = 3,
-    ScaleForce = 4,
-    xBRZ = 5,
+    ScaleForce = 3,
+    xBRZ = 4,
+    MMPX = 5,
+};
+
+enum class TextureSampling : u32 {
+    GameControlled = 0,
+    NearestNeighbor = 1,
+    Linear = 2,
 };
 
 namespace NativeButton {
@@ -99,13 +110,14 @@ enum Values {
     ZR,
 
     Home,
+    Power,
 
     NumButtons,
 };
 
 constexpr int BUTTON_HID_BEGIN = A;
 constexpr int BUTTON_IR_BEGIN = ZL;
-constexpr int BUTTON_NS_BEGIN = Home;
+constexpr int BUTTON_NS_BEGIN = Power;
 
 constexpr int BUTTON_HID_END = BUTTON_IR_BEGIN;
 constexpr int BUTTON_IR_END = BUTTON_NS_BEGIN;
@@ -133,6 +145,7 @@ static const std::array<const char*, NumButtons> mapping = {{
     "button_zl",
     "button_zr",
     "button_home",
+    "button_power",
 }};
 
 } // namespace NativeButton
@@ -175,7 +188,8 @@ public:
      * @param default_val Intial value of the setting, and default value of the setting
      * @param name Label for the setting
      */
-    explicit Setting(const Type& default_val, const std::string& name) requires(!ranged)
+    explicit Setting(const Type& default_val, const std::string& name)
+        requires(!ranged)
         : value{default_val}, default_value{default_val}, label{name} {}
     virtual ~Setting() = default;
 
@@ -188,9 +202,10 @@ public:
      * @param name Label for the setting
      */
     explicit Setting(const Type& default_val, const Type& min_val, const Type& max_val,
-                     const std::string& name) requires(ranged)
-        : value{default_val},
-          default_value{default_val}, maximum{max_val}, minimum{min_val}, label{name} {}
+                     const std::string& name)
+        requires(ranged)
+        : value{default_val}, default_value{default_val}, maximum{max_val}, minimum{min_val},
+          label{name} {}
 
     /**
      *  Returns a reference to the setting's value.
@@ -276,7 +291,8 @@ public:
      * @param default_val Intial value of the setting, and default value of the setting
      * @param name Label for the setting
      */
-    explicit SwitchableSetting(const Type& default_val, const std::string& name) requires(!ranged)
+    explicit SwitchableSetting(const Type& default_val, const std::string& name)
+        requires(!ranged)
         : Setting<Type>{default_val, name} {}
     virtual ~SwitchableSetting() = default;
 
@@ -289,7 +305,8 @@ public:
      * @param name Label for the setting
      */
     explicit SwitchableSetting(const Type& default_val, const Type& min_val, const Type& max_val,
-                               const std::string& name) requires(ranged)
+                               const std::string& name)
+        requires(ranged)
         : Setting<Type, true>{default_val, min_val, max_val, name} {}
 
     /**
@@ -398,7 +415,7 @@ struct TouchFromButtonMap {
     std::vector<std::string> buttons;
 };
 
-/// A special region value indicating that citra will automatically select a region
+/// A special region value indicating that cytrus will automatically select a region
 /// value to fit the region lockout info of the game
 static constexpr s32 REGION_VALUE_AUTO_SELECT = -1;
 
@@ -408,12 +425,15 @@ struct Values {
     int current_input_profile_index;          ///< The current input profile index
     std::vector<InputProfile> input_profiles; ///< The list of input profiles
     std::vector<TouchFromButtonMap> touch_from_button_maps;
+    Setting<bool> use_artic_base_controller{false, "use_artic_base_controller"};
+
+    SwitchableSetting<bool> enable_gamemode{true, "enable_gamemode"};
 
     // Core
     Setting<bool> use_cpu_jit{true, "use_cpu_jit"};
-    // 0 is a special value for auto mode, normal range is 5-400%
-    SwitchableSetting<s32, true> cpu_clock_percentage{100, 0, 400, "cpu_clock_percentage"};
+    SwitchableSetting<s32, true> cpu_clock_percentage{100, 5, 400, "cpu_clock_percentage"};
     SwitchableSetting<bool> is_new_3ds{true, "is_new_3ds"};
+    SwitchableSetting<bool> lle_applets{false, "lle_applets"};
 
     // Data Storage
     Setting<bool> use_virtual_sd{true, "use_virtual_sd"};
@@ -424,12 +444,25 @@ struct Values {
     Setting<InitClock> init_clock{InitClock::SystemTime, "init_clock"};
     Setting<u64> init_time{946681277ULL, "init_time"};
     Setting<s64> init_time_offset{0, "init_time_offset"};
+    Setting<InitTicks> init_ticks_type{InitTicks::Random, "init_ticks_type"};
+    Setting<s64> init_ticks_override{0, "init_ticks_override"};
     Setting<bool> plugin_loader_enabled{false, "plugin_loader"};
     Setting<bool> allow_plugin_loader{true, "allow_plugin_loader"};
+    Setting<u16> steps_per_hour{0, "steps_per_hour"};
 
     // Renderer
-    SwitchableSetting<GraphicsAPI, true> graphics_api{GraphicsAPI::OpenGL, GraphicsAPI::Software,
-                                                      GraphicsAPI::Vulkan, "graphics_api"};
+    SwitchableSetting<GraphicsAPI, true> graphics_api{
+#if defined(ENABLE_OPENGL)
+        GraphicsAPI::OpenGL,
+#elif defined(ENABLE_VULKAN)
+        GraphicsAPI::Vulkan,
+#elif defined(ENABLE_SOFTWARE_RENDERER)
+        GraphicsAPI::Software,
+#else
+// TODO: Add a null renderer backend for this, perhaps.
+#error "At least one renderer must be enabled."
+#endif
+        GraphicsAPI::Software, GraphicsAPI::Vulkan, "graphics_api"};
     SwitchableSetting<u32> physical_device{0, "physical_device"};
     Setting<bool> use_gles{false, "use_gles"};
     Setting<bool> renderer_debug{false, "renderer_debug"};
@@ -445,8 +478,12 @@ struct Values {
     SwitchableSetting<u32, true> resolution_factor{1, 0, 10, "resolution_factor"};
     SwitchableSetting<u16, true> frame_limit{100, 0, 1000, "frame_limit"};
     SwitchableSetting<TextureFilter> texture_filter{TextureFilter::None, "texture_filter"};
+    SwitchableSetting<TextureSampling> texture_sampling{TextureSampling::GameControlled,
+                                                        "texture_sampling"};
+    SwitchableSetting<u16, true> delay_game_render_thread_us{0, 0, 16000,
+                                                             "delay_game_render_thread_us"};
 
-    SwitchableSetting<LayoutOption> layout_option{LayoutOption::Default, "layout_option"};
+    SwitchableSetting<LayoutOption> layout_option{LayoutOption::MobilePortrait, "layout_option"};
     SwitchableSetting<bool> swap_screen{false, "swap_screen"};
     SwitchableSetting<bool> upright_screen{false, "upright_screen"};
     SwitchableSetting<float, true> large_screen_proportion{4.f, 1.f, 16.f,
@@ -488,10 +525,11 @@ struct Values {
     bool audio_muted;
     SwitchableSetting<AudioEmulation> audio_emulation{AudioEmulation::HLE, "audio_emulation"};
     SwitchableSetting<bool> enable_audio_stretching{true, "enable_audio_stretching"};
+    SwitchableSetting<bool> enable_realtime_audio{false, "enable_realtime_audio"};
     SwitchableSetting<float, true> volume{1.f, 0.f, 1.f, "volume"};
-    Setting<AudioCore::SinkType> output_type{AudioCore::SinkType::CoreAudio, "output_type"};
+    Setting<AudioCore::SinkType> output_type{AudioCore::SinkType::Auto, "output_type"};
     Setting<std::string> output_device{"auto", "output_device"};
-    Setting<AudioCore::InputType> input_type{AudioCore::InputType::CoreAudio, "input_type"};
+    Setting<AudioCore::InputType> input_type{AudioCore::InputType::Auto, "input_type"};
     Setting<std::string> input_device{"auto", "input_device"};
 
     // Camera
@@ -502,11 +540,14 @@ struct Values {
     // Debugging
     bool record_frame_times;
     std::unordered_map<std::string, bool> lle_modules;
+    Setting<bool> delay_start_for_lle_modules{true, "delay_start_for_lle_modules"};
     Setting<bool> use_gdbstub{false, "use_gdbstub"};
     Setting<u16> gdbstub_port{24689, "gdbstub_port"};
+    Setting<bool> instant_debug_log{false, "instant_debug_log"};
 
     // Miscellaneous
     Setting<std::string> log_filter{"*:Info", "log_filter"};
+    Setting<std::string> log_regex_filter{"", "log_regex_filter"};
 
     // Video Dumping
     std::string output_format;
@@ -528,7 +569,6 @@ void SetConfiguringGlobal(bool is_global);
 
 float Volume();
 
-void Apply();
 void LogSettings();
 
 // Restore the global state of all applicable settings in the Values struct

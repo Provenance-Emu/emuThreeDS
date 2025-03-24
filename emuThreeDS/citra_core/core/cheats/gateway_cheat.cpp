@@ -6,6 +6,7 @@
 #include <cmath>
 #include <fstream>
 #include <functional>
+#include <span>
 #include <string>
 #include <vector>
 #include <boost/iostreams/device/file_descriptor.hpp>
@@ -144,7 +145,7 @@ static inline void JokerOp(const GatewayCheat::CheatLine& line, State& state,
 }
 
 static inline void PatchOp(const GatewayCheat::CheatLine& line, State& state, Core::System& system,
-                           const std::vector<GatewayCheat::CheatLine>& cheat_lines) {
+                           std::span<const GatewayCheat::CheatLine> cheat_lines) {
     if (state.if_flag > 0) {
         // Skip over the additional patch lines
         state.current_line_nr += static_cast<int>(std::ceil(line.value / 8.0));
@@ -196,9 +197,9 @@ GatewayCheat::CheatLine::CheatLine(const std::string& line) {
         if (type_temp == "D" || type_temp == "d")
             sub_type_temp = line.substr(1, 1);
         type = static_cast<CheatType>(std::stoi(type_temp + sub_type_temp, 0, 16));
-        first = std::stoul(line.substr(0, 8), 0, 16);
+        first = static_cast<u32>(std::stoul(line.substr(0, 8), 0, 16));
         address = first & 0x0FFFFFFF;
-        value = std::stoul(line.substr(9, 8), 0, 16);
+        value = static_cast<u32>(std::stoul(line.substr(9, 8), 0, 16));
         cheat_line = line;
     } catch (const std::logic_error&) {
         type = CheatType::Null;
@@ -471,8 +472,8 @@ std::string GatewayCheat::ToString() const {
     return result;
 }
 
-std::vector<std::unique_ptr<CheatBase>> GatewayCheat::LoadFile(const std::string& filepath) {
-    std::vector<std::unique_ptr<CheatBase>> cheats;
+std::vector<std::shared_ptr<CheatBase>> GatewayCheat::LoadFile(const std::string& filepath) {
+    std::vector<std::shared_ptr<CheatBase>> cheats;
 
     boost::iostreams::stream<boost::iostreams::file_descriptor_source> file;
     FileUtil::OpenFStream<std::ios_base::in>(file, filepath);
@@ -492,7 +493,7 @@ std::vector<std::unique_ptr<CheatBase>> GatewayCheat::LoadFile(const std::string
         line = Common::StripSpaces(line); // remove spaces at front and end
         if (line.length() >= 2 && line.front() == '[') {
             if (!cheat_lines.empty()) {
-                cheats.push_back(std::make_unique<GatewayCheat>(name, cheat_lines, comments));
+                cheats.push_back(std::make_shared<GatewayCheat>(name, cheat_lines, comments));
                 cheats.back()->SetEnabled(enabled);
                 enabled = false;
             }
@@ -510,7 +511,7 @@ std::vector<std::unique_ptr<CheatBase>> GatewayCheat::LoadFile(const std::string
         }
     }
     if (!cheat_lines.empty()) {
-        cheats.push_back(std::make_unique<GatewayCheat>(name, cheat_lines, comments));
+        cheats.push_back(std::make_shared<GatewayCheat>(name, cheat_lines, comments));
         cheats.back()->SetEnabled(enabled);
     }
     return cheats;

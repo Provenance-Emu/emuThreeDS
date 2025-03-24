@@ -6,6 +6,8 @@
 #include <memory>
 #include <utility>
 #include <vector>
+#include <boost/serialization/set.hpp>
+#include "common/archives.h"
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "common/logging/log.h"
@@ -19,7 +21,7 @@
 #include "core/hle/result.h"
 #include "core/memory.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
+SERIALIZE_EXPORT_IMPL(Kernel::MemoryRegionInfo)
 
 namespace Kernel {
 
@@ -38,14 +40,6 @@ static const u32 memory_region_sizes[8][3] = {
     {0x07C00000, 0x06400000, 0x02000000}, // 6
     {0x0B200000, 0x02E00000, 0x02000000}, // 7
 };
-
-//namespace MemoryMode {
-//enum N3DSMode : u8 {
-//    Mode6 = 1,
-//    Mode7 = 2,
-//    Mode6_2 = 3,
-//};
-//}
 
 void KernelSystem::MemoryInit(MemoryMode memory_mode, New3dsMemoryMode n3ds_mode,
                               u64 override_init_time) {
@@ -84,10 +78,8 @@ void KernelSystem::MemoryInit(MemoryMode memory_mode, New3dsMemoryMode n3ds_mode
     config_mem.sys_mem_alloc = memory_regions[1]->size;
     config_mem.base_mem_alloc = memory_regions[2]->size;
 
-    shared_page_handler = std::make_shared<SharedPage::Handler>(timing);
-//    shared_page_handler = std::make_shared<SharedPage::Handler>(timing, override_init_time);
+    shared_page_handler = std::make_shared<SharedPage::Handler>(timing, override_init_time);
 }
-
 
 std::shared_ptr<MemoryRegionInfo> KernelSystem::GetMemoryRegion(MemoryRegion region) {
     switch (region) {
@@ -278,5 +270,17 @@ void MemoryRegionInfo::Free(u32 offset, u32 size) {
 void MemoryRegionInfo::Unlock() {
     is_locked = false;
 }
+
+template <class Archive>
+void MemoryRegionInfo::serialize(Archive& ar, const unsigned int) {
+    ar & base;
+    ar & size;
+    ar & used;
+    ar & free_blocks;
+    if (Archive::is_loading::value) {
+        is_locked = true;
+    }
+}
+SERIALIZE_IMPL(MemoryRegionInfo)
 
 } // namespace Kernel

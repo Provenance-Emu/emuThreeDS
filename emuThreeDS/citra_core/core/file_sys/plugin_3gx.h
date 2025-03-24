@@ -21,9 +21,10 @@
 
 #pragma once
 
-#include <core/file_sys/archive_backend.h>
+#include <span>
 #include "common/common_types.h"
 #include "common/swap.h"
+#include "core/file_sys/archive_backend.h"
 #include "core/hle/kernel/process.h"
 #include "core/hle/service/plgldr/plgldr.h"
 
@@ -42,7 +43,8 @@ class FileBackend;
 class Plugin3GXLoader {
 public:
     Loader::ResultStatus Load(Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context,
-                              Kernel::Process& process, Kernel::KernelSystem& kernel);
+                              Kernel::Process& process, Kernel::KernelSystem& kernel,
+                              Service::PLGLDR::PLG_LDR& plg_ldr);
 
     struct PluginHeader {
         u32_le magic;
@@ -52,8 +54,8 @@ public:
         u32_le exe_size; // Include sizeof(PluginHeader) + .text + .rodata + .data + .bss (0x1000
                          // aligned too)
         u32_le is_default_plugin;
-        u32_le plgldr_event; ///< Used for synchronization, unused in citra
-        u32_le plgldr_reply; ///< Used for synchronization, unused in citra
+        u32_le plgldr_event; ///< Used for synchronization, unused in cytrus
+        u32_le plgldr_reply; ///< Used for synchronization, unused in cytrus
         u32_le reserved[24];
         u32_le config[32];
     };
@@ -67,11 +69,12 @@ public:
 
 private:
     Loader::ResultStatus Map(Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context,
-                             Kernel::Process& process, Kernel::KernelSystem& kernel);
+                             Kernel::Process& process, Kernel::KernelSystem& kernel,
+                             Service::PLGLDR::PLG_LDR& plg_ldr);
 
-    static constexpr size_t bootloader_memory_size = 0x1000;
+    static constexpr std::size_t bootloader_memory_size = 0x1000;
     static void MapBootloader(Kernel::Process& process, Kernel::KernelSystem& kernel,
-                              u32 memory_offset, const std::vector<u32>& exe_load_func,
+                              u32 memory_offset, std::span<const u32> exe_load_func,
                               const u32_le* exe_load_args, u32 checksum_size, u32 exe_checksum,
                               bool no_flash);
 
@@ -91,6 +94,9 @@ private:
             BitField<1, 1, u32_le> embedded_swap_func;
             BitField<2, 2, u32_le> memory_region_size;
             BitField<4, 2, u32_le> compatibility;
+            BitField<6, 1, u32_le> events_self_managed;
+            BitField<7, 1, u32_le> swap_not_needed;
+            BitField<8, 1, u32_le> use_private_memory;
         } flags;
         u32_le exe_load_checksum;
         u32_le builtin_load_exe_args[4];

@@ -5092,28 +5092,16 @@ SUB_INST : {
 SWI_INST : {
     // Fast path for AL condition code which is the most common case for SWI
     if (inst_base->cond == ConditionCode::AL || CondPassed(cpu, inst_base->cond)) {
-        DEBUG_ASSERT(cpu->system != nullptr);
         swi_inst* const inst_cream = (swi_inst*)inst_base->component;
-
-        // Update system timer with the number of instructions executed so far
-        cpu->system->GetRunningCore().GetTimer().AddTicks(num_instrs);
-
-        // Update the remaining instruction count
+        cpu->system.GetRunningCore().GetTimer().AddTicks(num_instrs);
         cpu->NumInstrsToExecute =
             num_instrs >= cpu->NumInstrsToExecute ? 0 : cpu->NumInstrsToExecute - num_instrs;
         num_instrs = 0;
-
-        // Extract SVC number once to avoid multiple bit extractions
-        const u16 svc_num = inst_cream->num & 0xFFFF;
-
-        // Call the SVC handler
-        Kernel::SVCContext{*cpu->system}.CallSVC(svc_num);
-
+        Kernel::SVCContext{cpu->system}.CallSVC(inst_cream->num & 0xFFFF);
         // The kernel would call ERET to get here, which clears exclusive memory state.
         cpu->UnsetExclusiveMemoryAddress();
     }
 
-    // Update PC and continue to next instruction
     cpu->Reg[15] += cpu->GetInstructionSize();
     INC_PC(sizeof(swi_inst));
     FETCH_INST;

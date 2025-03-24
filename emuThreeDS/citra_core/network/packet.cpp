@@ -15,13 +15,13 @@ namespace Network {
 
 #ifndef htonll
 u64 htonll(u64 x) {
-    return ((1 == htonl(1)) ? (x) : ((uint64_t)htonl((x)&0xFFFFFFFF) << 32) | htonl((x) >> 32));
+    return ((1 == htonl(1)) ? (x) : ((uint64_t)htonl((x) & 0xFFFFFFFF) << 32) | htonl((x) >> 32));
 }
 #endif
 
 #ifndef ntohll
 u64 ntohll(u64 x) {
-    return ((1 == ntohl(1)) ? (x) : ((uint64_t)ntohl((x)&0xFFFFFFFF) << 32) | ntohl((x) >> 32));
+    return ((1 == ntohl(1)) ? (x) : ((uint64_t)ntohl((x) & 0xFFFFFFFF) << 32) | ntohl((x) >> 32));
 }
 #endif
 
@@ -85,42 +85,42 @@ Packet& Packet::operator>>(u8& out_data) {
 }
 
 Packet& Packet::operator>>(s16& out_data) {
-    s16 value;
+    s16 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohs(value);
     return *this;
 }
 
 Packet& Packet::operator>>(u16& out_data) {
-    u16 value;
+    u16 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohs(value);
     return *this;
 }
 
 Packet& Packet::operator>>(s32& out_data) {
-    s32 value;
+    s32 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohl(value);
     return *this;
 }
 
 Packet& Packet::operator>>(u32& out_data) {
-    u32 value;
+    u32 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohl(value);
     return *this;
 }
 
 Packet& Packet::operator>>(s64& out_data) {
-    s64 value;
+    s64 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohll(value);
     return *this;
 }
 
 Packet& Packet::operator>>(u64& out_data) {
-    u64 value;
+    u64 value = 0;
     Read(&value, sizeof(value));
     out_data = ntohll(value);
     return *this;

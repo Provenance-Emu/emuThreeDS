@@ -25,17 +25,17 @@ std::unique_ptr<EmuWindow_VK> emu_window;
 #include "common/logging/log.h"
 
 static void InitializeLogging() {
-    Log::Filter log_filter(Log::Level::Debug);
+    Common::Log::Filter log_filter(Common::Log::Level::Debug);
     log_filter.ParseFilterString(Settings::values.log_filter.GetValue());
-    Log::SetGlobalFilter(log_filter);
+    Common::Log::SetGlobalFilter(log_filter);
 
-    Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
+    Common::Log::AddBackend(std::make_unique<Log::ColorConsoleBackend>());
 
     const std::string& log_dir = FileUtil::GetUserPath(FileUtil::UserPath::LogDir);
     FileUtil::CreateFullPath(log_dir);
-    Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
+    Common::Log::AddBackend(std::make_unique<Log::FileBackend>(log_dir + LOG_FILE));
 #ifdef _WIN32
-    Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
+    Common::Log::AddBackend(std::make_unique<Log::DebuggerBackend>());
 #endif
 }
 

@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+// Copyright 2014 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -12,7 +12,6 @@
 #include "core/hle/kernel/event.h"
 #include "core/hle/result.h"
 #include "core/hle/service/service.h"
-#include "common/archives.h"
 
 namespace Core {
 class System;
@@ -270,7 +269,6 @@ private:
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        DEBUG_SERIALIZATION_POINT;
         ar& boost::serialization::base_object<Kernel::SessionRequestHandler>(*this);
         ar & semaphore_event;
         ar & preset_semaphore;

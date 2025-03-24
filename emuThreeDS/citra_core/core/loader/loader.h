@@ -13,15 +13,12 @@
 #include "common/common_types.h"
 #include "common/file_util.h"
 #include "core/file_sys/romfs_reader.h"
-#include "core/hle/kernel/object.h"
+#include "core/hle/kernel/kernel.h"
 
 namespace Kernel {
 struct AddressMapping;
 class Process;
 } // namespace Kernel
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// Loader namespace
 
 namespace Loader {
 
@@ -34,6 +31,7 @@ enum class FileType {
     CIA,
     ELF,
     THREEDSX, // 3DSX
+    ARTIC,
 };
 
 /**
@@ -76,6 +74,7 @@ enum class ResultStatus {
     ErrorMemoryAllocationFailed,
     ErrorEncrypted,
     ErrorGbaTitle,
+    ErrorArtic,
 };
 
 constexpr u32 MakeMagic(char a, char b, char c, char d) {
@@ -85,7 +84,8 @@ constexpr u32 MakeMagic(char a, char b, char c, char d) {
 /// Interface for loading an application
 class AppLoader : NonCopyable {
 public:
-    explicit AppLoader(FileUtil::IOFile&& file) : file(std::move(file)) {}
+    explicit AppLoader(Core::System& system_, FileUtil::IOFile&& file)
+        : system(system_), file(std::move(file)) {}
     virtual ~AppLoader() {}
 
     /**
@@ -93,7 +93,7 @@ public:
      * @return FileType corresponding to the loaded file
      */
     virtual FileType GetFileType() = 0;
-    
+
     /**
      * Returns the preferred region codes of this file
      * @return A vector of the preferred region codes
@@ -101,14 +101,14 @@ public:
     [[nodiscard]] virtual std::span<const u32> GetPreferredRegions() const {
         return {};
     }
-    
+
     /**
      * Load the application and return the created Process instance
      * @param process The newly created process.
      * @return The status result of the operation.
      */
     virtual ResultStatus Load(std::shared_ptr<Kernel::Process>& process) = 0;
-    
+
     /**
      * Loads the core version (FIRM title ID low) that this application needs.
      * This function defaults to 0x2 (NATIVE_FIRM) if it can't read the
@@ -118,7 +118,7 @@ public:
     virtual std::pair<std::optional<u32>, ResultStatus> LoadCoreVersion() {
         return std::make_pair(0x2, ResultStatus::Success);
     }
-    
+
     /**
      * Forces the application memory mode to the specified value,
      * overriding the memory mode specified in the metadata.
@@ -151,26 +151,6 @@ public:
         return std::make_pair(
             Kernel::New3dsHwCapabilities{false, false, Kernel::New3dsMemoryMode::Legacy},
             ResultStatus::Success);
-    }
-
-    /**
-     * Loads the system mode that this application needs.
-     * This function defaults to 2 (96MB allocated to the application) if it can't read the
-     * information.
-     * @returns A pair with the optional system mode, and the status.
-     */
-    virtual std::pair<std::optional<u32>, ResultStatus> LoadKernelSystemMode() {
-        // 96MB allocated to the application.
-        return std::make_pair(2, ResultStatus::Success);
-    }
-
-    /**
-     * Loads the N3ds mode that this application uses.
-     * It defaults to 0 (O3DS default) if it can't read the information.
-     * @returns A pair with the optional N3ds mode, and the status.
-     */
-    virtual std::pair<std::optional<u8>, ResultStatus> LoadKernelN3dsMode() {
-        return std::make_pair(u8(0), ResultStatus::Success);
     }
 
     /**
@@ -286,8 +266,16 @@ public:
         return ResultStatus::ErrorNotImplemented;
     }
 
+    virtual bool SupportsSaveStates() {
+        return true;
+    }
+
+    virtual bool SupportsMultipleInstancesForSameFile() {
+        return true;
+    }
+
 protected:
-//    Core::System& system;
+    Core::System& system;
     FileUtil::IOFile file;
     bool is_loaded = false;
     std::optional<Kernel::MemoryMode> memory_mode_override = std::nullopt;

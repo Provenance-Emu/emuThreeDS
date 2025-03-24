@@ -9,15 +9,16 @@
 #include "core/hle/kernel/server_session.h"
 #include "core/hle/kernel/session.h"
 
-SERIALIZE_IMPL(Kernel::Session)
+SERIALIZE_EXPORT_IMPL(Kernel::Session)
 
 namespace Kernel {
 
 template <class Archive>
 void Session::serialize(Archive& ar, const unsigned int file_version) {
-    ar& client;
-    ar& server;
-    ar& port;
+    ar & client;
+    ar & server;
+    ar & port;
 }
+SERIALIZE_IMPL(Session)
 
 } // namespace Kernel

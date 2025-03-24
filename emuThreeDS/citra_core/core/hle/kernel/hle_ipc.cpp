@@ -153,7 +153,7 @@ void HLERequestContext::AddStaticBuffer(u8 buffer_id, std::vector<u8> data) {
     static_buffers[buffer_id] = std::move(data);
 }
 
-ResultCode HLERequestContext::PopulateFromIncomingCommandBuffer(const u32_le* src_cmdbuf,
+Result HLERequestContext::PopulateFromIncomingCommandBuffer(const u32_le* src_cmdbuf,
                                                             std::shared_ptr<Process> src_process_) {
     auto& src_process = *src_process_;
     IPC::Header header{src_cmdbuf[0]};
@@ -230,10 +230,10 @@ ResultCode HLERequestContext::PopulateFromIncomingCommandBuffer(const u32_le* sr
                                                std::move(translated_cmdbuf));
     }
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
-ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf,
+Result HLERequestContext::WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf,
                                                        Process& dst_process) const {
     IPC::Header header{cmd_buf[0]};
 
@@ -266,7 +266,7 @@ ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf,
                 Handle handle = 0;
                 if (object != nullptr) {
                     // TODO(yuriks): Figure out the proper error handling for if this fails
-                    // R_ASSERT(dst_process.handle_table.Create(std::addressof(handle), object));
+                    R_ASSERT(dst_process.handle_table.Create(std::addressof(handle), object));
                 }
                 dst_cmdbuf[i++] = handle;
             }
@@ -308,7 +308,7 @@ ResultCode HLERequestContext::WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf,
                                              std::move(translated_cmdbuf));
     }
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 MappedBuffer& HLERequestContext::GetMappedBuffer(u32 id_from_cmdbuf) {

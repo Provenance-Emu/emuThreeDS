@@ -65,7 +65,7 @@ static bool ReadSection(std::vector<u8>& data_out, FileUtil::IOFile& file, std::
 
 Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
-    Kernel::KernelSystem& kernel) {
+    Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
     FileUtil::IOFile file(plg_context.plugin_path, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not found: {}",
@@ -91,7 +91,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
     }
 
     if (header.infos.flags.compatibility == static_cast<u32>(_3gx_Infos::Compatibility::CONSOLE)) {
-        LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not compatible with Citra: {}",
+        LOG_ERROR(Service_PLGLDR, "Failed to load 3GX plugin. Not compatible with Cytrus: {}",
                   plg_context.plugin_path);
         return Loader::ResultStatus::Error;
     }
@@ -142,8 +142,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
             }
             exe_load_func.push_back(instruction);
         }
-        memcpy(exe_load_args, header.infos.builtin_load_exe_args,
-               sizeof(_3gx_Infos::builtin_load_exe_args));
+        std::memcpy(exe_load_args, header.infos.builtin_load_exe_args,
+                    sizeof(_3gx_Infos::builtin_load_exe_args));
     }
 
     // Load code sections
@@ -158,12 +158,12 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Load(
         return Loader::ResultStatus::Error;
     }
 
-    return Map(plg_context, process, kernel);
+    return Map(plg_context, process, kernel, plg_ldr);
 }
 
 Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     Service::PLGLDR::PLG_LDR::PluginLoaderContext& plg_context, Kernel::Process& process,
-    Kernel::KernelSystem& kernel) {
+    Kernel::KernelSystem& kernel, Service::PLGLDR::PLG_LDR& plg_ldr) {
 
     // Verify exe load checksum function is available
     if (exe_load_func.empty() && plg_context.load_exe_func.empty()) {
@@ -179,12 +179,14 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
         4 * 1024 * 1024  // 4 MiB
     };
 
+    const bool is_mem_private = header.infos.flags.use_private_memory != 0;
+
     // Map memory block. This behaviour mimics how plugins are loaded on 3DS as much as possible.
     // Calculate the sizes of the different memory regions
     const u32 block_size = mem_region_sizes[header.infos.flags.memory_region_size.Value()];
     const u32 exe_size = (sizeof(PluginHeader) + text_section.size() + rodata_section.size() +
                           data_section.size() + header.executable.bss_size + 0x1000) &
-                         ~0xFFF;
+                         ~0xFFFu;
 
     // Allocate the framebuffer block so that is in the highest FCRAM position possible
     auto offset_fb =
@@ -195,11 +197,12 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
         return Loader::ResultStatus::ErrorMemoryAllocationFailed;
     }
     auto backing_memory_fb = kernel.memory.GetFCRAMRef(*offset_fb);
-    Service::PLGLDR::PLG_LDR::SetPluginFBAddr(Memory::FCRAM_PADDR + *offset_fb);
+    plg_ldr.SetPluginFBAddr(Memory::FCRAM_PADDR + *offset_fb);
     std::fill(backing_memory_fb.GetPtr(), backing_memory_fb.GetPtr() + _3GX_fb_size, 0);
 
     auto vma_heap_fb = process.vm_manager.MapBackingMemory(
-        _3GX_heap_load_addr, backing_memory_fb, _3GX_fb_size, Kernel::MemoryState::Continuous);
+        _3GX_heap_load_addr, backing_memory_fb, _3GX_fb_size,
+        is_mem_private ? Kernel::MemoryState::Private : Kernel::MemoryState::Shared);
     ASSERT(vma_heap_fb.Succeeded());
     process.vm_manager.Reprotect(vma_heap_fb.Unwrap(), Kernel::VMAPermission::ReadWrite);
 
@@ -217,7 +220,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
 
     // Then we map part of the memory, which contains the executable
     auto vma = process.vm_manager.MapBackingMemory(_3GX_exe_load_addr, backing_memory, exe_size,
-                                                   Kernel::MemoryState::Continuous);
+                                                   is_mem_private ? Kernel::MemoryState::Private
+                                                                  : Kernel::MemoryState::Shared);
     ASSERT(vma.Succeeded());
     process.vm_manager.Reprotect(vma.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
 
@@ -245,8 +249,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     plugin_header.plgldr_reply = plg_context.plg_reply;
     plugin_header.is_default_plugin = plg_context.is_default_path;
     if (plg_context.use_user_load_parameters) {
-        memcpy(plugin_header.config, plg_context.user_load_parameters.config,
-               sizeof(PluginHeader::config));
+        std::memcpy(plugin_header.config, plg_context.user_load_parameters.config,
+                    sizeof(PluginHeader::config));
     }
     kernel.memory.WriteBlock(process, _3GX_exe_load_addr, &plugin_header, sizeof(PluginHeader));
 
@@ -256,7 +260,8 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
     // Map the rest of the memory at the heap location
     auto vma_heap = process.vm_manager.MapBackingMemory(
         _3GX_heap_load_addr + _3GX_fb_size, backing_memory_heap,
-        block_size - exe_size - _3GX_fb_size, Kernel::MemoryState::Continuous);
+        block_size - exe_size - _3GX_fb_size,
+        is_mem_private ? Kernel::MemoryState::Private : Kernel::MemoryState::Shared);
     ASSERT(vma_heap.Succeeded());
     process.vm_manager.Reprotect(vma_heap.Unwrap(), Kernel::VMAPermission::ReadWriteExecute);
 
@@ -286,8 +291,7 @@ Loader::ResultStatus FileSys::Plugin3GXLoader::Map(
 }
 
 void FileSys::Plugin3GXLoader::MapBootloader(Kernel::Process& process, Kernel::KernelSystem& kernel,
-                                             u32 memory_offset,
-                                             const std::vector<u32>& exe_load_func,
+                                             u32 memory_offset, std::span<const u32> exe_load_func,
                                              const u32_le* exe_load_args, u32 checksum_size,
                                              u32 exe_checksum, bool no_flash) {
 
@@ -296,7 +300,8 @@ void FileSys::Plugin3GXLoader::MapBootloader(Kernel::Process& process, Kernel::K
                             sizeof(u32) * 2);
 
     std::array<u32_le, g_plugin_loader_bootloader.size() / sizeof(u32)> bootloader;
-    memcpy(bootloader.data(), g_plugin_loader_bootloader.data(), g_plugin_loader_bootloader.size());
+    std::memcpy(bootloader.data(), g_plugin_loader_bootloader.data(),
+                g_plugin_loader_bootloader.size());
 
     for (auto it = bootloader.begin(); it < bootloader.end(); it++) {
         switch (static_cast<u32>(*it)) {
@@ -357,7 +362,7 @@ void FileSys::Plugin3GXLoader::MapBootloader(Kernel::Process& process, Kernel::K
     // Write bootloader
     kernel.memory.WriteBlock(
         process, _3GX_exe_load_addr - bootloader_memory_size, bootloader.data(),
-        std::min<size_t>(bootloader.size() * sizeof(u32), bootloader_memory_size));
+        std::min<std::size_t>(bootloader.size() * sizeof(u32), bootloader_memory_size));
 
     game_instructions[0] = 0xE51FF004; // ldr pc, [pc, #-4]
     game_instructions[1] = _3GX_exe_load_addr - bootloader_memory_size;

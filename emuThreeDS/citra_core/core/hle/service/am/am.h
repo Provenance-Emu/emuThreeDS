@@ -11,7 +11,6 @@
 #include <vector>
 #include <boost/serialization/array.hpp>
 #include <boost/serialization/shared_ptr.hpp>
-#include <boost/serialization/vector.hpp>
 #include "common/common_types.h"
 #include "common/construct.h"
 #include "common/swap.h"
@@ -21,13 +20,22 @@
 #include "core/hle/kernel/mutex.h"
 #include "core/hle/result.h"
 #include "core/hle/service/service.h"
+#include "network/artic_base/artic_base_client.h"
 
 namespace Core {
 class System;
 }
 
+namespace FileUtil {
+class IOFile;
+}
+
 namespace Service::FS {
 enum class MediaType : u32;
+}
+
+namespace Kernel {
+class Mutex;
 }
 
 namespace Service::AM {
@@ -61,8 +69,35 @@ enum class InstallStatus : u32 {
     ErrorEncrypted,
 };
 
+enum class CTCertLoadStatus {
+    Loaded,
+    NotFound,
+    Invalid,
+    IOError,
+};
+
+struct CTCert {
+    u32_be signature_type{};
+    std::array<u8, 0x1E> signature_r{};
+    std::array<u8, 0x1E> signature_s{};
+    INSERT_PADDING_BYTES(0x40){};
+    std::array<char, 0x40> issuer{};
+    u32_be key_type{};
+    std::array<char, 0x40> key_id{};
+    u32_be expiration_time{};
+    std::array<u8, 0x1E> public_key_x{};
+    std::array<u8, 0x1E> public_key_y{};
+    INSERT_PADDING_BYTES(0x3C){};
+
+    bool IsValid() const;
+    u32 GetDeviceID() const;
+};
+static_assert(sizeof(CTCert) == 0x180, "Invalid CTCert size.");
+
 // Title ID valid length
 constexpr std::size_t TITLE_ID_VALID_LENGTH = 16;
+
+constexpr u64 TWL_TITLE_ID_FLAG = 0x0000800000000000ULL;
 
 // Progress callback for InstallCIA, receives bytes written and total bytes
 using ProgressCallback = void(std::size_t, std::size_t);
@@ -70,21 +105,23 @@ using ProgressCallback = void(std::size_t, std::size_t);
 // A file handled returned for CIAs to be written into and subsequently installed.
 class CIAFile final : public FileSys::FileBackend {
 public:
-    explicit CIAFile(Service::FS::MediaType media_type);
+    explicit CIAFile(Core::System& system_, Service::FS::MediaType media_type);
     ~CIAFile();
 
     ResultVal<std::size_t> Read(u64 offset, std::size_t length, u8* buffer) const override;
-    ResultCode WriteTicket();
-    ResultCode WriteTitleMetadata();
+    Result WriteTicket();
+    Result WriteTitleMetadata();
     ResultVal<std::size_t> WriteContentData(u64 offset, std::size_t length, const u8* buffer);
-    ResultVal<std::size_t> Write(u64 offset, std::size_t length, bool flush,
+    ResultVal<std::size_t> Write(u64 offset, std::size_t length, bool flush, bool update_timestamp,
                                  const u8* buffer) override;
     u64 GetSize() const override;
     bool SetSize(u64 size) const override;
-    bool Close() const override;
+    bool Close() override;
     void Flush() const override;
 
 private:
+    Core::System& system;
+
     // Whether it's installing an update, and what step of installation it is at
     bool is_update = false;
     CIAInstallState install_state = CIAInstallState::InstallStarted;
@@ -96,10 +133,30 @@ private:
     FileSys::CIAContainer container;
     std::vector<u8> data;
     std::vector<u64> content_written;
+    std::vector<FileUtil::IOFile> content_files;
     Service::FS::MediaType media_type;
 
     class DecryptionState;
     std::unique_ptr<DecryptionState> decryption_state;
+};
+
+// A file handled returned for Tickets to be written into and subsequently installed.
+class TicketFile final : public FileSys::FileBackend {
+public:
+    explicit TicketFile();
+    ~TicketFile();
+
+    ResultVal<std::size_t> Read(u64 offset, std::size_t length, u8* buffer) const override;
+    ResultVal<std::size_t> Write(u64 offset, std::size_t length, bool flush, bool update_timestamp,
+                                 const u8* buffer) override;
+    u64 GetSize() const override;
+    bool SetSize(u64 size) const override;
+    bool Close() override;
+    void Flush() const override;
+
+private:
+    u64 written = 0;
+    std::vector<u8> data;
 };
 
 /**
@@ -117,6 +174,13 @@ InstallStatus InstallCIA(const std::string& path,
  * @returns  whether the install was successful or error code
  */
 InstallStatus InstallFromNus(u64 title_id, int version = -1);
+
+/**
+ * Get the update title ID for a title
+ * @param titleId the title ID
+ * @returns The update title ID
+ */
+u64 GetTitleUpdateId(u64 title_id);
 
 /**
  * Get the mediatype for an installed title
@@ -160,6 +224,14 @@ std::string GetTitlePath(Service::FS::MediaType media_type, u64 tid);
  */
 std::string GetMediaTitlePath(Service::FS::MediaType media_type);
 
+/**
+ * Uninstalls the specified title.
+ * @param media_type the storage medium the title is installed to
+ * @param title_id the title ID to uninstall
+ * @return result of the uninstall operation
+ */
+Result UninstallProgram(const FS::MediaType media_type, const u64 title_id);
+
 class Module final {
 public:
     explicit Module(Core::System& system);
@@ -170,7 +242,17 @@ public:
         Interface(std::shared_ptr<Module> am, const char* name, u32 max_session);
         ~Interface();
 
+        std::shared_ptr<Module> GetModule() const {
+            return am;
+        }
+
+        void UseArticClient(std::shared_ptr<Network::ArticBase::Client>& client) {
+            artic_client = client;
+        }
+
     protected:
+        void GetProgramInfosImpl(Kernel::HLERequestContext& ctx, bool ignore_platform);
+
         /**
          * AM::GetNumPrograms service function
          * Gets the number of installed titles in the requested media type
@@ -249,6 +331,18 @@ public:
          *      1 : Result, 0 on success, otherwise error code
          */
         void GetProgramInfos(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::GetProgramInfosIgnorePlatform service function
+         *  Inputs:
+         *      1 : u8 Mediatype
+         *      2 : Total titles
+         *      4 : TitleIDList pointer
+         *      6 : TitleList pointer
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         */
+        void GetProgramInfosIgnorePlatform(Kernel::HLERequestContext& ctx);
 
         /**
          * AM::DeleteUserProgram service function
@@ -358,6 +452,35 @@ public:
         void GetTicketList(Kernel::HLERequestContext& ctx);
 
         /**
+         * AM::GetDeviceID service function
+         *  Inputs:
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : Unknown
+         *      3 : DeviceID
+         */
+        void GetDeviceID(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::NeedsCleanup service function
+         *  Inputs:
+         *      1 : Media Type
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : bool, Needs Cleanup
+         */
+        void NeedsCleanup(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::DoCleanup service function
+         *  Inputs:
+         *      1 : Media Type
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         */
+        void DoCleanup(Kernel::HLERequestContext& ctx);
+
+        /**
          * AM::QueryAvailableTitleDatabase service function
          *  Inputs:
          *      1 : Media Type
@@ -366,6 +489,42 @@ public:
          *      2 : Boolean, database availability
          */
         void QueryAvailableTitleDatabase(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::GetPersonalizedTicketInfoList service function
+         *  Inputs:
+         *      1 : Count
+         *      2-3 : Buffer
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : Out count
+         */
+        void GetPersonalizedTicketInfoList(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::GetNumImportTitleContextsFiltered service function
+         *  Inputs:
+         *      1 : Count
+         *      2 : Filter
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : Num import titles
+         */
+        void GetNumImportTitleContextsFiltered(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::GetImportTitleContextListFiltered service function
+         *  Inputs:
+         *      1 : Count
+         *      2 : Media type
+         *      3 : filter
+         *      4-5 : Buffer
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : Out count
+         *      3-4 : Out buffer
+         */
+        void GetImportTitleContextListFiltered(Kernel::HLERequestContext& ctx);
 
         /**
          * AM::CheckContentRights service function
@@ -570,13 +729,55 @@ public:
          */
         void GetMetaDataFromCia(Kernel::HLERequestContext& ctx);
 
+        /**
+         * AM::BeginImportTicket service function
+         *  Inputs:
+         *      1 : Media type to install title to
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2-3 : TicketHandle handle for application to write to
+         */
+        void BeginImportTicket(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::EndImportTicket service function
+         *  Inputs:
+         *      1-2 : TicketHandle handle application wrote to
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         */
+        void EndImportTicket(Kernel::HLERequestContext& ctx);
+
+        /**
+         * AM::GetDeviceCert service function
+         *  Inputs:
+         *  Outputs:
+         *      1 : Result, 0 on success, otherwise error code
+         *      2 : Unknown
+         *      3-4 : Device cert
+         */
+        void GetDeviceCert(Kernel::HLERequestContext& ctx);
+
     protected:
         std::shared_ptr<Module> am;
+
+        // Placed on the interface level so that only am:net and am:app have it.
+        std::shared_ptr<Network::ArticBase::Client> artic_client = nullptr;
     };
 
-private:
-    explicit Module(Kernel::KernelSystem& kernel);
+    /**
+     * Gets the CTCert.bin path in the host filesystem
+     * @returns std::string CTCert.bin path in the host filesystem
+     */
+    static std::string GetCTCertPath();
 
+    /**
+     * Loads the CTCert.bin file from the filesystem.
+     * @returns CTCertLoadStatus indicating the file load status.
+     */
+    static CTCertLoadStatus LoadCTCertFile(CTCert& output);
+
+private:
     /**
      * Scans the for titles in a storage medium for listing.
      * @param media_type the storage medium to scan
@@ -588,32 +789,22 @@ private:
      */
     void ScanForAllTitles();
 
-    Kernel::KernelSystem& kernel;
+    Core::System& system;
     bool cia_installing = false;
     std::array<std::vector<u64_le>, 3> am_title_list;
     std::shared_ptr<Kernel::Mutex> system_updater_mutex;
+    CTCert ct_cert{};
 
     template <class Archive>
-    void serialize(Archive& ar, const unsigned int) {
-        ar& cia_installing;
-        ar& am_title_list;
-        ar& system_updater_mutex;
-    }
-
-    template <class Archive>
-    static void load_construct(Archive& ar, Module* t, const unsigned int file_version) {
-        ::new (t) Module(Core::Global<Kernel::KernelSystem>());
-    }
-
-    template <class Archive>
-    void save_construct(Archive& ar, const unsigned int file_version) const {}
-
-    friend class ::construct_access;
+    void serialize(Archive& ar, const unsigned int);
     friend class boost::serialization::access;
 };
+
+std::shared_ptr<Module> GetModule(Core::System& system);
 
 void InstallInterfaces(Core::System& system);
 
 } // namespace Service::AM
 
-BOOST_SERIALIZATION_CONSTRUCT(Service::AM::Module);
+BOOST_CLASS_EXPORT_KEY(Service::AM::Module)
+SERVICE_CONSTRUCT(Service::AM::Module)

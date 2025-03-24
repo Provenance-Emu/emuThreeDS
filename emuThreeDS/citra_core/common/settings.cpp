@@ -5,18 +5,8 @@
 #include <string_view>
 #include <utility>
 #include "audio_core/dsp_interface.h"
+#include "common/file_util.h"
 #include "common/settings.h"
-#include "core/core.h"
-#include "core/gdbstub/gdbstub.h"
-#include "core/hle/kernel/shared_page.h"
-#include "core/hle/service/cam/cam.h"
-#include "core/hle/service/hid/hid.h"
-#include "core/hle/service/ir/ir_rst.h"
-#include "core/hle/service/ir/ir_user.h"
-#include "core/hle/service/mic_u.h"
-#include "core/hle/service/plgldr/plgldr.h"
-#include "video_core/renderer_base.h"
-#include "video_core/video_core.h"
 
 namespace Settings {
 
@@ -33,7 +23,6 @@ std::string_view GetAudioEmulationName(AudioEmulation emulation) {
     default:
         return "Invalid";
     }
-    UNREACHABLE();
 };
 
 std::string_view GetGraphicsAPIName(GraphicsAPI api) {
@@ -42,10 +31,11 @@ std::string_view GetGraphicsAPIName(GraphicsAPI api) {
         return "Software";
     case GraphicsAPI::OpenGL:
         return "OpenGL";
+    case GraphicsAPI::Vulkan:
+        return "Vulkan";
     default:
         return "Invalid";
     }
-    UNREACHABLE();
 }
 
 std::string_view GetTextureFilterName(TextureFilter filter) {
@@ -56,16 +46,28 @@ std::string_view GetTextureFilterName(TextureFilter filter) {
         return "Anime4K";
     case TextureFilter::Bicubic:
         return "Bicubic";
-    case TextureFilter::NearestNeighbor:
-        return "NearestNeighbor";
     case TextureFilter::ScaleForce:
         return "ScaleForce";
     case TextureFilter::xBRZ:
         return "xBRZ";
+    case TextureFilter::MMPX:
+        return "MMPX";
     default:
         return "Invalid";
     }
-    UNREACHABLE();
+}
+
+std::string_view GetTextureSamplingName(TextureSampling sampling) {
+    switch (sampling) {
+    case TextureSampling::GameControlled:
+        return "GameControlled";
+    case TextureSampling::NearestNeighbor:
+        return "NearestNeighbor";
+    case TextureSampling::Linear:
+        return "Linear";
+    default:
+        return "Invalid";
+    }
 }
 
 } // Anonymous namespace
@@ -73,85 +75,15 @@ std::string_view GetTextureFilterName(TextureFilter filter) {
 Values values = {};
 static bool configuring_global = true;
 
-void Apply() {
-    GDBStub::SetServerPort(values.gdbstub_port.GetValue());
-    GDBStub::ToggleServer(values.use_gdbstub.GetValue());
-
-    VideoCore::g_shader_jit_enabled = values.use_shader_jit.GetValue();
-    VideoCore::g_hw_shader_enabled = values.use_hw_shader.GetValue();
-    VideoCore::g_hw_shader_accurate_mul = values.shaders_accurate_mul.GetValue();
-
-#ifndef ANDROID
-    if (VideoCore::g_renderer) {
-        VideoCore::g_renderer->UpdateCurrentFramebufferLayout();
-    }
-#endif
-
-    if (VideoCore::g_renderer) {
-        auto& settings = VideoCore::g_renderer->Settings();
-        settings.bg_color_update_requested = true;
-        settings.sampler_update_requested = true;
-        settings.shader_update_requested = true;
-        settings.texture_filter_update_requested = true;
-    }
-
-    auto& system = Core::System::GetInstance();
-    if (system.IsPoweredOn()) {
-        // Handle auto CPU clock mode (value of 0)
-        s32 cpu_clock = values.cpu_clock_percentage.GetValue();
-        if (cpu_clock == 0) {
-            // Enable auto mode and use current value
-            if (system.auto_cpu_clock) {
-                system.auto_cpu_clock->SetEnabled(true);
-            }
-        } else {
-            // Disable auto mode and set specific value
-            if (system.auto_cpu_clock) {
-                system.auto_cpu_clock->SetEnabled(false);
-            }
-            system.CoreTiming().UpdateClockSpeed(cpu_clock);
-        }
-        Core::DSP().SetSink(values.output_type.GetValue(), values.output_device.GetValue());
-        Core::DSP().EnableStretching(values.enable_audio_stretching.GetValue());
-
-        auto hid = Service::HID::GetModule(system);
-        if (hid) {
-            hid->ReloadInputDevices();
-        }
-
-        auto apt = Service::APT::GetModule(system);
-        if (apt) {
-            apt->GetAppletManager()->ReloadInputDevices();
-        }
-
-        auto sm = system.ServiceManager();
-        auto ir_user = sm.GetService<Service::IR::IR_USER>("ir:USER");
-        if (ir_user)
-            ir_user->ReloadInputDevices();
-        auto ir_rst = sm.GetService<Service::IR::IR_RST>("ir:rst");
-        if (ir_rst)
-            ir_rst->ReloadInputDevices();
-
-        auto cam = Service::CAM::GetModule(system);
-        if (cam) {
-            cam->ReloadCameraDevices();
-        }
-
-        Service::MIC::ReloadMic(system);
-    }
-
-    Service::PLGLDR::PLG_LDR::SetEnabled(values.plugin_loader_enabled.GetValue());
-    Service::PLGLDR::PLG_LDR::SetAllowGameChangeState(values.allow_plugin_loader.GetValue());
-}
-
 void LogSettings() {
     const auto log_setting = [](std::string_view name, const auto& value) {
         LOG_INFO(Config, "{}: {}", name, value);
     };
 
-    LOG_INFO(Config, "Citra Configuration:");
+    LOG_INFO(Config, "Cytrus Configuration:");
     log_setting("Core_UseCpuJit", values.use_cpu_jit.GetValue());
     log_setting("Core_CPUClockPercentage", values.cpu_clock_percentage.GetValue());
+    log_setting("Controller_UseArticController", values.use_artic_base_controller.GetValue());
     log_setting("Renderer_UseGLES", values.use_gles.GetValue());
     log_setting("Renderer_GraphicsAPI", GetGraphicsAPIName(values.graphics_api.GetValue()));
     log_setting("Renderer_AsyncShaders", values.async_shader_compilation.GetValue());
@@ -167,6 +99,9 @@ void LogSettings() {
     log_setting("Renderer_PostProcessingShader", values.pp_shader_name.GetValue());
     log_setting("Renderer_FilterMode", values.filter_mode.GetValue());
     log_setting("Renderer_TextureFilter", GetTextureFilterName(values.texture_filter.GetValue()));
+    log_setting("Renderer_TextureSampling",
+                GetTextureSamplingName(values.texture_sampling.GetValue()));
+    log_setting("Renderer_DelayGameRenderThreasUs", values.delay_game_render_thread_us.GetValue());
     log_setting("Stereoscopy_Render3d", values.render_3d.GetValue());
     log_setting("Stereoscopy_Factor3d", values.factor_3d.GetValue());
     log_setting("Stereoscopy_MonoRenderOption", values.mono_render_option.GetValue());
@@ -187,6 +122,7 @@ void LogSettings() {
     log_setting("Audio_OutputDevice", values.output_device.GetValue());
     log_setting("Audio_InputType", values.input_type.GetValue());
     log_setting("Audio_InputDevice", values.input_device.GetValue());
+    log_setting("Audio_EnableRealtime", values.enable_realtime_audio.GetValue());
     log_setting("Audio_EnableAudioStretching", values.enable_audio_stretching.GetValue());
     using namespace Service::CAM;
     log_setting("Camera_OuterRightName", values.camera_name[OuterRightCamera]);
@@ -205,11 +141,14 @@ void LogSettings() {
         log_setting("DataStorage_NandDir", FileUtil::GetUserPath(FileUtil::UserPath::NANDDir));
     }
     log_setting("System_IsNew3ds", values.is_new_3ds.GetValue());
+    log_setting("System_LLEApplets", values.lle_applets.GetValue());
     log_setting("System_RegionValue", values.region_value.GetValue());
     log_setting("System_PluginLoader", values.plugin_loader_enabled.GetValue());
     log_setting("System_PluginLoaderAllowed", values.allow_plugin_loader.GetValue());
+    log_setting("Debugging_DelayStartForLLEModules", values.delay_start_for_lle_modules.GetValue());
     log_setting("Debugging_UseGdbstub", values.use_gdbstub.GetValue());
     log_setting("Debugging_GdbstubPort", values.gdbstub_port.GetValue());
+    log_setting("Debugging_InstantDebugLog", values.instant_debug_log.GetValue());
 }
 
 bool IsConfiguringGlobal() {
@@ -235,13 +174,14 @@ void RestoreGlobalState(bool is_powered_on) {
 
     // Audio
     values.audio_emulation.SetGlobal(true);
-    values.enable_realtime_audio.SetGlobal(true);
     values.enable_audio_stretching.SetGlobal(true);
+    values.enable_realtime_audio.SetGlobal(true);
     values.volume.SetGlobal(true);
 
     // Core
     values.cpu_clock_percentage.SetGlobal(true);
     values.is_new_3ds.SetGlobal(true);
+    values.lle_applets.SetGlobal(true);
 
     // Renderer
     values.graphics_api.SetGlobal(true);
@@ -256,6 +196,8 @@ void RestoreGlobalState(bool is_powered_on) {
     values.resolution_factor.SetGlobal(true);
     values.frame_limit.SetGlobal(true);
     values.texture_filter.SetGlobal(true);
+    values.texture_sampling.SetGlobal(true);
+    values.delay_game_render_thread_us.SetGlobal(true);
     values.layout_option.SetGlobal(true);
     values.swap_screen.SetGlobal(true);
     values.upright_screen.SetGlobal(true);

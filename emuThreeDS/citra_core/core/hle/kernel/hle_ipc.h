@@ -307,7 +307,7 @@ public:
                     result_function,
                     std::move(std::async(std::launch::async, [this, async_section] {
                         s64 sleep_for = async_section(*this);
-                        this->thread->WakeAfterDelay(sleep_for);
+                        this->thread->WakeAfterDelay(sleep_for, true);
                     }))));
 
         } else {
@@ -361,10 +361,10 @@ public:
     MappedBuffer& GetMappedBuffer(u32 id_from_cmdbuf);
 
     /// Populates this context with data from the requesting process/thread.
-    ResultCode PopulateFromIncomingCommandBuffer(const u32_le* src_cmdbuf,
+    Result PopulateFromIncomingCommandBuffer(const u32_le* src_cmdbuf,
                                              std::shared_ptr<Process> src_process);
     /// Writes data from this context back to the requesting process/thread.
-    ResultCode WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf, Process& dst_process) const;
+    Result WriteToOutgoingCommandBuffer(u32_le* dst_cmdbuf, Process& dst_process) const;
 
     /// Reports an unimplemented function.
     void ReportUnimplemented() const;

@@ -5,7 +5,7 @@
 #include <chrono>
 #include <future>
 #include <vector>
-#include "announce_multiplayer_session.h"
+#include "network/announce_multiplayer_session.h"
 #include "common/announce_multiplayer_room.h"
 #include "common/assert.h"
 #include "network/network.h"
@@ -135,9 +135,9 @@ void AnnounceMultiplayerSession::AnnounceMultiplayerLoop() {
         if (result.result_string == "404") {
             registered = false;
             // Needs to register the room again
-            Common::WebResult result = Register();
-            if (result.result_code != Common::WebResult::Code::Success) {
-                ErrorCallback(result);
+            Common::WebResult new_result = Register();
+            if (new_result.result_code != Common::WebResult::Code::Success) {
+                ErrorCallback(new_result);
             }
         }
     }

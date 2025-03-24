@@ -23,6 +23,10 @@ namespace Core {
 class System;
 }
 
+namespace HLE::Applets {
+class Applet;
+}
+
 namespace Service::APT {
 
 /// Signals used by APT functions
@@ -99,6 +103,21 @@ enum class AppletId : u32 {
     Memolib2 = 0x409,
 };
 
+/// Application Old/New 3DS target platforms
+enum class TargetPlatform : u8 {
+    Old3ds = 0,
+    New3ds = 1,
+};
+
+/// Application Old/New 3DS running modes
+enum class ApplicationRunningMode : u8 {
+    NoApplication = 0,
+    Old3dsRegistered = 1,
+    New3dsRegistered = 2,
+    Old3dsUnregistered = 3,
+    New3dsUnregistered = 4,
+};
+
 /// Holds information about the parameters used in Send/Glance/ReceiveParameter
 struct MessageParameter {
     AppletId sender_id = AppletId::None;
@@ -110,11 +129,11 @@ struct MessageParameter {
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& sender_id;
-        ar& destination_id;
-        ar& signal;
-        ar& object;
-        ar& buffer;
+        ar & sender_id;
+        ar & destination_id;
+        ar & signal;
+        ar & object;
+        ar & buffer;
     }
     friend class boost::serialization::access;
 };
@@ -133,6 +152,7 @@ union AppletAttributes {
     u32 raw;
 
     BitField<0, 3, AppletPos> applet_pos;
+    BitField<28, 1, u32> no_exit_on_system_applet;
     BitField<29, 1, u32> is_home_menu;
 
     AppletAttributes() : raw(0) {}
@@ -153,9 +173,9 @@ struct DeliverArg {
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& param;
-        ar& hmac;
-        ar& source_program_id;
+        ar & param;
+        ar & hmac;
+        ar & source_program_id;
     }
     friend class boost::serialization::access;
 };
@@ -171,13 +191,11 @@ struct ApplicationJumpParameters {
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int file_version) {
-        ar& next_title_id;
-        ar& next_media_type;
-        if (file_version > 0) {
-            ar& flags;
-        }
-        ar& current_title_id;
-        ar& current_media_type;
+        ar & next_title_id;
+        ar & next_media_type;
+        ar & flags;
+        ar & current_title_id;
+        ar & current_media_type;
     }
     friend class boost::serialization::access;
 };
@@ -189,10 +207,19 @@ struct ApplicationStartParameters {
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& next_title_id;
-        ar& next_media_type;
+        ar & next_title_id;
+        ar & next_media_type;
     }
     friend class boost::serialization::access;
+};
+
+enum class DisplayBufferMode : u32_le {
+    R8G8B8A8 = 0,
+    R8G8B8 = 1,
+    R5G6B5 = 2,
+    R5G5B5A1 = 3,
+    R4G4B4A4 = 4,
+    Unimportable = 0xFFFFFFFF,
 };
 
 /// Used by the application to pass information about the current framebuffer to applets.
@@ -202,26 +229,32 @@ struct CaptureBufferInfo {
     INSERT_PADDING_BYTES(0x3); // Padding for alignment
     u32_le top_screen_left_offset;
     u32_le top_screen_right_offset;
-    u32_le top_screen_format;
+    DisplayBufferMode top_screen_format;
     u32_le bottom_screen_left_offset;
     u32_le bottom_screen_right_offset;
-    u32_le bottom_screen_format;
+    DisplayBufferMode bottom_screen_format;
 
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& size;
-        ar& is_3d;
-        ar& top_screen_left_offset;
-        ar& top_screen_right_offset;
-        ar& top_screen_format;
-        ar& bottom_screen_left_offset;
-        ar& bottom_screen_right_offset;
-        ar& bottom_screen_format;
+        ar & size;
+        ar & is_3d;
+        ar & top_screen_left_offset;
+        ar & top_screen_right_offset;
+        ar & top_screen_format;
+        ar & bottom_screen_left_offset;
+        ar & bottom_screen_right_offset;
+        ar & bottom_screen_format;
     }
     friend class boost::serialization::access;
 };
 static_assert(sizeof(CaptureBufferInfo) == 0x20, "CaptureBufferInfo struct has incorrect size");
+
+enum class SleepQueryReply : u32 {
+    Reject = 0,
+    Accept = 1,
+    Later = 2,
+};
 
 class AppletManager : public std::enable_shared_from_this<AppletManager> {
 public:
@@ -236,7 +269,7 @@ public:
      */
     void CancelAndSendParameter(const MessageParameter& parameter);
 
-    ResultCode SendParameter(const MessageParameter& parameter);
+    Result SendParameter(const MessageParameter& parameter);
     ResultVal<MessageParameter> GlanceParameter(AppletId app_id);
     ResultVal<MessageParameter> ReceiveParameter(AppletId app_id);
     bool CancelParameter(bool check_sender, AppletId sender_appid, bool check_receiver,
@@ -255,47 +288,52 @@ public:
     };
     ResultVal<InitializeResult> Initialize(AppletId app_id, AppletAttributes attributes);
 
-    ResultCode Enable(AppletAttributes attributes);
+    Result Enable(AppletAttributes attributes);
+    Result Finalize(AppletId app_id);
+    u32 CountRegisteredApplet();
     bool IsRegistered(AppletId app_id);
+    ResultVal<AppletAttributes> GetAttribute(AppletId app_id);
 
     ResultVal<Notification> InquireNotification(AppletId app_id);
-    ResultCode SendNotification(Notification notification);
+    Result SendNotification(Notification notification);
 
-    ResultCode PrepareToStartLibraryApplet(AppletId applet_id);
-    ResultCode PreloadLibraryApplet(AppletId applet_id);
-    ResultCode FinishPreloadingLibraryApplet(AppletId applet_id);
-    ResultCode StartLibraryApplet(AppletId applet_id, std::shared_ptr<Kernel::Object> object,
-                                  const std::vector<u8>& buffer);
-    ResultCode PrepareToCloseLibraryApplet(bool not_pause, bool exiting, bool jump_home);
-    ResultCode CloseLibraryApplet(std::shared_ptr<Kernel::Object> object,
-                                  const std::vector<u8>& buffer);
-    ResultCode CancelLibraryApplet(bool app_exiting);
-
-    ResultCode PrepareToStartSystemApplet(AppletId applet_id);
-    ResultCode StartSystemApplet(AppletId applet_id, std::shared_ptr<Kernel::Object> object,
-                                 const std::vector<u8>& buffer);
-    ResultCode PrepareToCloseSystemApplet();
-    ResultCode CloseSystemApplet(std::shared_ptr<Kernel::Object> object,
-                                 const std::vector<u8>& buffer);
-    ResultCode OrderToCloseSystemApplet();
-
-    ResultCode PrepareToJumpToHomeMenu();
-    ResultCode JumpToHomeMenu(std::shared_ptr<Kernel::Object> object,
+    Result PrepareToStartLibraryApplet(AppletId applet_id);
+    Result PreloadLibraryApplet(AppletId applet_id);
+    Result FinishPreloadingLibraryApplet(AppletId applet_id);
+    Result StartLibraryApplet(AppletId applet_id, std::shared_ptr<Kernel::Object> object,
                               const std::vector<u8>& buffer);
-    ResultCode PrepareToLeaveHomeMenu();
-    ResultCode LeaveHomeMenu(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+    Result PrepareToCloseLibraryApplet(bool not_pause, bool exiting, bool jump_home);
+    Result CloseLibraryApplet(std::shared_ptr<Kernel::Object> object,
+                              const std::vector<u8>& buffer);
+    Result CancelLibraryApplet(bool app_exiting);
 
-    ResultCode OrderToCloseApplication();
-    ResultCode PrepareToCloseApplication(bool return_to_sys);
-    ResultCode CloseApplication(std::shared_ptr<Kernel::Object> object,
-                                const std::vector<u8>& buffer);
+    Result SendDspSleep(AppletId from_applet_id, std::shared_ptr<Kernel::Object> object);
+    Result SendDspWakeUp(AppletId from_applet_id, std::shared_ptr<Kernel::Object> object);
 
-    ResultCode PrepareToDoApplicationJump(u64 title_id, FS::MediaType media_type,
-                                          ApplicationJumpFlags flags);
-    ResultCode DoApplicationJump(const DeliverArg& arg);
+    Result PrepareToStartSystemApplet(AppletId applet_id);
+    Result StartSystemApplet(AppletId applet_id, std::shared_ptr<Kernel::Object> object,
+                             const std::vector<u8>& buffer);
+    Result PrepareToCloseSystemApplet();
+    Result CloseSystemApplet(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+    Result OrderToCloseSystemApplet();
 
-    boost::optional<DeliverArg> ReceiveDeliverArg() const {
-        return deliver_arg;
+    Result PrepareToJumpToHomeMenu();
+    Result JumpToHomeMenu(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+    Result PrepareToLeaveHomeMenu();
+    Result LeaveHomeMenu(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+
+    Result OrderToCloseApplication();
+    Result PrepareToCloseApplication(bool return_to_sys);
+    Result CloseApplication(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+
+    Result PrepareToDoApplicationJump(u64 title_id, FS::MediaType media_type,
+                                      ApplicationJumpFlags flags);
+    Result DoApplicationJump(const DeliverArg& arg);
+
+    boost::optional<DeliverArg> ReceiveDeliverArg() {
+        auto arg = deliver_arg;
+        deliver_arg = boost::none;
+        return arg;
     }
     void SetDeliverArg(boost::optional<DeliverArg> arg) {
         deliver_arg = std::move(arg);
@@ -309,23 +347,34 @@ public:
         }
         return buffer;
     }
-    std::vector<u8> ReceiveCaptureBufferInfo() {
-        std::vector<u8> buffer = GetCaptureInfo();
-        capture_info.reset();
-        return buffer;
-    }
-    void SendCaptureBufferInfo(std::vector<u8> buffer) {
+    void SetCaptureInfo(std::vector<u8> buffer) {
         ASSERT_MSG(buffer.size() >= sizeof(CaptureBufferInfo), "CaptureBufferInfo is too small.");
 
         capture_info.emplace();
         std::memcpy(&capture_info.get(), buffer.data(), sizeof(CaptureBufferInfo));
     }
 
-    ResultCode PrepareToStartApplication(u64 title_id, FS::MediaType media_type);
-    ResultCode StartApplication(const std::vector<u8>& parameter, const std::vector<u8>& hmac,
-                                bool paused);
-    ResultCode WakeupApplication();
-    ResultCode CancelApplication();
+    std::vector<u8> ReceiveCaptureBufferInfo() {
+        std::vector<u8> buffer;
+        if (capture_buffer_info) {
+            buffer.resize(sizeof(CaptureBufferInfo));
+            std::memcpy(buffer.data(), &capture_buffer_info.get(), sizeof(CaptureBufferInfo));
+            capture_buffer_info.reset();
+        }
+        return buffer;
+    }
+    void SendCaptureBufferInfo(std::vector<u8> buffer) {
+        ASSERT_MSG(buffer.size() >= sizeof(CaptureBufferInfo), "CaptureBufferInfo is too small.");
+
+        capture_buffer_info.emplace();
+        std::memcpy(&capture_buffer_info.get(), buffer.data(), sizeof(CaptureBufferInfo));
+    }
+
+    Result PrepareToStartApplication(u64 title_id, FS::MediaType media_type);
+    Result StartApplication(const std::vector<u8>& parameter, const std::vector<u8>& hmac,
+                            bool paused);
+    Result WakeupApplication(std::shared_ptr<Kernel::Object> object, const std::vector<u8>& buffer);
+    Result CancelApplication();
 
     struct AppletManInfo {
         AppletPos active_applet_pos;
@@ -349,6 +398,10 @@ public:
         return app_jump_parameters;
     }
 
+    ResultVal<Service::FS::MediaType> Unknown54(u32 in_param);
+    TargetPlatform GetTargetPlatform();
+    ApplicationRunningMode GetApplicationRunningMode();
+
 private:
     /// APT lock retrieved via GetLockHandle.
     std::shared_ptr<Kernel::Mutex> lock;
@@ -366,6 +419,7 @@ private:
     boost::optional<DeliverArg> deliver_arg{};
 
     boost::optional<CaptureBufferInfo> capture_info;
+    boost::optional<CaptureBufferInfo> capture_buffer_info;
 
     static constexpr std::size_t NumAppletSlot = 4;
 
@@ -400,15 +454,15 @@ private:
     private:
         template <class Archive>
         void serialize(Archive& ar, const unsigned int) {
-            ar& applet_id;
-            ar& slot;
-            ar& title_id;
-            ar& registered;
-            ar& loaded;
-            ar& attributes.raw;
-            ar& notification;
-            ar& notification_event;
-            ar& parameter_event;
+            ar & applet_id;
+            ar & slot;
+            ar & title_id;
+            ar & registered;
+            ar & loaded;
+            ar & attributes.raw;
+            ar & notification;
+            ar & notification_event;
+            ar & parameter_event;
         }
         friend class boost::serialization::access;
     };
@@ -427,10 +481,19 @@ private:
     bool application_cancelled = false;
     AppletSlot application_close_target = AppletSlot::Error;
 
-    Core::TimingEventType* home_button_update_event;
+    // This flag is used to determine if an app that supports New 3DS capabilities should use them.
+    // It also affects the results of APT:GetTargetPlatform and APT:GetApplicationRunningMode.
+    bool new_3ds_mode_blocked = false;
+
+    std::unordered_map<AppletId, std::shared_ptr<HLE::Applets::Applet>> hle_applets;
+    Core::TimingEventType* hle_applet_update_event;
+
+    Core::TimingEventType* button_update_event;
     std::atomic<bool> is_device_reload_pending{true};
     std::unique_ptr<Input::ButtonDevice> home_button;
+    std::unique_ptr<Input::ButtonDevice> power_button;
     bool last_home_button_state = false;
+    bool last_power_button_state = false;
 
     Core::System& system;
 
@@ -450,35 +513,41 @@ private:
     /// otherwise it queues for sending when the application registers itself with APT::Enable.
     void SendApplicationParameterAfterRegistration(const MessageParameter& parameter);
 
+    void SendNotificationToAll(Notification notification);
+
     void EnsureHomeMenuLoaded();
 
     void CaptureFrameBuffers();
 
+    Result CreateHLEApplet(AppletId id, AppletId parent, bool preload);
+    void HLEAppletUpdateEvent(std::uintptr_t user_data, s64 cycles_late);
+
     void LoadInputDevices();
-    void HomeButtonUpdateEvent(std::uintptr_t user_data, s64 cycles_late);
+    void ButtonUpdateEvent(std::uintptr_t user_data, s64 cycles_late);
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int file_version) {
-        ar& next_parameter;
-        ar& app_jump_parameters;
-        if (file_version > 0) {
-            ar& delayed_parameter;
-            ar& app_start_parameters;
-            ar& deliver_arg;
-            ar& active_slot;
-            ar& last_library_launcher_slot;
-            ar& last_prepared_library_applet;
-            ar& last_system_launcher_slot;
-            ar& last_jump_to_home_slot;
-            ar& ordered_to_close_sys_applet;
-            ar& ordered_to_close_application;
-            ar& application_cancelled;
-            ar& application_close_target;
-            ar& lock;
-            ar& capture_info;
-        }
-        ar& applet_slots;
-        ar& library_applet_closing_command;
+        ar & next_parameter;
+        ar & app_jump_parameters;
+        ar & delayed_parameter;
+        ar & app_start_parameters;
+        ar & deliver_arg;
+        ar & capture_info;
+        ar & capture_buffer_info;
+        ar & active_slot;
+        ar & last_library_launcher_slot;
+        ar & last_prepared_library_applet;
+        ar & last_system_launcher_slot;
+        ar & last_jump_to_home_slot;
+        ar & ordered_to_close_sys_applet;
+        ar & ordered_to_close_application;
+        ar & application_cancelled;
+        ar & application_close_target;
+        ar & new_3ds_mode_blocked;
+        ar & lock;
+        ar & capture_info;
+        ar & applet_slots;
+        ar & library_applet_closing_command;
 
         if (Archive::is_loading::value) {
             LoadInputDevices();

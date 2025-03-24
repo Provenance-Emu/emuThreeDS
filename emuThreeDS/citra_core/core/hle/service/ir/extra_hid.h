@@ -6,6 +6,7 @@
 
 #include <array>
 #include <atomic>
+#include <span>
 #include <boost/serialization/array.hpp>
 #include "common/bit_field.h"
 #include "common/swap.h"
@@ -15,7 +16,12 @@
 namespace Core {
 struct TimingEventType;
 class Timing;
+class Movie;
 } // namespace Core
+
+namespace Service::HID {
+class ArticBaseController;
+};
 
 namespace Service::IR {
 
@@ -42,23 +48,28 @@ static_assert(sizeof(ExtraHIDResponse) == 6, "HID status response has wrong size
  */
 class ExtraHID final : public IRDevice {
 public:
-    explicit ExtraHID(SendFunc send_func, Core::Timing& timing);
+    explicit ExtraHID(SendFunc send_func, Core::Timing& timing, Core::Movie& movie);
     ~ExtraHID();
 
     void OnConnect() override;
     void OnDisconnect() override;
-    void OnReceive(const std::vector<u8>& data) override;
+    void OnReceive(std::span<const u8> data) override;
 
     /// Requests input devices reload from current settings. Called when the input settings change.
     void RequestInputDevicesReload();
 
+    void UseArticController(const std::shared_ptr<Service::HID::ArticBaseController>& ac) {
+        artic_controller = ac;
+    }
+
 private:
     void SendHIDStatus();
-    void HandleConfigureHIDPollingRequest(const std::vector<u8>& request);
-    void HandleReadCalibrationDataRequest(const std::vector<u8>& request);
+    void HandleConfigureHIDPollingRequest(std::span<const u8> request);
+    void HandleReadCalibrationDataRequest(std::span<const u8> request);
     void LoadInputDevices();
 
     Core::Timing& timing;
+    Core::Movie& movie;
     u8 hid_period;
     Core::TimingEventType* hid_polling_callback_id;
     std::array<u8, 0x40> calibration_data;
@@ -67,10 +78,12 @@ private:
     std::unique_ptr<Input::AnalogDevice> c_stick;
     std::atomic<bool> is_device_reload_pending;
 
+    std::shared_ptr<Service::HID::ArticBaseController> artic_controller = nullptr;
+
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& hid_period;
-        ar& calibration_data; // This isn't writeable for now, but might be in future
+        ar & hid_period;
+        ar & calibration_data; // This isn't writeable for now, but might be in future
         if (Archive::is_loading::value) {
             LoadInputDevices(); // zl, zr, c_stick are loaded here
         }

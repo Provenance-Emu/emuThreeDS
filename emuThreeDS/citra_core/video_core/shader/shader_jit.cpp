@@ -54,4 +54,4 @@ void JitEngine::Run(const ShaderSetup& setup, ShaderUnit& state) const {
 
 } // namespace Pica::Shader
 
-#endif // CYTRUS_ARCH(x86_64) || CYTRUS_ARCH(arm64)
+#endif // CITRA_ARCH(x86_64) || CITRA_ARCH(arm64)

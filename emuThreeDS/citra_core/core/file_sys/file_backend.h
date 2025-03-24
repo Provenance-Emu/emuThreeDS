@@ -12,9 +12,6 @@
 #include "core/hle/result.h"
 #include "delay_generator.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// FileSys namespace
-
 namespace FileSys {
 
 class FileBackend : NonCopyable {
@@ -40,7 +37,7 @@ public:
      * @return Number of bytes written, or error code
      */
     virtual ResultVal<std::size_t> Write(u64 offset, std::size_t length, bool flush,
-                                         const u8* buffer) = 0;
+                                         bool update_timestamp, const u8* buffer) = 0;
 
     /**
      * Get the amount of time a 3ds needs to read those data
@@ -82,19 +79,33 @@ public:
      * Close the file
      * @return true if the file closed correctly
      */
-    virtual bool Close() const = 0;
+    virtual bool Close() = 0;
 
     /**
      * Flushes the file
      */
     virtual void Flush() const = 0;
 
+    /**
+     * Whether the backend supports cached reads.
+     */
+    virtual bool AllowsCachedReads() const {
+        return false;
+    }
+
+    /**
+     * Whether the cache is ready for a specified offset and length.
+     */
+    virtual bool CacheReady(std::size_t file_offset, std::size_t length) {
+        return false;
+    }
+
 protected:
     std::unique_ptr<DelayGenerator> delay_generator;
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& delay_generator;
+        ar & delay_generator;
     }
     friend class boost::serialization::access;
 };

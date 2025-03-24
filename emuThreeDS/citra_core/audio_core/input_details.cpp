@@ -9,34 +9,20 @@
 #include "audio_core/input_details.h"
 #include "audio_core/null_input.h"
 #include "audio_core/static_input.h"
-#include "common/logging/log.h"
-#include "core/core.h"
 #ifdef HAVE_CUBEB
 #include "audio_core/cubeb_input.h"
 #endif
 #ifdef HAVE_OPENAL
 #include "audio_core/openal_input.h"
 #endif
+#ifdef HAVE_COREAUDIO
 #include "audio_core/coreaudio_input.h"
+#endif
+#include "common/logging/log.h"
+#include "core/core.h"
 
 namespace AudioCore {
 namespace {
-struct InputDetails {
-    using FactoryFn = std::unique_ptr<Input> (*)(Core::System& system, std::string_view device_id);
-    using ListDevicesFn = std::vector<std::string> (*)();
-
-    /// Type of this input.
-    InputType type;
-    /// Name for this input.
-    std::string_view name;
-    /// Whether the input is backed by real devices.
-    bool real;
-    /// A method to call to construct an instance of this type of input.
-    FactoryFn factory;
-    /// A method to call to list available devices.
-    ListDevicesFn list_devices;
-};
-
 // input_details is ordered in terms of desirability, with the best choice at the top.
 constexpr std::array input_details = {
 #ifdef HAVE_COREAUDIO
@@ -75,20 +61,22 @@ constexpr std::array input_details = {
                  },
                  &ListOpenALInputDevices},
 #endif
-    InputDetails{
-        InputType::Static, "Static Noise", false,
-            [](Core::System& system, std::string_view device_id) -> std::unique_ptr<Input> {
-            return std::make_unique<StaticInput>();
-        }, [] {
-            return std::vector<std::string>{"Static Noise"};
-        }
-    },
+    InputDetails{InputType::Static, "Static Noise", false,
+                 [](Core::System& system, std::string_view device_id) -> std::unique_ptr<Input> {
+                     return std::make_unique<StaticInput>();
+                 },
+                 [] { return std::vector<std::string>{"Static Noise"}; }},
     InputDetails{InputType::Null, "None", false,
                  [](Core::System& system, std::string_view device_id) -> std::unique_ptr<Input> {
                      return std::make_unique<NullInput>();
                  },
                  [] { return std::vector<std::string>{"None"}; }},
 };
+} // Anonymous namespace
+
+std::vector<InputDetails> ListInputs() {
+    return {input_details.begin(), input_details.end()};
+}
 
 const InputDetails& GetInputDetails(InputType input_type) {
     auto iter = std::find_if(
@@ -105,22 +93,6 @@ const InputDetails& GetInputDetails(InputType input_type) {
     }
 
     return *iter;
-}
-} // Anonymous namespace
-
-std::string_view GetInputName(InputType input_type) {
-    if (input_type == InputType::Auto) {
-        return "Auto";
-    }
-    return GetInputDetails(input_type).name;
-}
-
-std::vector<std::string> GetDeviceListForInput(InputType input_type) {
-    return GetInputDetails(input_type).list_devices();
-}
-
-std::unique_ptr<Input> CreateInputFromID(Core::System& system, InputType input_type, std::string_view device_id) {
-    return GetInputDetails(input_type).factory(system, device_id);
 }
 
 } // namespace AudioCore

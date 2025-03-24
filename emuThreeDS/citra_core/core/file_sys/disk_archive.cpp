@@ -11,9 +11,6 @@
 #include "core/file_sys/disk_archive.h"
 #include "core/file_sys/errors.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// FileSys namespace
-
 SERIALIZE_EXPORT_IMPL(FileSys::DiskFile)
 SERIALIZE_EXPORT_IMPL(FileSys::DiskDirectory)
 
@@ -22,22 +19,22 @@ namespace FileSys {
 ResultVal<std::size_t> DiskFile::Read(const u64 offset, const std::size_t length,
                                       u8* buffer) const {
     if (!mode.read_flag)
-        return ERROR_INVALID_OPEN_FLAGS;
+        return ResultInvalidOpenFlags;
 
     file->Seek(offset, SEEK_SET);
-    return MakeResult<std::size_t>(file->ReadBytes(buffer, length));
+    return file->ReadBytes(buffer, length);
 }
 
 ResultVal<std::size_t> DiskFile::Write(const u64 offset, const std::size_t length, const bool flush,
-                                       const u8* buffer) {
+                                       const bool update_timestamp, const u8* buffer) {
     if (!mode.write_flag)
-        return ERROR_INVALID_OPEN_FLAGS;
+        return ResultInvalidOpenFlags;
 
     file->Seek(offset, SEEK_SET);
     std::size_t written = file->WriteBytes(buffer, length);
     if (flush)
         file->Flush();
-    return MakeResult<std::size_t>(written);
+    return written;
 }
 
 u64 DiskFile::GetSize() const {
@@ -50,11 +47,9 @@ bool DiskFile::SetSize(const u64 size) const {
     return true;
 }
 
-bool DiskFile::Close() const {
+bool DiskFile::Close() {
     return file->Close();
 }
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 
 DiskDirectory::DiskDirectory(const std::string& path) {
     directory.size = FileUtil::ScanDirectoryTree(path, directory);

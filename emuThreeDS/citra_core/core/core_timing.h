@@ -154,18 +154,18 @@ public:
     private:
         template <class Archive>
         void save(Archive& ar, const unsigned int) const {
-            ar& time;
-            ar& fifo_order;
-            ar& user_data;
+            ar & time;
+            ar & fifo_order;
+            ar & user_data;
             std::string name = *(type->name);
             ar << name;
         }
 
         template <class Archive>
         void load(Archive& ar, const unsigned int) {
-            ar& time;
-            ar& fifo_order;
-            ar& user_data;
+            ar & time;
+            ar & fifo_order;
+            ar & user_data;
             std::string name;
             ar >> name;
             type = Global<Timing>().RegisterEvent(name, nullptr);
@@ -207,11 +207,6 @@ public:
 
         void MoveEvents();
 
-        // Use these two functions to adjust the guest system tick on host blocking operations, so
-        // that the guest can tell how much time passed during the host call.
-        u32 StartAdjust();
-        void EndAdjust(u32 start_adjust_handle);
-
     private:
         friend class Timing;
         // The queue is a min-heap using std::make_heap/push_heap/pop_heap.
@@ -237,8 +232,6 @@ public:
         s64 executed_ticks = 0;
         u64 idled_cycles = 0;
 
-        std::chrono::time_point<std::chrono::steady_clock> adjust_value_last;
-        u32 adjust_value_curr_handle = 0;
         // Stores a scaling for the internal clockspeed. Changing this number results in
         // under/overclocking the guest cpu
         double cpu_clock_scale = 1.0;
@@ -246,28 +239,31 @@ public:
         template <class Archive>
         void serialize(Archive& ar, const unsigned int) {
             MoveEvents();
-            ar& event_queue;
-            ar& event_fifo_id;
-            ar& slice_length;
-            ar& downcount;
-            ar& executed_ticks;
-            ar& idled_cycles;
+            ar & event_queue;
+            ar & event_fifo_id;
+            ar & slice_length;
+            ar & downcount;
+            ar & executed_ticks;
+            ar & idled_cycles;
         }
         friend class boost::serialization::access;
     };
 
     explicit Timing(std::size_t num_cores, u32 cpu_clock_percentage, s64 override_base_ticks = -1);
 
-    ~Timing(){};
+    ~Timing() {};
 
     /**
      * Returns the event_type identifier. if name is not unique, it will assert.
      */
     TimingEventType* RegisterEvent(const std::string& name, TimedCallback callback);
 
+    // Make sure to use thread_safe_mode = true if called from a different thread than the
+    // emulator thread, such as coroutines.
     void ScheduleEvent(s64 cycles_into_future, const TimingEventType* event_type,
                        std::uintptr_t user_data = 0,
-                       std::size_t core_id = std::numeric_limits<std::size_t>::max());
+                       std::size_t core_id = std::numeric_limits<std::size_t>::max(),
+                       bool thread_safe_mode = false);
 
     void UnscheduleEvent(const TimingEventType* event_type, std::uintptr_t user_data);
 
@@ -293,7 +289,7 @@ public:
     void UnlockEventQueue() {
         event_queue_locked = false;
     }
-    
+
     /// Generates a random tick count to seed the system tick timer with.
     static s64 GenerateBaseTicks();
 
@@ -312,14 +308,8 @@ private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int file_version) {
         // event_types set during initialization of other things
-        ar& timers;
-        if (file_version == 0) {
-            std::shared_ptr<Timer> x;
-            ar& x;
-            current_timer = x.get();
-        } else {
-            ar& current_timer;
-        }
+        ar & timers;
+        ar & current_timer;
         if (Archive::is_loading::value) {
             event_queue_locked = true;
         }

@@ -8,7 +8,7 @@
 // external sampling profilers like "Very Sleepy", and will improve performance somewhat.
 // #define MICROPROFILE_ENABLED 0
 
-// Customized Citra settings.
+// Customized Cytrus settings.
 // This file wraps the MicroProfile header so that these are consistent everywhere.
 #define MICROPROFILE_WEBSERVER 0
 #define MICROPROFILE_GPU_TIMERS 0 // TODO: Implement timer queries when we upgrade to OpenGL 3.3
@@ -20,6 +20,6 @@
 typedef void* HANDLE;
 #endif
 
-#include <microprofile/microprofile.h>
+#include <microprofile.h>
 
 #define MP_RGB(r, g, b) ((r) << 16 | (g) << 8 | (b) << 0)

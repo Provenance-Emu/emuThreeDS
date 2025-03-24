@@ -5,16 +5,18 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <string>
 #include <unordered_map>
-#include <vector>
 #include <boost/serialization/unique_ptr.hpp>
 #include <boost/serialization/unordered_map.hpp>
 #include "common/common_types.h"
 #include "core/file_sys/archive_backend.h"
+#include "core/file_sys/archive_source_sd_savedata.h"
 #include "core/hle/result.h"
 #include "core/hle/service/fs/directory.h"
 #include "core/hle/service/fs/file.h"
+#include "network/artic_base/artic_base_client.h"
 
 /// The unique system identifier hash, also known as ID0
 static constexpr char SYSTEM_ID[]{"00000000000000000000000000000000"};
@@ -40,6 +42,7 @@ enum class ArchiveIdCode : u32 {
     SystemSaveData = 0x00000008,
     SDMC = 0x00000009,
     SDMCWriteOnly = 0x0000000A,
+    BossExtSaveData = 0x12345678,
     NCCH = 0x2345678A,
     OtherSaveDataGeneral = 0x567890B2,
     OtherSaveDataPermitted = 0x567890B4,
@@ -66,6 +69,19 @@ struct ArchiveResource {
 };
 static_assert(sizeof(ArchiveResource) == 0x10, "ArchiveResource has incorrect size");
 
+struct ExtSaveDataInfo {
+    u8 media_type;
+    u8 unknown;
+    u16 reserved1;
+    u32 save_id_low;
+    u32 save_id_high;
+    u32 reserved2;
+};
+static_assert(sizeof(ExtSaveDataInfo) == 0x10, "ExtSaveDataInfo struct has incorrect size");
+static_assert(std::is_trivial<ExtSaveDataInfo>(), "ExtSaveDataInfo should be trivial");
+static_assert(std::is_trivially_copyable<ExtSaveDataInfo>(),
+              "ExtSaveDataInfo should be trivially copyable");
+
 using FileSys::ArchiveBackend;
 using FileSys::ArchiveFactory;
 
@@ -87,7 +103,10 @@ public:
      * Closes an archive
      * @param handle Handle to the archive to close
      */
-    ResultCode CloseArchive(ArchiveHandle handle);
+    Result CloseArchive(ArchiveHandle handle);
+
+    Result ControlArchive(ArchiveHandle handle, u32 action, u8* input, size_t input_size,
+                          u8* output, size_t output_size);
 
     /**
      * Open a File from an Archive
@@ -97,7 +116,8 @@ public:
      * @return Pair containing the opened File object and the open delay
      */
     std::pair<ResultVal<std::shared_ptr<File>>, std::chrono::nanoseconds> OpenFileFromArchive(
-        ArchiveHandle archive_handle, const FileSys::Path& path, FileSys::Mode mode);
+        ArchiveHandle archive_handle, const FileSys::Path& path, FileSys::Mode mode,
+        u32 attributes);
 
     /**
      * Delete a File from an Archive
@@ -105,7 +125,7 @@ public:
      * @param path Path to the File inside of the Archive
      * @return Whether deletion succeeded
      */
-    ResultCode DeleteFileFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path);
+    Result DeleteFileFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path);
 
     /**
      * Rename a File between two Archives
@@ -115,10 +135,10 @@ public:
      * @param dest_path Path to the File inside of the destination Archive
      * @return Whether rename succeeded
      */
-    ResultCode RenameFileBetweenArchives(ArchiveHandle src_archive_handle,
-                                         const FileSys::Path& src_path,
-                                         ArchiveHandle dest_archive_handle,
-                                         const FileSys::Path& dest_path);
+    Result RenameFileBetweenArchives(ArchiveHandle src_archive_handle,
+                                     const FileSys::Path& src_path,
+                                     ArchiveHandle dest_archive_handle,
+                                     const FileSys::Path& dest_path);
 
     /**
      * Delete a Directory from an Archive
@@ -126,7 +146,7 @@ public:
      * @param path Path to the Directory inside of the Archive
      * @return Whether deletion succeeded
      */
-    ResultCode DeleteDirectoryFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path);
+    Result DeleteDirectoryFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path);
 
     /**
      * Delete a Directory and anything under it from an Archive
@@ -134,8 +154,8 @@ public:
      * @param path Path to the Directory inside of the Archive
      * @return Whether deletion succeeded
      */
-    ResultCode DeleteDirectoryRecursivelyFromArchive(ArchiveHandle archive_handle,
-                                                     const FileSys::Path& path);
+    Result DeleteDirectoryRecursivelyFromArchive(ArchiveHandle archive_handle,
+                                                 const FileSys::Path& path);
 
     /**
      * Create a File in an Archive
@@ -144,8 +164,8 @@ public:
      * @param file_size The size of the new file, filled with zeroes
      * @return File creation result code
      */
-    ResultCode CreateFileInArchive(ArchiveHandle archive_handle, const FileSys::Path& path,
-                                   u64 file_size);
+    Result CreateFileInArchive(ArchiveHandle archive_handle, const FileSys::Path& path,
+                               u64 file_size, u32 attributes);
 
     /**
      * Create a Directory from an Archive
@@ -153,7 +173,8 @@ public:
      * @param path Path to the Directory inside of the Archive
      * @return Whether creation of directory succeeded
      */
-    ResultCode CreateDirectoryFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path);
+    Result CreateDirectoryFromArchive(ArchiveHandle archive_handle, const FileSys::Path& path,
+                                      u32 attributes);
 
     /**
      * Rename a Directory between two Archives
@@ -163,10 +184,10 @@ public:
      * @param dest_path Path to the Directory inside of the destination Archive
      * @return Whether rename succeeded
      */
-    ResultCode RenameDirectoryBetweenArchives(ArchiveHandle src_archive_handle,
-                                              const FileSys::Path& src_path,
-                                              ArchiveHandle dest_archive_handle,
-                                              const FileSys::Path& dest_path);
+    Result RenameDirectoryBetweenArchives(ArchiveHandle src_archive_handle,
+                                          const FileSys::Path& src_path,
+                                          ArchiveHandle dest_archive_handle,
+                                          const FileSys::Path& dest_path);
 
     /**
      * Open a Directory from an Archive
@@ -191,10 +212,11 @@ public:
      * @param format_info Format information about the new archive
      * @param path The path to the archive, if relevant.
      * @param program_id the program ID of the client that requests the operation
-     * @return ResultCode 0 on success or the corresponding code on error
+     * @return Result 0 on success or the corresponding code on error
      */
-    ResultCode FormatArchive(ArchiveIdCode id_code, const FileSys::ArchiveFormatInfo& format_info,
-                             const FileSys::Path& path, u64 program_id);
+    Result FormatArchive(ArchiveIdCode id_code, const FileSys::ArchiveFormatInfo& format_info,
+                         const FileSys::Path& path, u64 program_id, u32 directory_buckets,
+                         u32 file_buckets);
 
     /**
      * Retrieves the format info about the archive of the specified type and path.
@@ -216,36 +238,38 @@ public:
      * @param smdh_icon the SMDH icon for this ExtSaveData
      * @param format_info Format information about the new archive
      * @param program_id the program ID of the client that requests the operation
-     * @return ResultCode 0 on success or the corresponding code on error
+     * @return Result 0 on success or the corresponding code on error
      */
-    ResultCode CreateExtSaveData(MediaType media_type, u32 high, u32 low,
-                                 const std::vector<u8>& smdh_icon,
-                                 const FileSys::ArchiveFormatInfo& format_info, u64 program_id);
+    Result CreateExtSaveData(MediaType media_type, u8 unknown, u32 high, u32 low,
+                             std::span<const u8> smdh_icon,
+                             const FileSys::ArchiveFormatInfo& format_info, u64 program_id,
+                             u64 total_size);
 
     /**
      * Deletes the SharedExtSaveData archive for the specified extdata ID
      * @param media_type The media type of the archive to delete (NAND / SDMC)
      * @param high The high word of the extdata id to delete
      * @param low The low word of the extdata id to delete
-     * @return ResultCode 0 on success or the corresponding code on error
+     * @return Result 0 on success or the corresponding code on error
      */
-    ResultCode DeleteExtSaveData(MediaType media_type, u32 high, u32 low);
+    Result DeleteExtSaveData(MediaType media_type, u8 unknown, u32 high, u32 low);
 
     /**
      * Deletes the SystemSaveData archive folder for the specified save data id
      * @param high The high word of the SystemSaveData archive to delete
      * @param low The low word of the SystemSaveData archive to delete
-     * @return ResultCode 0 on success or the corresponding code on error
+     * @return Result 0 on success or the corresponding code on error
      */
-    ResultCode DeleteSystemSaveData(u32 high, u32 low);
+    Result DeleteSystemSaveData(u32 high, u32 low);
 
     /**
      * Creates the SystemSaveData archive folder for the specified save data id
-     * @param high The high word of the SystemSaveData archive to create
-     * @param low The low word of the SystemSaveData archive to create
-     * @return ResultCode 0 on success or the corresponding code on error
+     * @return Result 0 on success or the corresponding code on error
      */
-    ResultCode CreateSystemSaveData(u32 high, u32 low);
+    Result CreateSystemSaveData(u32 high, u32 low, u32 total_size, u32 block_size,
+                                u32 number_directories, u32 number_files,
+                                u32 number_directory_buckets, u32 number_file_buckets,
+                                u8 duplicate_data);
 
     /**
      * Returns capacity and free space information about the given media type.
@@ -254,8 +278,26 @@ public:
      */
     ResultVal<ArchiveResource> GetArchiveResource(MediaType media_type) const;
 
+    Result SetSaveDataSecureValue(ArchiveHandle archive_handle, u32 secure_value_slot,
+                                  u64 secure_value, bool flush);
+
+    ResultVal<std::tuple<bool, bool, u64>> GetSaveDataSecureValue(ArchiveHandle archive_handle,
+                                                                  u32 secure_value_slot);
+
+    bool ArchiveIsSlow(ArchiveIdCode archive_id);
+
+    bool ArchiveIsSlow(ArchiveHandle archive_handle);
+
     /// Registers a new NCCH file with the SelfNCCH archive factory
     void RegisterSelfNCCH(Loader::AppLoader& app_loader);
+
+    void RegisterArticSaveDataSource(std::shared_ptr<Network::ArticBase::Client>& client);
+
+    void RegisterArticExtData(std::shared_ptr<Network::ArticBase::Client>& client);
+
+    void RegisterArticNCCH(std::shared_ptr<Network::ArticBase::Client>& client);
+
+    void RegisterArticSystemSaveData(std::shared_ptr<Network::ArticBase::Client>& client);
 
 private:
     Core::System& system;
@@ -265,8 +307,8 @@ private:
      * @param factory File system backend interface to the archive
      * @param id_code Id code used to access this type of archive
      */
-    ResultCode RegisterArchiveType(std::unique_ptr<FileSys::ArchiveFactory>&& factory,
-                                   ArchiveIdCode id_code);
+    Result RegisterArchiveType(std::unique_ptr<FileSys::ArchiveFactory>&& factory,
+                               ArchiveIdCode id_code);
 
     /// Register all archive types
     void RegisterArchiveTypes();
@@ -285,11 +327,17 @@ private:
     std::unordered_map<ArchiveHandle, std::unique_ptr<ArchiveBackend>> handle_map;
     ArchiveHandle next_handle = 1;
 
+    /**
+     * Savedata source
+     */
+    std::shared_ptr<FileSys::ArchiveSource_SDSaveData> sd_savedata_source;
+
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& id_code_map;
-        ar& handle_map;
-        ar& next_handle;
+        ar & id_code_map;
+        ar & handle_map;
+        ar & next_handle;
+        ar & sd_savedata_source;
     }
     friend class boost::serialization::access;
 };

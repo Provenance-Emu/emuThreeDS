@@ -11,6 +11,7 @@
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/core.h"
+#include "core/loader/loader.h"
 #include "core/telemetry_session.h"
 #include "network/network_settings.h"
 
@@ -128,8 +129,6 @@ void TelemetrySession::AddInitialInfo(Loader::AppLoader& app_loader) {
              static_cast<int>(Settings::values.output_type.GetValue()));
     AddField(Telemetry::FieldType::UserConfig, "Audio_EnableAudioStretching",
              Settings::values.enable_audio_stretching.GetValue());
-    AddField(Telemetry::FieldType::UserConfig, "Audio_EnableRealtimeAudio",
-             Settings::values.enable_realtime_audio.GetValue());
     AddField(Telemetry::FieldType::UserConfig, "Core_UseCpuJit",
              Settings::values.use_cpu_jit.GetValue());
     AddField(Telemetry::FieldType::UserConfig, "Renderer_ResolutionFactor",
@@ -156,6 +155,8 @@ void TelemetrySession::AddInitialInfo(Loader::AppLoader& app_loader) {
              static_cast<int>(Settings::values.mono_render_option.GetValue()));
     AddField(Telemetry::FieldType::UserConfig, "System_IsNew3ds",
              Settings::values.is_new_3ds.GetValue());
+    AddField(Telemetry::FieldType::UserConfig, "System_LLEApplets",
+             Settings::values.lle_applets.GetValue());
     AddField(Telemetry::FieldType::UserConfig, "System_RegionValue",
              Settings::values.region_value.GetValue());
 }

@@ -9,6 +9,7 @@
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
 #include "core/hle/service/ps/ps_ps.h"
+#include "core/hle/service/ssl/ssl_c.h"
 #include "core/hw/aes/arithmetic128.h"
 #include "core/hw/aes/key.h"
 
@@ -76,8 +77,8 @@ void PS_PS::EncryptDecryptAes(Kernel::HLERequestContext& ctx) {
     if (algorithm == AlgorithmType::CCM_Encrypt || algorithm == AlgorithmType::CCM_Decrypt) {
         // AES-CCM is not supported with this function
         IPC::RequestBuilder rb = rp.MakeBuilder(1, 4);
-        rb.Push(ResultCode(ErrorDescription::InvalidSection, ErrorModule::PS,
-                           ErrorSummary::WrongArgument, ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::InvalidSection, ErrorModule::PS,
+                       ErrorSummary::WrongArgument, ErrorLevel::Status));
         rb.PushMappedBuffer(source);
         rb.PushMappedBuffer(destination);
         return;
@@ -140,31 +141,45 @@ void PS_PS::EncryptDecryptAes(Kernel::HLERequestContext& ctx) {
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(5, 4);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushRaw(new_iv);
     rb.PushMappedBuffer(source);
     rb.PushMappedBuffer(destination);
 }
 
+void PS_PS::GenerateRandomBytes(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    const u32 size = rp.Pop<u32>();
+    auto buffer = rp.PopMappedBuffer();
+
+    std::vector<u8> out_data(size);
+    SSL::GenerateRandomData(out_data);
+    buffer.Write(out_data.data(), 0, size);
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushMappedBuffer(buffer);
+}
+
 PS_PS::PS_PS() : ServiceFramework("ps:ps", DefaultMaxSessions) {
     static const FunctionInfo functions[] = {
         // clang-format off
-        {IPC::MakeHeader(0x0001, 9, 4), nullptr, "SignRsaSha256"},
-        {IPC::MakeHeader(0x0002, 9, 4), nullptr, "VerifyRsaSha256"},
-        {IPC::MakeHeader(0x0004, 8, 4), &PS_PS::EncryptDecryptAes, "EncryptDecryptAes"},
-        {IPC::MakeHeader(0x0005, 10, 4), nullptr, "EncryptSignDecryptVerifyAesCcm"},
-        {IPC::MakeHeader(0x0006, 1, 0), nullptr, "GetRomId"},
-        {IPC::MakeHeader(0x0007, 1, 0), nullptr, "GetRomId2"},
-        {IPC::MakeHeader(0x0008, 1, 0), nullptr, "GetRomMakerCode"},
-        {IPC::MakeHeader(0x0009, 0, 0), nullptr, "GetCTRCardAutoStartupBit"},
-        {IPC::MakeHeader(0x000A, 0, 0), nullptr, "GetLocalFriendCodeSeed"},
-        {IPC::MakeHeader(0x000B, 0, 0), nullptr, "GetDeviceId"},
-        {IPC::MakeHeader(0x000C, 0, 0), nullptr, "SeedRNG"},
-        {IPC::MakeHeader(0x000D, 1, 2), nullptr, "GenerateRandomBytes"},
-        {IPC::MakeHeader(0x000E, 2, 2), nullptr, "InterfaceForPXI_0x04010084"},
-        {IPC::MakeHeader(0x000F, 2, 2), nullptr, "InterfaceForPXI_0x04020082"},
-        {IPC::MakeHeader(0x0010, 1, 2), nullptr, "InterfaceForPXI_0x04030044"},
-        {IPC::MakeHeader(0x0011, 1, 2), nullptr, "InterfaceForPXI_0x04040044"},
+        {0x0001, nullptr, "SignRsaSha256"},
+        {0x0002, nullptr, "VerifyRsaSha256"},
+        {0x0004, &PS_PS::EncryptDecryptAes, "EncryptDecryptAes"},
+        {0x0005, nullptr, "EncryptSignDecryptVerifyAesCcm"},
+        {0x0006, nullptr, "GetRomId"},
+        {0x0007, nullptr, "GetRomId2"},
+        {0x0008, nullptr, "GetRomMakerCode"},
+        {0x0009, nullptr, "GetCTRCardAutoStartupBit"},
+        {0x000A, nullptr, "GetLocalFriendCodeSeed"},
+        {0x000B, nullptr, "GetDeviceId"},
+        {0x000C, nullptr, "SeedRNG"},
+        {0x000D, &PS_PS::GenerateRandomBytes, "GenerateRandomBytes"},
+        {0x000E, nullptr, "InterfaceForPXI_0x04010084"},
+        {0x000F, nullptr, "InterfaceForPXI_0x04020082"},
+        {0x0010, nullptr, "InterfaceForPXI_0x04030044"},
+        {0x0011, nullptr, "InterfaceForPXI_0x04040044"},
         // clang-format on
     };
 

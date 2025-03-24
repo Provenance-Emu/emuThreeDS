@@ -3,7 +3,7 @@
 // Refer to the license.txt file included.
 
 #include "common/arch.h"
-#if CITRA_ARCH(arm64)
+#if CYTRUS_ARCH(arm64)
 
 #include <cstring>
 #include <fstream>
@@ -30,7 +30,7 @@ namespace Common {
 #ifdef __APPLE__
 static std::string GetCPUString() {
     char buf[128];
-    size_t buf_len = sizeof(buf);
+    std::size_t buf_len = sizeof(buf);
     if (sysctlbyname("machdep.cpu.brand_string", &buf, &buf_len, NULL, 0) == -1) {
         return "Unknown";
     }
@@ -114,4 +114,4 @@ const CPUCaps& GetCPUCaps() {
 
 } // namespace Common
 
-#endif // CITRA_ARCH(arm64)
+#endif // CYTRUS_ARCH(arm64)

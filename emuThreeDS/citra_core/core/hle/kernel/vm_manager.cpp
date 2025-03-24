@@ -4,13 +4,18 @@
 
 #include <algorithm>
 #include <iterator>
+#include <boost/serialization/map.hpp>
+#include <boost/serialization/shared_ptr.hpp>
+#include <boost/serialization/split_member.hpp>
+#include "common/archives.h"
 #include "common/assert.h"
 #include "core/core.h"
 #include "core/hle/kernel/errors.h"
 #include "core/hle/kernel/vm_manager.h"
 #include "core/hle/service/plgldr/plgldr.h"
 #include "core/memory.h"
-#include "core/mmio.h"
+
+SERIALIZE_EXPORT_IMPL(Kernel::VirtualMemoryArea)
 
 namespace Kernel {
 
@@ -33,11 +38,19 @@ bool VirtualMemoryArea::CanBeMergedWith(const VirtualMemoryArea& next) const {
         backing_memory.GetPtr() + size != next.backing_memory.GetPtr()) {
         return false;
     }
-    if (type == VMAType::MMIO && paddr + size != next.paddr) {
-        return false;
-    }
     return true;
 }
+
+template <class Archive>
+void VirtualMemoryArea::serialize(Archive& ar, const unsigned int) {
+    ar & base;
+    ar & size;
+    ar & type;
+    ar & permissions;
+    ar & meminfo_state;
+    ar & backing_memory;
+}
+SERIALIZE_IMPL(VirtualMemoryArea)
 
 VMManager::VMManager(Memory::MemorySystem& memory, Kernel::Process& proc)
     : page_table(std::make_shared<Memory::PageTable>()), memory(memory), process(proc) {
@@ -87,8 +100,8 @@ ResultVal<VAddr> VMManager::MapBackingMemoryToBase(VAddr base, u32 region_size, 
     // Do not try to allocate the block if there are no available addresses within the desired
     // region.
     if (vma_handle == vma_map.end() || target + size > base + region_size) {
-        return ResultCode(ErrorDescription::OutOfMemory, ErrorModule::Kernel,
-                          ErrorSummary::OutOfResource, ErrorLevel::Permanent);
+        return Result(ErrorDescription::OutOfMemory, ErrorModule::Kernel,
+                      ErrorSummary::OutOfResource, ErrorLevel::Permanent);
     }
 
     auto result = MapBackingMemory(target, memory, size, state);
@@ -96,7 +109,7 @@ ResultVal<VAddr> VMManager::MapBackingMemoryToBase(VAddr base, u32 region_size, 
     if (result.Failed())
         return result.Code();
 
-    return MakeResult<VAddr>(target);
+    return target;
 }
 
 ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, MemoryRef memory,
@@ -115,34 +128,14 @@ ResultVal<VMManager::VMAHandle> VMManager::MapBackingMemory(VAddr target, Memory
     final_vma.backing_memory = memory;
     UpdatePageTableForVMA(final_vma);
 
-    return MakeResult<VMAHandle>(MergeAdjacent(vma_handle));
+    return MergeAdjacent(vma_handle);
 }
 
-ResultVal<VMManager::VMAHandle> VMManager::MapMMIO(VAddr target, PAddr paddr, u32 size,
-                                                   MemoryState state,
-                                                   Memory::MMIORegionPointer mmio_handler) {
-    ASSERT(!is_locked);
-
-    // This is the appropriately sized VMA that will turn into our allocation.
-    CASCADE_RESULT(VMAIter vma_handle, CarveVMA(target, size));
-    VirtualMemoryArea& final_vma = vma_handle->second;
-    ASSERT(final_vma.size == size);
-
-    final_vma.type = VMAType::MMIO;
-    final_vma.permissions = VMAPermission::ReadWrite;
-    final_vma.meminfo_state = state;
-    final_vma.paddr = paddr;
-    final_vma.mmio_handler = mmio_handler;
-    UpdatePageTableForVMA(final_vma);
-
-    return MakeResult<VMAHandle>(MergeAdjacent(vma_handle));
-}
-
-ResultCode VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expected_state,
-                                        VMAPermission expected_perms, MemoryState new_state,
-                                        VMAPermission new_perms) {
+Result VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expected_state,
+                                    VMAPermission expected_perms, MemoryState new_state,
+                                    VMAPermission new_perms) {
     if (is_locked) {
-        return RESULT_SUCCESS;
+        return ResultSuccess;
     }
 
     VAddr target_end = target + size;
@@ -150,16 +143,16 @@ ResultCode VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expe
     VMAIter i_end = vma_map.lower_bound(target_end);
 
     if (begin_vma == vma_map.end())
-        return ERR_INVALID_ADDRESS;
+        return ResultInvalidAddress;
 
     for (auto i = begin_vma; i != i_end; ++i) {
         auto& vma = i->second;
         if (vma.meminfo_state != expected_state) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidAddressState;
         }
         u32 perms = static_cast<u32>(expected_perms);
         if ((static_cast<u32>(vma.permissions) & perms) != perms) {
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidAddressState;
         }
     }
 
@@ -175,7 +168,7 @@ ResultCode VMManager::ChangeMemoryState(VAddr target, u32 size, MemoryState expe
         vma = std::next(MergeAdjacent(vma));
     }
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 VMManager::VMAIter VMManager::Unmap(VMAIter vma_handle) {
@@ -185,16 +178,14 @@ VMManager::VMAIter VMManager::Unmap(VMAIter vma_handle) {
     vma.type = VMAType::Free;
     vma.permissions = VMAPermission::None;
     vma.meminfo_state = MemoryState::Free;
-
     vma.backing_memory = nullptr;
-    vma.paddr = 0;
 
     UpdatePageTableForVMA(vma);
 
     return MergeAdjacent(vma_handle);
 }
 
-ResultCode VMManager::UnmapRange(VAddr target, u32 size) {
+Result VMManager::UnmapRange(VAddr target, u32 size) {
     ASSERT(!is_locked);
 
     CASCADE_RESULT(VMAIter vma, CarveVMARange(target, size));
@@ -208,7 +199,7 @@ ResultCode VMManager::UnmapRange(VAddr target, u32 size) {
     }
 
     ASSERT(FindVMA(target)->second.size >= size);
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
 VMManager::VMAHandle VMManager::Reprotect(VMAHandle vma_handle, VMAPermission new_perms) {
@@ -223,7 +214,7 @@ VMManager::VMAHandle VMManager::Reprotect(VMAHandle vma_handle, VMAPermission ne
     return MergeAdjacent(iter);
 }
 
-ResultCode VMManager::ReprotectRange(VAddr target, u32 size, VMAPermission new_perms) {
+Result VMManager::ReprotectRange(VAddr target, u32 size, VMAPermission new_perms) {
     ASSERT(!is_locked);
 
     CASCADE_RESULT(VMAIter vma, CarveVMARange(target, size));
@@ -236,13 +227,13 @@ ResultCode VMManager::ReprotectRange(VAddr target, u32 size, VMAPermission new_p
         vma = std::next(StripIterConstness(Reprotect(vma, new_perms)));
     }
 
-    return RESULT_SUCCESS;
+    return ResultSuccess;
 }
 
-void VMManager::LogLayout(Log::Level log_level) const {
+void VMManager::LogLayout(Common::Log::Level log_level) const {
     for (const auto& p : vma_map) {
         const VirtualMemoryArea& vma = p.second;
-        LOG_GENERIC(::Log::Class::Kernel, log_level, "{:08X} - {:08X}  size: {:8X} {}{}{} {}",
+        LOG_GENERIC(Common::Log::Class::Kernel, log_level, "{:08X} - {:08X}  size: {:8X} {}{}{} {}",
                     vma.base, vma.base + vma.size, vma.size,
                     (u8)vma.permissions & (u8)VMAPermission::Read ? 'R' : '-',
                     (u8)vma.permissions & (u8)VMAPermission::Write ? 'W' : '-',
@@ -268,13 +259,13 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMA(VAddr base, u32 size) {
     VMAIter vma_handle = StripIterConstness(FindVMA(base));
     if (vma_handle == vma_map.end()) {
         // Target address is outside the range managed by the kernel
-        return ERR_INVALID_ADDRESS;
+        return ResultInvalidAddress;
     }
 
     const VirtualMemoryArea& vma = vma_handle->second;
     if (vma.type != VMAType::Free) {
         // Region is already allocated
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidAddressState;
     }
 
     const VAddr start_in_vma = base - vma.base;
@@ -282,7 +273,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMA(VAddr base, u32 size) {
 
     if (end_in_vma > vma.size) {
         // Requested allocation doesn't fit inside VMA
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidAddressState;
     }
 
     if (end_in_vma != vma.size) {
@@ -294,7 +285,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMA(VAddr base, u32 size) {
         vma_handle = SplitVMA(vma_handle, start_in_vma);
     }
 
-    return MakeResult<VMAIter>(vma_handle);
+    return vma_handle;
 }
 
 ResultVal<VMManager::VMAIter> VMManager::CarveVMARange(VAddr target, u32 size) {
@@ -310,7 +301,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMARange(VAddr target, u32 size) {
     const VMAIter i_end = vma_map.lower_bound(target_end);
     if (std::any_of(begin_vma, i_end,
                     [](const auto& entry) { return entry.second.type == VMAType::Free; })) {
-        return ERR_INVALID_ADDRESS_STATE;
+        return ResultInvalidAddressState;
     }
 
     if (target != begin_vma->second.base) {
@@ -322,7 +313,7 @@ ResultVal<VMManager::VMAIter> VMManager::CarveVMARange(VAddr target, u32 size) {
         end_vma = SplitVMA(end_vma, target_end - end_vma->second.base);
     }
 
-    return MakeResult<VMAIter>(begin_vma);
+    return begin_vma;
 }
 
 VMManager::VMAIter VMManager::SplitVMA(VMAIter vma_handle, u32 offset_in_vma) {
@@ -343,9 +334,6 @@ VMManager::VMAIter VMManager::SplitVMA(VMAIter vma_handle, u32 offset_in_vma) {
         break;
     case VMAType::BackingMemory:
         new_vma.backing_memory += offset_in_vma;
-        break;
-    case VMAType::MMIO:
-        new_vma.paddr += offset_in_vma;
         break;
     }
 
@@ -381,9 +369,6 @@ void VMManager::UpdatePageTableForVMA(const VirtualMemoryArea& vma) {
     case VMAType::BackingMemory:
         memory.MapMemoryRegion(*page_table, vma.base, vma.size, vma.backing_memory);
         break;
-    case VMAType::MMIO:
-        memory.MapIoRegion(*page_table, vma.base, vma.size, vma.mmio_handler);
-        break;
     }
 
     auto plgldr = Service::PLGLDR::GetService(Core::System::GetInstance());
@@ -399,7 +384,7 @@ ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksFor
         auto vma = FindVMA(interval_target);
         if (vma->second.type != VMAType::BackingMemory) {
             LOG_ERROR(Kernel, "Trying to use already freed memory");
-            return ERR_INVALID_ADDRESS_STATE;
+            return ResultInvalidAddressState;
         }
 
         VAddr interval_end = std::min(address + size, vma->second.base + vma->second.size);
@@ -409,6 +394,17 @@ ResultVal<std::vector<std::pair<MemoryRef, u32>>> VMManager::GetBackingBlocksFor
 
         interval_target += interval_size;
     }
-    return MakeResult(backing_blocks);
+    return backing_blocks;
 }
+
+template <class Archive>
+void VMManager::serialize(Archive& ar, const unsigned int) {
+    ar & vma_map;
+    ar & page_table;
+    if (Archive::is_loading::value) {
+        is_locked = true;
+    }
+}
+SERIALIZE_IMPL(VMManager)
+
 } // namespace Kernel

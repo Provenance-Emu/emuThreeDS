@@ -81,11 +81,11 @@ struct FSTEntry {
 private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& isDirectory;
-        ar& size;
+        ar & isDirectory;
+        ar & size;
         ar& Path::make(physicalName);
         ar& Path::make(virtualName);
-        ar& children;
+        ar & children;
     }
     friend class boost::serialization::access;
 };
@@ -182,22 +182,19 @@ void SetUserPath(const std::string& path = "");
 
 void SetCurrentRomPath(const std::string& path);
 
-// Returns a pointer to a string with a Citra data dir in the user's home
+// Returns a pointer to a string with a Cytrus data dir in the user's home
 // directory. To be used in "multi-user" mode (that is, installed).
 [[nodiscard]] const std::string& GetUserPath(UserPath path);
 
-// Returns a pointer to a string with the default Citra data dir in the user's home
+// Returns a pointer to a string with the default Cytrus data dir in the user's home
 // directory.
 [[nodiscard]] const std::string& GetDefaultUserPath(UserPath path);
 
 // Update the Global Path with the new value
-const void UpdateUserPath(UserPath path, const std::string& filename);
-
-// Returns the path to where the sys file are
-[[nodiscard]] std::string GetSysDirectory();
+void UpdateUserPath(UserPath path, const std::string& filename);
 
 #ifdef __APPLE__
-[[nodiscard]] std::string GetBundleDirectory();
+[[nodiscard]] std::optional<std::string> GetBundleDirectory();
 #endif
 
 #ifdef _WIN32
@@ -269,8 +266,8 @@ public:
     IOFile();
 
     // flags is used for windows specific file open mode flags, which
-    // allows citra to open the logs in shared write mode, so that the file
-    // isn't considered "locked" while citra is open and people can open the log file and view it
+    // allows cytrus to open the logs in shared write mode, so that the file
+    // isn't considered "locked" while cytrus is open and people can open the log file and view it
     IOFile(const std::string& filename, const char openmode[], int flags = 0);
 
     ~IOFile();
@@ -295,6 +292,18 @@ public:
     }
 
     template <typename T>
+    std::size_t ReadAtArray(T* data, std::size_t length, std::size_t offset) {
+        static_assert(std::is_trivially_copyable_v<T>,
+                      "Given array does not consist of trivially copyable objects");
+
+        std::size_t items_read = ReadAtImpl(data, length, sizeof(T), offset);
+        if (items_read != length)
+            m_good = false;
+
+        return items_read;
+    }
+
+    template <typename T>
     std::size_t WriteArray(const T* data, std::size_t length) {
         static_assert(std::is_trivially_copyable_v<T>,
                       "Given array does not consist of trivially copyable objects");
@@ -310,6 +319,12 @@ public:
     std::size_t ReadBytes(T* data, std::size_t length) {
         static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
         return ReadArray(reinterpret_cast<char*>(data), length);
+    }
+
+    template <typename T>
+    std::size_t ReadAtBytes(T* data, std::size_t length, std::size_t offset) {
+        static_assert(std::is_trivially_copyable_v<T>, "T must be trivially copyable");
+        return ReadAtArray(reinterpret_cast<char*>(data), length, offset);
     }
 
     template <typename T>
@@ -363,6 +378,8 @@ public:
 
 private:
     std::size_t ReadImpl(void* data, std::size_t length, std::size_t data_size);
+    std::size_t ReadAtImpl(void* data, std::size_t length, std::size_t data_size,
+                           std::size_t offset);
     std::size_t WriteImpl(const void* data, std::size_t length, std::size_t data_size);
 
     bool Open();
@@ -378,13 +395,13 @@ private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar& Path::make(filename);
-        ar& openmode;
-        ar& flags;
+        ar & openmode;
+        ar & flags;
         u64 pos;
         if (Archive::is_saving::value) {
             pos = Tell();
         }
-        ar& pos;
+        ar & pos;
         if (Archive::is_loading::value) {
             Open();
             Seek(pos, SEEK_SET);

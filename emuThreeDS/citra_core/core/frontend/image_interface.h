@@ -7,7 +7,7 @@
 #include <span>
 #include <string>
 #include <vector>
-#include <dds-ktx/dds-ktx.h>
+#include <dds-ktx.h>
 #include "common/common_types.h"
 
 namespace Frontend {

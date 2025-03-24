@@ -8,9 +8,12 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <mutex>
+#include <span>
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <boost/serialization/export.hpp>
 #include "common/common_types.h"
 #include "core/hle/kernel/memory.h"
 #include "core/hle/result.h"
@@ -29,8 +32,9 @@ class MemorySystem;
 }
 
 namespace Core {
+class ARM_Interface;
 class Timing;
-}
+} // namespace Core
 
 namespace IPCDebugger {
 class Recorder;
@@ -90,12 +94,11 @@ union CoreVersion {
         major.Assign(major_ver);
     }
 
-    u32 raw;
+    u32 raw = 0;
     BitField<8, 8, u32> revision;
     BitField<16, 8, u32> minor;
     BitField<24, 8, u32> major;
 };
-
 
 /// Common memory memory modes.
 enum class MemoryMode : u8 {
@@ -165,10 +168,10 @@ public:
     std::shared_ptr<Process> CreateProcess(std::shared_ptr<CodeSet> code_set);
 
     /**
-     * Removes a process from the kernel process list
-     * @param process Process to remove
+     * Terminates a process, killing its threads and removing it from the process list.
+     * @param process Process to terminate.
      */
-    void RemoveProcess(std::shared_ptr<Process> process);
+    void TerminateProcess(std::shared_ptr<Process> process);
 
     /**
      * Creates and returns a new thread. The new thread is immediately scheduled
@@ -179,12 +182,14 @@ public:
      * @param processor_id The ID(s) of the processors on which the thread is desired to be run
      * @param stack_top The address of the thread's stack top
      * @param owner_process The parent process for the thread
+     * @param make_ready If the thread should be put in the ready queue
      * @return A shared pointer to the newly created thread
      */
     ResultVal<std::shared_ptr<Thread>> CreateThread(std::string name, VAddr entry_point,
                                                     u32 priority, u32 arg, s32 processor_id,
                                                     VAddr stack_top,
-                                                    std::shared_ptr<Process> owner_process);
+                                                    std::shared_ptr<Process> owner_process,
+                                                    bool make_ready = true);
 
     /**
      * Creates a semaphore.
@@ -238,7 +243,7 @@ public:
      * @param name Optional object name, used for debugging purposes.
      */
     ResultVal<std::shared_ptr<SharedMemory>> CreateSharedMemory(
-        Process* owner_process, u32 size, MemoryPermission permissions,
+        std::shared_ptr<Process> owner_process, u32 size, MemoryPermission permissions,
         MemoryPermission other_permissions, VAddr address = 0,
         MemoryRegion region = MemoryRegion::BASE, std::string name = "Unknown");
 
@@ -261,7 +266,7 @@ public:
     /// Retrieves a process from the current list of processes.
     std::shared_ptr<Process> GetProcessById(u32 process_id) const;
 
-    const std::vector<std::shared_ptr<Process>>& GetProcessList() const {
+    std::span<const std::shared_ptr<Process>> GetProcessList() const {
         return process_list;
     }
 
@@ -271,9 +276,9 @@ public:
 
     void SetCurrentMemoryPageTable(std::shared_ptr<Memory::PageTable> page_table);
 
-    void SetCPUs(std::vector<std::shared_ptr<ARM_Interface>> cpu);
+    void SetCPUs(std::vector<std::shared_ptr<Core::ARM_Interface>> cpu);
 
-    void SetRunningCPU(ARM_Interface* cpu);
+    void SetRunningCPU(Core::ARM_Interface* cpu);
 
     ThreadManager& GetThreadManager(u32 core_id);
     const ThreadManager& GetThreadManager(u32 core_id) const;
@@ -288,6 +293,8 @@ public:
 
     SharedPage::Handler& GetSharedPageHandler();
     const SharedPage::Handler& GetSharedPageHandler() const;
+
+    ConfigMem::Handler& GetConfigMemHandler();
 
     IPCDebugger::Recorder& GetIPCRecorder();
     const IPCDebugger::Recorder& GetIPCRecorder() const;
@@ -312,19 +319,32 @@ public:
     MemoryMode GetMemoryMode() const {
         return memory_mode;
     }
-    
+
     const New3dsHwCapabilities& GetNew3dsHwCapabilities() const {
         return n3ds_hw_caps;
     }
-    
+
+    std::recursive_mutex& GetHLELock() {
+        return hle_lock;
+    }
+
     /// Map of named ports managed by the kernel, which can be retrieved using the ConnectToPort
     std::unordered_map<std::string, std::shared_ptr<ClientPort>> named_ports;
 
-    ARM_Interface* current_cpu = nullptr;
+    Core::ARM_Interface* current_cpu = nullptr;
 
     Memory::MemorySystem& memory;
 
     Core::Timing& timing;
+
+    /// Sleep main thread of the first ever launched non-sysmodule process.
+    void SetAppMainThreadExtendedSleep(bool requires_sleep) {
+        main_thread_extended_sleep = requires_sleep;
+    }
+
+    bool GetAppMainThreadExtendedSleep() const {
+        return main_thread_extended_sleep;
+    }
 
 private:
     void MemoryInit(MemoryMode memory_mode, New3dsMemoryMode n3ds_mode, u64 override_init_time);
@@ -361,13 +381,32 @@ private:
     std::unique_ptr<IPCDebugger::Recorder> ipc_recorder;
 
     u32 next_thread_id;
-    
+
     MemoryMode memory_mode;
     New3dsHwCapabilities n3ds_hw_caps;
 
+    /*
+     * Synchronizes access to the internal HLE kernel structures, it is acquired when a guest
+     * application thread performs a syscall. It should be acquired by any host threads that read or
+     * modify the HLE kernel state. Note: Any operation that directly or indirectly reads from or
+     * writes to the emulated memory is not protected by this mutex, and should be avoided in any
+     * threads other than the CPU thread.
+     */
+    std::recursive_mutex hle_lock;
+
+    /*
+     * Flags non system module main threads to wait a bit before running. On real hardware,
+     * system modules have plenty of time to load before the game is loaded, but on cytrus they
+     * start at the same time as the game. The artificial wait gives system modules some time
+     * to load and setup themselves before the game starts.
+     */
+    bool main_thread_extended_sleep = false;
+
     friend class boost::serialization::access;
     template <class Archive>
-    void serialize(Archive& ar, const unsigned int file_version);
+    void serialize(Archive& ar, const unsigned int);
 };
 
 } // namespace Kernel
+
+BOOST_CLASS_EXPORT_KEY(Kernel::New3dsHwCapabilities)

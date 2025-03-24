@@ -5,7 +5,7 @@
 #pragma once
 
 #include "common/arch.h"
-#if CITRA_ARCH(arm64)
+#if CYTRUS_ARCH(arm64)
 
 #include <bitset>
 #include <initializer_list>
@@ -200,4 +200,4 @@ inline void ABI_PopRegisters(oaknut::BasicCodeGenerator<Policy>& code, std::bits
 
 } // namespace Common::A64
 
-#endif // CITRA_ARCH(arm64)
+#endif // CYTRUS_ARCH(arm64)

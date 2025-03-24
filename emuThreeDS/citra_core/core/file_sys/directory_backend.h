@@ -8,9 +8,6 @@
 #include <cstddef>
 #include "common/common_types.h"
 
-////////////////////////////////////////////////////////////////////////////////////////////////////
-// FileSys namespace
-
 namespace FileSys {
 
 // Structure of a directory entry, from http://3dbrew.org/wiki/FSDir:Read#Entry_format
@@ -52,7 +49,11 @@ public:
      * Close the directory
      * @return true if the directory closed correctly
      */
-    virtual bool Close() const = 0;
+    virtual bool Close() = 0;
+
+    virtual bool IsSlow() {
+        return false;
+    }
 
 private:
     template <class Archive>

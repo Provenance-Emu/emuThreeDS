@@ -13,15 +13,15 @@
 #include <fmt/format.h>
 #include "common/file_util.h"
 #include "common/settings.h"
-#include "video_core/gpu.h"
+#include "core/core_timing.h"
 #include "core/perf_stats.h"
+#include "video_core/gpu.h"
 
 using namespace std::chrono_literals;
 using DoubleSecs = std::chrono::duration<double, std::chrono::seconds::period>;
 using std::chrono::duration_cast;
 using std::chrono::microseconds;
 
-constexpr double FRAME_LENGTH = 1.0 / SCREEN_REFRESH_RATE;
 // Purposefully ignore the first five frames, as there's a significant amount of overhead in
 // booting that we shouldn't account for
 constexpr std::size_t IgnoreFrames = 5;
@@ -48,13 +48,13 @@ PerfStats::~PerfStats() {
 }
 
 void PerfStats::BeginSystemFrame() {
-    std::lock_guard lock{object_mutex};
+    std::scoped_lock lock{object_mutex};
 
     frame_begin = Clock::now();
 }
 
 void PerfStats::EndSystemFrame() {
-    std::lock_guard lock{object_mutex};
+    std::scoped_lock lock{object_mutex};
 
     auto frame_end = Clock::now();
     const auto frame_time = frame_end - frame_begin;
@@ -70,13 +70,13 @@ void PerfStats::EndSystemFrame() {
 }
 
 void PerfStats::EndGameFrame() {
-    std::lock_guard lock{object_mutex};
+    std::scoped_lock lock{object_mutex};
 
     game_frames += 1;
 }
 
 double PerfStats::GetMeanFrametime() const {
-    std::lock_guard lock{object_mutex};
+    std::scoped_lock lock{object_mutex};
 
     if (current_index <= IgnoreFrames) {
         return 0;
@@ -123,10 +123,21 @@ PerfStats::Results PerfStats::GetLastStats() {
 }
 
 double PerfStats::GetLastFrameTimeScale() const {
-    std::lock_guard lock{object_mutex};
+    std::scoped_lock lock{object_mutex};
 
     constexpr double FRAME_LENGTH = 1.0 / SCREEN_REFRESH_RATE;
     return duration_cast<DoubleSecs>(previous_frame_length).count() / FRAME_LENGTH;
+}
+
+double PerfStats::GetStableFrameTimeScale() const {
+    std::scoped_lock lock{object_mutex};
+    
+    constexpr double FRAME_LENGTH_MILLIS = (1.0 / SCREEN_REFRESH_RATE) * 1000;
+    const size_t num_frames = std::min<size_t>(50UL, current_index + 1);
+    const double sum = std::accumulate(perf_history.begin() + current_index - num_frames,
+                                       perf_history.begin() + current_index, 0.0);
+    const double stable_frame_length = sum / num_frames;
+    return stable_frame_length / FRAME_LENGTH_MILLIS;
 }
 
 void FrameLimiter::WaitOnce() {
@@ -135,16 +146,6 @@ void FrameLimiter::WaitOnce() {
         frame_advance_event.Wait();
         frame_advance_event.Reset();
     }
-}
-
-double PerfStats::GetStableFrameTimeScale() const {
-    std::scoped_lock lock{object_mutex};
-
-    const double stable_previous_frame_length =
-        (duration_cast<DoubleSecs>(previous_frame_length).count() +
-         duration_cast<DoubleSecs>(previous_previous_frame_length).count()) /
-        2;
-    return stable_previous_frame_length / FRAME_LENGTH;
 }
 
 void FrameLimiter::DoFrameLimiting(microseconds current_system_time_us) {
@@ -156,11 +157,12 @@ void FrameLimiter::DoFrameLimiting(microseconds current_system_time_us) {
     }
 
     auto now = Clock::now();
-    double sleep_scale = Settings::GetFrameLimit() / 100.0;
+    double sleep_scale = Settings::values.frame_limit.GetValue() / 100.0;
 
-    if (Settings::GetFrameLimit() == 0) {
+    if (Settings::values.frame_limit.GetValue() == 0) {
         return;
     }
+
     // Max lag caused by slow frames. Shouldn't be more than the length of a frame at the current
     // speed percent or it will clamp too much and prevent this from properly limiting to that
     // percent. High values means it'll take longer after a slow frame to recover and start limiting

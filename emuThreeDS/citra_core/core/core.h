@@ -15,14 +15,8 @@
 #include "core/cheats/cheats.h"
 #include "core/hle/service/apt/applet_manager.h"
 #include "core/hle/service/plgldr/plgldr.h"
-#include "core/memory.h"
 #include "core/movie.h"
 #include "core/perf_stats.h"
-#include "core/frontend/applets/mii_selector.h"
-#include "core/frontend/applets/swkbd.h"
-#include "core/loader/loader.h"
-
-class ARM_Interface;
 
 namespace Frontend {
 class EmuWindow;
@@ -77,62 +71,10 @@ class AppLoader;
 
 namespace Core {
 
-//class ARM_Interface;
+class ARM_Interface;
 class TelemetrySession;
 class ExclusiveMonitor;
 class Timing;
-
-/**
- * Class to handle automatic CPU clock percentage adjustment based on GPU performance.
- * This adjusts the CPU clock to optimize performance by monitoring the FPS and
- * adjusting the CPU clock percentage accordingly.
- */
-class AutoCpuClockAdjuster {
-public:
-    explicit AutoCpuClockAdjuster(System& system);
-    ~AutoCpuClockAdjuster() = default;
-
-    /**
-     * Updates the CPU clock percentage based on current performance metrics.
-     * Should be called periodically (e.g., once per second).
-     */
-    void Update();
-
-    /**
-     * Enables or disables the auto adjustment feature.
-     * @param enabled Whether auto adjustment should be enabled
-     */
-    void SetEnabled(bool enabled) { enabled_ = enabled; }
-
-    /**
-     * Checks if auto adjustment is currently enabled.
-     * @return True if auto adjustment is enabled, false otherwise
-     */
-    bool IsEnabled() const { return enabled_; }
-    
-    /**
-     * Gets the current CPU clock percentage being used.
-     * @return The current CPU clock percentage
-     */
-    s32 GetCurrentPercentage() const { return current_percentage_; }
-
-    static constexpr s32 auto_mode_max_percentage_ = 100; // Maximum for auto mode
-
-private:
-    System& system_;
-    bool enabled_ = false;
-    s32 current_percentage_ = 100;
-    double last_fps_ = 0.0;
-    std::chrono::steady_clock::time_point last_adjustment_time_;
-    
-    // Adjustment parameters
-    static constexpr s32 min_percentage_ = 5;
-    static constexpr s32 max_percentage_ = 400; // Maximum allowed by settings
-    static constexpr s32 adjustment_step_ = 5;
-    static constexpr std::chrono::milliseconds adjustment_interval_{500}; // Adjust every 500ms
-    static constexpr double target_fps_min_ = 50.0; // Target minimum FPS
-    static constexpr double target_fps_max_ = 65.0; // Target maximum FPS
-};
 
 class System {
 public:
@@ -362,7 +304,6 @@ public:
     }
 
     std::unique_ptr<PerfStats> perf_stats;
-    std::unique_ptr<AutoCpuClockAdjuster> auto_cpu_clock;
     FrameLimiter frame_limiter;
 
     void SetStatus(ResultStatus new_status, const char* details = nullptr) {

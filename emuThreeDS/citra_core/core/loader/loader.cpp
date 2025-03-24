@@ -6,12 +6,12 @@
 #include <string>
 #include "common/logging/log.h"
 #include "common/string_util.h"
+#include "core/core.h"
 #include "core/hle/kernel/process.h"
 #include "core/loader/3dsx.h"
+#include "core/loader/artic.h"
 #include "core/loader/elf.h"
 #include "core/loader/ncch.h"
-
-////////////////////////////////////////////////////////////////////////////////////////////////////
 
 namespace Loader {
 
@@ -75,6 +75,8 @@ const char* GetFileTypeString(FileType type) {
         return "ELF";
     case FileType::THREEDSX:
         return "3DSX";
+    case FileType::ARTIC:
+        return "ARTIC";
     case FileType::Error:
     case FileType::Unknown:
         break;
@@ -91,23 +93,45 @@ const char* GetFileTypeString(FileType type) {
  * @param filepath the file full path (with name)
  * @return std::unique_ptr<AppLoader> a pointer to a loader object;  nullptr for unsupported type
  */
-static std::unique_ptr<AppLoader> GetFileLoader(FileUtil::IOFile&& file, FileType type,
-                                                const std::string& filename,
+static std::unique_ptr<AppLoader> GetFileLoader(Core::System& system, FileUtil::IOFile&& file,
+                                                FileType type, const std::string& filename,
                                                 const std::string& filepath) {
     switch (type) {
 
     // 3DSX file format.
     case FileType::THREEDSX:
-        return std::make_unique<AppLoader_THREEDSX>(std::move(file), filename, filepath);
+        return std::make_unique<AppLoader_THREEDSX>(system, std::move(file), filename, filepath);
 
     // Standard ELF file format.
     case FileType::ELF:
-        return std::make_unique<AppLoader_ELF>(std::move(file), filename);
+        return std::make_unique<AppLoader_ELF>(system, std::move(file), filename);
 
     // NCCH/NCSD container formats.
     case FileType::CXI:
     case FileType::CCI:
-        return std::make_unique<AppLoader_NCCH>(std::move(file), filepath);
+        return std::make_unique<AppLoader_NCCH>(system, std::move(file), filepath);
+
+    case FileType::ARTIC: {
+        auto strToUInt = [](const std::string& str) -> int {
+            char* pEnd = NULL;
+            unsigned long ul = ::strtoul(str.c_str(), &pEnd, 10);
+            if (*pEnd)
+                return -1;
+            return static_cast<int>(ul);
+        };
+
+        u16 port = 5543;
+        std::string server_addr = filename;
+        auto pos = server_addr.find(":");
+        if (pos != server_addr.npos) {
+            int newVal = strToUInt(server_addr.substr(pos + 1));
+            if (newVal >= 0 && newVal <= 0xFFFF) {
+                port = static_cast<u16>(newVal);
+                server_addr = server_addr.substr(0, pos);
+            }
+        }
+        return std::make_unique<Apploader_Artic>(system, server_addr, port);
+    }
 
     default:
         return nullptr;
@@ -115,6 +139,11 @@ static std::unique_ptr<AppLoader> GetFileLoader(FileUtil::IOFile&& file, FileTyp
 }
 
 std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
+    if (filename.starts_with("articbase://")) {
+        return GetFileLoader(Core::System::GetInstance(), FileUtil::IOFile(), FileType::ARTIC,
+                             filename.substr(12), "");
+    }
+
     FileUtil::IOFile file(filename, "rb");
     if (!file.IsOpen()) {
         LOG_ERROR(Loader, "Failed to load file {}", filename);
@@ -135,7 +164,8 @@ std::unique_ptr<AppLoader> GetLoader(const std::string& filename) {
 
     LOG_DEBUG(Loader, "Loading file {} as {}...", filename, GetFileTypeString(type));
 
-    return GetFileLoader(std::move(file), type, filename_filename, filename);
+    auto& system = Core::System::GetInstance();
+    return GetFileLoader(system, std::move(file), type, filename_filename, filename);
 }
 
 } // namespace Loader

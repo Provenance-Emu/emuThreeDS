@@ -59,7 +59,7 @@ private:
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
         ar& boost::serialization::base_object<BackingMem>(*this);
-        ar& data;
+        ar & data;
     }
     friend class boost::serialization::access;
 };
@@ -110,8 +110,10 @@ public:
         return std::span{cptr, std::min(size, csize)};
     }
 
-    std::span<const u8> GetReadBytes(std::size_t size) const {
-        return std::span{cptr, std::min(size, csize)};
+    template <typename T>
+    std::span<const T> GetReadBytes(std::size_t size) const {
+        const auto* cptr_t = reinterpret_cast<T*>(cptr);
+        return std::span{cptr_t, std::min(size, csize) / sizeof(T)};
     }
 
     std::size_t GetSize() const {
@@ -149,8 +151,8 @@ private:
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& backing_mem;
-        ar& offset;
+        ar & backing_mem;
+        ar & offset;
         Init();
     }
     friend class boost::serialization::access;

@@ -7,6 +7,7 @@
 #include <cryptopp/base64.h>
 #include <cryptopp/hmac.h>
 #include <cryptopp/sha.h>
+#include <fmt/format.h>
 #include "common/archives.h"
 #include "common/common_paths.h"
 #include "common/file_util.h"
@@ -25,7 +26,6 @@
 #include "core/hle/service/cecd/cecd_s.h"
 #include "core/hle/service/cecd/cecd_u.h"
 #include "core/hle/service/cfg/cfg.h"
-#include "fmt/format.h"
 
 SERVICE_CONSTRUCT_IMPL(Service::CECD::Module)
 SERIALIZE_EXPORT_IMPL(Service::CECD::Module)
@@ -35,9 +35,10 @@ namespace Service::CECD {
 
 template <class Archive>
 void Module::serialize(Archive& ar, const unsigned int) {
-    ar& cecd_system_save_data_archive;
-    ar& cecinfo_event;
-    ar& change_state_event;
+    ar & cecd_system_save_data_archive;
+    ar & cecinfo_event;
+    ar & cecinfosys_event;
+    ar & change_state_event;
 }
 SERIALIZE_IMPL(Module)
 
@@ -75,11 +76,11 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
         if (dir_result.Failed()) {
             if (open_mode.create) {
                 cecd->cecd_system_save_data_archive->CreateDirectory(path);
-                rb.Push(RESULT_SUCCESS);
+                rb.Push(ResultSuccess);
             } else {
                 LOG_DEBUG(Service_CECD, "Failed to open directory: {}", path.AsString());
-                rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC,
-                                   ErrorSummary::NotFound, ErrorLevel::Status));
+                rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                               ErrorLevel::Status));
             }
             rb.Push<u32>(0); // Zero entries
         } else {
@@ -92,7 +93,7 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
 
             LOG_DEBUG(Service_CECD, "Number of entries found: {}", entry_count);
 
-            rb.Push(RESULT_SUCCESS);
+            rb.Push(ResultSuccess);
             rb.Push<u32>(entry_count); // Entry count
             directory->Close();
         }
@@ -102,12 +103,12 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
         auto file_result = cecd->cecd_system_save_data_archive->OpenFile(path, mode);
         if (file_result.Failed()) {
             LOG_DEBUG(Service_CECD, "Failed to open file: {}", path.AsString());
-            rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                               ErrorLevel::Status));
+            rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                           ErrorLevel::Status));
             rb.Push<u32>(0); // No file size
         } else {
             session_data->file = std::move(file_result).Unwrap();
-            rb.Push(RESULT_SUCCESS);
+            rb.Push(ResultSuccess);
             rb.Push<u32>(static_cast<u32>(session_data->file->GetSize())); // Return file size
         }
 
@@ -115,7 +116,7 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
             std::vector<u8> program_id(8);
             u64_le le_program_id = cecd->system.Kernel().GetCurrentProcess()->codeset->program_id;
             std::memcpy(program_id.data(), &le_program_id, sizeof(u64));
-            session_data->file->Write(0, sizeof(u64), true, program_id.data());
+            session_data->file->Write(0, sizeof(u64), true, false, program_id.data());
             session_data->file->Close();
         }
     }
@@ -124,8 +125,9 @@ void Module::Interface::Open(Kernel::HLERequestContext& ctx) {
     LOG_DEBUG(Service_CECD,
               "called, ncch_program_id={:#010x}, path_type={:#04x}, path={}, "
               "open_mode: raw={:#x}, unknown={}, read={}, write={}, create={}, check={}",
-              ncch_program_id, path_type, path.AsString(), open_mode.raw, open_mode.unknown,
-              open_mode.read, open_mode.write, open_mode.create, open_mode.check);
+              ncch_program_id, path_type, path.AsString(), open_mode.raw, open_mode.unknown.Value(),
+              open_mode.read.Value(), open_mode.write.Value(), open_mode.create.Value(),
+              open_mode.check.Value());
 }
 
 void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
@@ -139,9 +141,9 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
               "path={}, open_mode: raw={:#x}, unknown={}, read={}, write={}, create={}, check={}",
               session_data->ncch_program_id, session_data->data_path_type,
               session_data->path.AsString(), session_data->open_mode.raw,
-              session_data->open_mode.unknown, session_data->open_mode.read,
-              session_data->open_mode.write, session_data->open_mode.create,
-              session_data->open_mode.check);
+              session_data->open_mode.unknown.Value(), session_data->open_mode.read.Value(),
+              session_data->open_mode.write.Value(), session_data->open_mode.create.Value(),
+              session_data->open_mode.check.Value());
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 2);
     switch (session_data->data_path_type) {
@@ -149,8 +151,8 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
     case CecDataPathType::MboxDir:
     case CecDataPathType::InboxDir:
     case CecDataPathType::OutboxDir:
-        rb.Push(ResultCode(ErrorDescription::NotAuthorized, ErrorModule::CEC,
-                           ErrorSummary::NotFound, ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NotAuthorized, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         rb.Push<u32>(0); // No bytes read
         break;
     default: // If not directory, then it is a file
@@ -161,7 +163,7 @@ void Module::Interface::Read(Kernel::HLERequestContext& ctx) {
         write_buffer.Write(buffer.data(), 0, write_buffer_size);
         session_data->file->Close();
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
         rb.Push<u32>(bytes_read);
     }
     rb.PushMappedBuffer(write_buffer);
@@ -223,11 +225,11 @@ void Module::Interface::ReadMessage(Kernel::HLERequestContext& ctx) {
                   msg_header.sender_id, msg_header.sender_id2, msg_header.send_count,
                   msg_header.forward_count, msg_header.user_data);
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
         rb.Push<u32>(bytes_read);
     } else {
-        rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                           ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         rb.Push<u32>(0); // zero bytes read
     }
     rb.PushMappedBuffer(message_id_buffer);
@@ -315,11 +317,11 @@ void Module::Interface::ReadMessageWithHMAC(Kernel::HLERequestContext& ctx) {
         else
             LOG_DEBUG(Service_CECD, "Verification failed");
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
         rb.Push<u32>(bytes_read);
     } else {
-        rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                           ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         rb.Push<u32>(0); // zero bytes read
     }
 
@@ -344,9 +346,9 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
               "path={}, open_mode: raw={:#x}, unknown={}, read={}, write={}, create={}, check={}",
               session_data->ncch_program_id, session_data->data_path_type,
               session_data->path.AsString(), session_data->open_mode.raw,
-              session_data->open_mode.unknown, session_data->open_mode.read,
-              session_data->open_mode.write, session_data->open_mode.create,
-              session_data->open_mode.check);
+              session_data->open_mode.unknown.Value(), session_data->open_mode.read.Value(),
+              session_data->open_mode.write.Value(), session_data->open_mode.create.Value(),
+              session_data->open_mode.check.Value());
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
     switch (session_data->data_path_type) {
@@ -354,8 +356,8 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
     case CecDataPathType::MboxDir:
     case CecDataPathType::InboxDir:
     case CecDataPathType::OutboxDir:
-        rb.Push(ResultCode(ErrorDescription::NotAuthorized, ErrorModule::CEC,
-                           ErrorSummary::NotFound, ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NotAuthorized, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         break;
     default: // If not directory, then it is a file
         std::vector<u8> buffer(read_buffer_size);
@@ -371,10 +373,10 @@ void Module::Interface::Write(Kernel::HLERequestContext& ctx) {
         }
 
         [[maybe_unused]] const u32 bytes_written = static_cast<u32>(
-            session_data->file->Write(0, buffer.size(), true, buffer.data()).Unwrap());
+            session_data->file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
         session_data->file->Close();
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     }
     rb.PushMappedBuffer(read_buffer);
 
@@ -433,13 +435,13 @@ void Module::Interface::WriteMessage(Kernel::HLERequestContext& ctx) {
                   msg_header.forward_count, msg_header.user_data);
 
         [[maybe_unused]] const u32 bytes_written =
-            static_cast<u32>(message->Write(0, buffer_size, true, buffer.data()).Unwrap());
+            static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     } else {
-        rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                           ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
     }
 
     rb.PushMappedBuffer(read_buffer);
@@ -520,13 +522,13 @@ void Module::Interface::WriteMessageWithHMAC(Kernel::HLERequestContext& ctx) {
         std::memcpy(buffer.data() + hmac_offset, hmac_digest.data(), hmac_size);
 
         [[maybe_unused]] const u32 bytes_written =
-            static_cast<u32>(message->Write(0, buffer_size, true, buffer.data()).Unwrap());
+            static_cast<u32>(message->Write(0, buffer_size, true, false, buffer.data()).Unwrap());
         message->Close();
 
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     } else {
-        rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                           ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
     }
 
     rb.PushMappedBuffer(read_buffer);
@@ -605,13 +607,13 @@ void Module::Interface::SetData(Kernel::HLERequestContext& ctx) {
 
             cecd->CheckAndUpdateFile(CecDataPathType::OutboxIndex, ncch_program_id, buffer);
 
-            file->Write(0, buffer.size(), true, buffer.data());
+            file->Write(0, buffer.size(), true, false, buffer.data());
             file->Close();
         }
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushMappedBuffer(read_buffer);
 
     LOG_DEBUG(Service_CECD, "called, ncch_program_id={:#010x}, buffer_size={:#x}, option={:#x}",
@@ -620,9 +622,9 @@ void Module::Interface::SetData(Kernel::HLERequestContext& ctx) {
 
 void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
-    const u32 dest_buffer_size = rp.Pop<u32>();
-    const CecSystemInfoType info_type = rp.PopEnum<CecSystemInfoType>();
-    const u32 param_buffer_size = rp.Pop<u32>();
+    const auto dest_buffer_size = rp.Pop<u32>();
+    const auto info_type = rp.PopEnum<CecSystemInfoType>();
+    const auto param_buffer_size = rp.Pop<u32>();
     auto& param_buffer = rp.PopMappedBuffer();
     auto& dest_buffer = rp.PopMappedBuffer();
 
@@ -631,24 +633,25 @@ void Module::Interface::ReadData(Kernel::HLERequestContext& ctx) {
     std::vector<u8> buffer;
     switch (info_type) {
     case CecSystemInfoType::EulaVersion: {
-        auto cfg = Service::CFG::GetModule(cecd->system);
-        Service::CFG::EULAVersion version = cfg->GetEULAVersion();
-        dest_buffer.Write(&version, 0, sizeof(version));
+        const auto cfg = Service::CFG::GetModule(cecd->system);
+        const auto version = cfg->GetEULAVersion();
+        buffer = {version.minor, version.major};
         break;
     }
     case CecSystemInfoType::Eula:
-        buffer = {0x01}; // Eula agreed
-        dest_buffer.Write(buffer.data(), 0, buffer.size());
+        buffer = {true}; // Eula agreed
         break;
     case CecSystemInfoType::ParentControl:
-        buffer = {0x00}; // No parent control
-        dest_buffer.Write(buffer.data(), 0, buffer.size());
+        buffer = {false}; // No parent control
         break;
     default:
         LOG_ERROR(Service_CECD, "Unknown system info type={:#x}", info_type);
+        buffer = {};
     }
+    dest_buffer.Write(buffer.data(), 0,
+                      std::min(static_cast<std::size_t>(dest_buffer_size), buffer.size()));
 
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushMappedBuffer(param_buffer);
     rb.PushMappedBuffer(dest_buffer);
 
@@ -662,7 +665,7 @@ void Module::Interface::Start(Kernel::HLERequestContext& ctx) {
     const CecCommand command = rp.PopEnum<CecCommand>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_WARNING(Service_CECD, "(STUBBED) called, command={}", cecd->GetCecCommandAsString(command));
 }
@@ -672,30 +675,30 @@ void Module::Interface::Stop(Kernel::HLERequestContext& ctx) {
     const CecCommand command = rp.PopEnum<CecCommand>();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_WARNING(Service_CECD, "(STUBBED) called, command={}", cecd->GetCecCommandAsString(command));
 }
 
 void Module::Interface::GetCecInfoBuffer(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
-    const u32 buffer_size = rp.Pop<u32>();
     const u32 possible_info_type = rp.Pop<u32>();
+    const u32 buffer_size = rp.Pop<u32>();
     auto& buffer = rp.PopMappedBuffer();
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushMappedBuffer(buffer);
 
-    LOG_DEBUG(Service_CECD, "called, buffer_size={}, possible_info_type={}", buffer_size,
-              possible_info_type);
+    LOG_DEBUG(Service_CECD, "called, possible_info_type={}, buffer_size={}", possible_info_type,
+              buffer_size);
 }
 
 void Module::Interface::GetCecdState(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(2, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushEnum(CecdState::NdmStatusIdle);
 
     LOG_WARNING(Service_CECD, "(STUBBED) called");
@@ -705,7 +708,7 @@ void Module::Interface::GetCecInfoEventHandle(Kernel::HLERequestContext& ctx) {
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushCopyObjects(cecd->cecinfo_event);
 
     LOG_WARNING(Service_CECD, "(STUBBED) called");
@@ -715,7 +718,7 @@ void Module::Interface::GetChangeStateEventHandle(Kernel::HLERequestContext& ctx
     IPC::RequestParser rp(ctx);
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushCopyObjects(cecd->change_state_event);
 
     LOG_WARNING(Service_CECD, "(STUBBED) called");
@@ -742,8 +745,8 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
     case CecDataPathType::MboxDir:
     case CecDataPathType::InboxDir:
     case CecDataPathType::OutboxDir:
-        rb.Push(ResultCode(ErrorDescription::NotAuthorized, ErrorModule::CEC,
-                           ErrorSummary::NotFound, ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NotAuthorized, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         break;
     default: // If not directory, then it is a file
         auto file_result = cecd->cecd_system_save_data_archive->OpenFile(path, mode);
@@ -761,14 +764,14 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
                 cecd->CheckAndUpdateFile(path_type, ncch_program_id, buffer);
             }
 
-            [[maybe_unused]] const u32 bytes_written =
-                static_cast<u32>(file->Write(0, buffer.size(), true, buffer.data()).Unwrap());
+            [[maybe_unused]] const u32 bytes_written = static_cast<u32>(
+                file->Write(0, buffer.size(), true, false, buffer.data()).Unwrap());
             file->Close();
 
-            rb.Push(RESULT_SUCCESS);
+            rb.Push(ResultSuccess);
         } else {
-            rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                               ErrorLevel::Status));
+            rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                           ErrorLevel::Status));
         }
     }
     rb.PushMappedBuffer(read_buffer);
@@ -777,8 +780,8 @@ void Module::Interface::OpenAndWrite(Kernel::HLERequestContext& ctx) {
               "called, ncch_program_id={:#010x}, path_type={:#04x}, path={}, buffer_size={:#x} "
               "open_mode: raw={:#x}, unknown={}, read={}, write={}, create={}, check={}",
               ncch_program_id, path_type, path.AsString(), buffer_size, open_mode.raw,
-              open_mode.unknown, open_mode.read, open_mode.write, open_mode.create,
-              open_mode.check);
+              open_mode.unknown.Value(), open_mode.read.Value(), open_mode.write.Value(),
+              open_mode.create.Value(), open_mode.check.Value());
 }
 
 void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
@@ -801,8 +804,8 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
     case CecDataPathType::MboxDir:
     case CecDataPathType::InboxDir:
     case CecDataPathType::OutboxDir:
-        rb.Push(ResultCode(ErrorDescription::NotAuthorized, ErrorModule::CEC,
-                           ErrorSummary::NotFound, ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NotAuthorized, ErrorModule::CEC, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
         rb.Push<u32>(0); // No entries read
         break;
     default: // If not directory, then it is a file
@@ -816,11 +819,11 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
             write_buffer.Write(buffer.data(), 0, buffer_size);
             file->Close();
 
-            rb.Push(RESULT_SUCCESS);
+            rb.Push(ResultSuccess);
             rb.Push<u32>(bytes_read);
         } else {
-            rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
-                               ErrorLevel::Status));
+            rb.Push(Result(ErrorDescription::NoData, ErrorModule::CEC, ErrorSummary::NotFound,
+                           ErrorLevel::Status));
             rb.Push<u32>(0); // No bytes read
         }
     }
@@ -830,11 +833,22 @@ void Module::Interface::OpenAndRead(Kernel::HLERequestContext& ctx) {
               "called, ncch_program_id={:#010x}, path_type={:#04x}, path={}, buffer_size={:#x} "
               "open_mode: raw={:#x}, unknown={}, read={}, write={}, create={}, check={}",
               ncch_program_id, path_type, path.AsString(), buffer_size, open_mode.raw,
-              open_mode.unknown, open_mode.read, open_mode.write, open_mode.create,
-              open_mode.check);
+              open_mode.unknown.Value(), open_mode.read.Value(), open_mode.write.Value(),
+              open_mode.create.Value(), open_mode.check.Value());
 }
 
-std::string Module::EncodeBase64(const std::vector<u8>& in) const {
+void Module::Interface::GetCecInfoEventHandleSys(Kernel::HLERequestContext& ctx) {
+    IPC::RequestParser rp(ctx);
+    rp.PopPID();
+
+    IPC::RequestBuilder rb = rp.MakeBuilder(1, 2);
+    rb.Push(ResultSuccess);
+    rb.PushCopyObjects(cecd->cecinfosys_event);
+
+    LOG_WARNING(Service_CECD, "(STUBBED) called");
+}
+
+std::string Module::EncodeBase64(std::span<const u8> in) const {
     using namespace CryptoPP;
     using Name::EncodingLookupArray;
     using Name::InsertLineBreaks;
@@ -855,7 +869,7 @@ std::string Module::EncodeBase64(const std::vector<u8>& in) const {
 }
 
 std::string Module::GetCecDataPathTypeAsString(const CecDataPathType type, const u32 program_id,
-                                               const std::vector<u8>& msg_id) const {
+                                               std::span<const u8> msg_id) const {
     switch (type) {
     case CecDataPathType::MboxList:
         return "/CEC/MBoxList____";
@@ -1239,7 +1253,7 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
                 const u32 message_size = static_cast<u32>(message->GetSize());
                 std::vector<u8> buffer(message_size);
 
-                message->Read(0, message_size, buffer.data()).Unwrap();
+                void(message->Read(0, message_size, buffer.data()).Unwrap());
                 message->Close();
 
                 std::memcpy(&message_headers[outbox_info_header.message_num++], buffer.data(),
@@ -1329,7 +1343,7 @@ void Module::CheckAndUpdateFile(const CecDataPathType path_type, const u32 ncch_
                 const u32 message_size = static_cast<u32>(message->GetSize());
                 std::vector<u8> buffer(message_size);
 
-                message->Read(0, message_size, buffer.data()).Unwrap();
+                void(message->Read(0, message_size, buffer.data()).Unwrap());
                 message->Close();
 
                 // Message id is at offset 0x20, and is 8 bytes
@@ -1377,6 +1391,8 @@ Module::Interface::Interface(std::shared_ptr<Module> cecd, const char* name, u32
 Module::Module(Core::System& system) : system(system) {
     using namespace Kernel;
     cecinfo_event = system.Kernel().CreateEvent(Kernel::ResetType::OneShot, "CECD::cecinfo_event");
+    cecinfosys_event =
+        system.Kernel().CreateEvent(Kernel::ResetType::OneShot, "CECD::cecinfosys_event");
     change_state_event =
         system.Kernel().CreateEvent(Kernel::ResetType::OneShot, "CECD::change_state_event");
 
@@ -1388,12 +1404,12 @@ Module::Module(Core::System& system) : system(system) {
     auto archive_result = systemsavedata_factory.Open(archive_path, 0);
 
     // If the archive didn't exist, create the files inside
-    if (archive_result.Code() != FileSys::ERROR_NOT_FOUND) {
+    if (archive_result.Code() != FileSys::ResultNotFound) {
         ASSERT_MSG(archive_result.Succeeded(), "Could not open the CECD SystemSaveData archive!");
         cecd_system_save_data_archive = std::move(archive_result).Unwrap();
     } else {
         // Format the archive to create the directories
-        systemsavedata_factory.Format(archive_path, FileSys::ArchiveFormatInfo(), 0);
+        systemsavedata_factory.Format(archive_path, FileSys::ArchiveFormatInfo(), 0, 0, 0);
 
         // Open it again to get a valid archive now that the folder exists
         cecd_system_save_data_archive = systemsavedata_factory.Open(archive_path, 0).Unwrap();
@@ -1426,7 +1442,7 @@ Module::Module(Core::System& system) : system(system) {
         eventlog_buffer[1] = 0x41;
         eventlog_buffer[2] = 0x12;
 
-        eventlog->Write(0, eventlog_size, true, eventlog_buffer.data());
+        eventlog->Write(0, eventlog_size, true, false, eventlog_buffer.data());
         eventlog->Close();
 
         /// MBoxList____ resides within the root CEC/ directory.
@@ -1448,7 +1464,7 @@ Module::Module(Core::System& system) : system(system) {
         // mboxlist_buffer[2-3] are already zeroed
         mboxlist_buffer[4] = 0x01;
 
-        mboxlist->Write(0, mboxlist_size, true, mboxlist_buffer.data());
+        mboxlist->Write(0, mboxlist_size, true, false, mboxlist_buffer.data());
         mboxlist->Close();
     }
 }

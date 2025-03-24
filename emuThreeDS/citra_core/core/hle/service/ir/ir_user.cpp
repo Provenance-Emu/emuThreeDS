@@ -3,11 +3,13 @@
 // Refer to the license.txt file included.
 
 #include <memory>
+#include <vector>
 #include <boost/crc.hpp>
 #include <boost/serialization/base_object.hpp>
 #include <boost/serialization/shared_ptr.hpp>
 #include <boost/serialization/unique_ptr.hpp>
-#include "common/string_util.h"
+#include <fmt/format.h>
+#include "common/archives.h"
 #include "common/swap.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
@@ -24,12 +26,12 @@ namespace Service::IR {
 template <class Archive>
 void IR_USER::serialize(Archive& ar, const unsigned int) {
     ar& boost::serialization::base_object<Kernel::SessionRequestHandler>(*this);
-    ar& conn_status_event;
-    ar& send_event;
-    ar& receive_event;
-    ar& shared_memory;
-    ar& connected_device;
-    ar& receive_buffer;
+    ar & conn_status_event;
+    ar & send_event;
+    ar & receive_event;
+    ar & shared_memory;
+    ar & connected_device;
+    ar & receive_buffer;
     ar&* extra_hid.get();
 }
 
@@ -97,9 +99,10 @@ public:
      * @params packet The data of the packet to put.
      * @returns whether the operation is successful.
      */
-    bool Put(const std::vector<u8>& packet) {
-        if (info.packet_count == max_packet_count)
+    bool Put(std::span<const u8> packet) {
+        if (info.packet_count == max_packet_count) {
             return false;
+        }
 
         u32 write_offset;
 
@@ -161,10 +164,10 @@ private:
     private:
         template <class Archive>
         void serialize(Archive& ar, const unsigned int) {
-            ar& begin_index;
-            ar& end_index;
-            ar& packet_count;
-            ar& unknown;
+            ar & begin_index;
+            ar & end_index;
+            ar & packet_count;
+            ar & unknown;
         }
         friend class boost::serialization::access;
     };
@@ -181,12 +184,12 @@ private:
     }
 
     void SetPacketInfo(u32 index, const PacketInfo& packet_info) {
-        memcpy(GetPacketInfoPointer(index), &packet_info, sizeof(PacketInfo));
+        std::memcpy(GetPacketInfoPointer(index), &packet_info, sizeof(PacketInfo));
     }
 
     PacketInfo GetPacketInfo(u32 index) {
         PacketInfo packet_info;
-        memcpy(&packet_info, GetPacketInfoPointer(index), sizeof(PacketInfo));
+        std::memcpy(&packet_info, GetPacketInfoPointer(index), sizeof(PacketInfo));
         return packet_info;
     }
 
@@ -197,7 +200,7 @@ private:
 
     void UpdateBufferInfo() {
         if (info_offset) {
-            memcpy(shared_memory->GetPointer(info_offset), &info, sizeof(info));
+            std::memcpy(shared_memory->GetPointer(info_offset), &info, sizeof(info));
         }
     }
 
@@ -213,18 +216,18 @@ private:
 
     template <class Archive>
     void serialize(Archive& ar, const unsigned int) {
-        ar& info;
-        ar& shared_memory;
-        ar& info_offset;
-        ar& buffer_offset;
-        ar& max_packet_count;
-        ar& max_data_size;
+        ar & info;
+        ar & shared_memory;
+        ar & info_offset;
+        ar & buffer_offset;
+        ar & max_packet_count;
+        ar & max_data_size;
     }
     friend class boost::serialization::access;
 };
 
 /// Wraps the payload into packet and puts it to the receive buffer
-void IR_USER::PutToReceive(const std::vector<u8>& payload) {
+void IR_USER::PutToReceive(std::span<const u8> payload) {
     LOG_TRACE(Service_IR, "called, data={}", fmt::format("{:02x}", fmt::join(payload, " ")));
     std::size_t size = payload.size();
 
@@ -290,7 +293,7 @@ void IR_USER::InitializeIrNopShared(Kernel::HLERequestContext& ctx) {
     shared_memory_init.initialized = 1;
     std::memcpy(shared_memory->GetPointer(), &shared_memory_init, sizeof(SharedMemoryHeader));
 
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_INFO(Service_IR,
              "called, shared_buff_size={}, recv_buff_size={}, "
@@ -322,7 +325,7 @@ void IR_USER::RequireConnection(Kernel::HLERequestContext& ctx) {
     }
 
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_INFO(Service_IR, "called, device_id = {}", device_id);
 }
@@ -330,7 +333,7 @@ void IR_USER::RequireConnection(Kernel::HLERequestContext& ctx) {
 void IR_USER::GetReceiveEvent(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb(ctx, 0x0A, 1, 2);
 
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushCopyObjects(receive_event);
 
     LOG_INFO(Service_IR, "called");
@@ -339,7 +342,7 @@ void IR_USER::GetReceiveEvent(Kernel::HLERequestContext& ctx) {
 void IR_USER::GetSendEvent(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb(ctx, 0x0B, 1, 2);
 
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushCopyObjects(send_event);
 
     LOG_INFO(Service_IR, "called");
@@ -357,7 +360,7 @@ void IR_USER::Disconnect(Kernel::HLERequestContext& ctx) {
     shared_memory_ptr[offsetof(SharedMemoryHeader, connected)] = 0;
 
     IPC::RequestBuilder rb(ctx, 0x09, 1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_INFO(Service_IR, "called");
 }
@@ -365,7 +368,7 @@ void IR_USER::Disconnect(Kernel::HLERequestContext& ctx) {
 void IR_USER::GetConnectionStatusEvent(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb(ctx, 0x0C, 1, 2);
 
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
     rb.PushCopyObjects(conn_status_event);
 
     LOG_INFO(Service_IR, "called");
@@ -381,7 +384,7 @@ void IR_USER::FinalizeIrNop(Kernel::HLERequestContext& ctx) {
     receive_buffer = nullptr;
 
     IPC::RequestBuilder rb(ctx, 0x02, 1, 0);
-    rb.Push(RESULT_SUCCESS);
+    rb.Push(ResultSuccess);
 
     LOG_INFO(Service_IR, "called");
 }
@@ -396,11 +399,11 @@ void IR_USER::SendIrNop(Kernel::HLERequestContext& ctx) {
     if (connected_device) {
         extra_hid->OnReceive(buffer);
         send_event->Signal();
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     } else {
         LOG_ERROR(Service_IR, "not connected");
-        rb.Push(ResultCode(static_cast<ErrorDescription>(13), ErrorModule::IR,
-                           ErrorSummary::InvalidState, ErrorLevel::Status));
+        rb.Push(Result(static_cast<ErrorDescription>(13), ErrorModule::IR,
+                       ErrorSummary::InvalidState, ErrorLevel::Status));
     }
 
     LOG_TRACE(Service_IR, "called, data={}", fmt::format("{:02x}", fmt::join(buffer, " ")));
@@ -413,11 +416,11 @@ void IR_USER::ReleaseReceivedData(Kernel::HLERequestContext& ctx) {
     IPC::RequestBuilder rb = rp.MakeBuilder(1, 0);
 
     if (receive_buffer->Release(count)) {
-        rb.Push(RESULT_SUCCESS);
+        rb.Push(ResultSuccess);
     } else {
         LOG_ERROR(Service_IR, "failed to release {} packets", count);
-        rb.Push(ResultCode(ErrorDescription::NoData, ErrorModule::IR, ErrorSummary::NotFound,
-                           ErrorLevel::Status));
+        rb.Push(Result(ErrorDescription::NoData, ErrorModule::IR, ErrorSummary::NotFound,
+                       ErrorLevel::Status));
     }
 
     LOG_TRACE(Service_IR, "called, count={}", count);
@@ -426,32 +429,32 @@ void IR_USER::ReleaseReceivedData(Kernel::HLERequestContext& ctx) {
 IR_USER::IR_USER(Core::System& system) : ServiceFramework("ir:USER", 1) {
     const FunctionInfo functions[] = {
         // clang-format off
-        {IPC::MakeHeader(0x0001, 6, 2), nullptr, "InitializeIrNop"},
-        {IPC::MakeHeader(0x0002, 0, 0), &IR_USER::FinalizeIrNop, "FinalizeIrNop"},
-        {IPC::MakeHeader(0x0003, 0, 0), nullptr, "ClearReceiveBuffer"},
-        {IPC::MakeHeader(0x0004, 0, 0), nullptr, "ClearSendBuffer"},
-        {IPC::MakeHeader(0x0005, 3, 0), nullptr, "WaitConnection"},
-        {IPC::MakeHeader(0x0006, 1, 0), &IR_USER::RequireConnection, "RequireConnection"},
-        {IPC::MakeHeader(0x0007, 11, 0), nullptr, "AutoConnection"},
-        {IPC::MakeHeader(0x0008, 0, 0), nullptr, "AnyConnection"},
-        {IPC::MakeHeader(0x0009, 0, 0), &IR_USER::Disconnect, "Disconnect"},
-        {IPC::MakeHeader(0x000A, 0, 0), &IR_USER::GetReceiveEvent, "GetReceiveEvent"},
-        {IPC::MakeHeader(0x000B, 0, 0), &IR_USER::GetSendEvent, "GetSendEvent"},
-        {IPC::MakeHeader(0x000C, 0, 0), &IR_USER::GetConnectionStatusEvent, "GetConnectionStatusEvent"},
-        {IPC::MakeHeader(0x000D, 1, 2), &IR_USER::SendIrNop, "SendIrNop"},
-        {IPC::MakeHeader(0x000E, 1, 2), nullptr, "SendIrNopLarge"},
-        {IPC::MakeHeader(0x000F, 1, 0), nullptr, "ReceiveIrnop"},
-        {IPC::MakeHeader(0x0010, 1, 2), nullptr, "ReceiveIrnopLarge"},
-        {IPC::MakeHeader(0x0011, 1, 0), nullptr, "GetLatestReceiveErrorResult"},
-        {IPC::MakeHeader(0x0012, 1, 0), nullptr, "GetLatestSendErrorResult"},
-        {IPC::MakeHeader(0x0013, 0, 0), nullptr, "GetConnectionStatus"},
-        {IPC::MakeHeader(0x0014, 0, 0), nullptr, "GetTryingToConnectStatus"},
-        {IPC::MakeHeader(0x0015, 0, 0), nullptr, "GetReceiveSizeFreeAndUsed"},
-        {IPC::MakeHeader(0x0016, 0, 0), nullptr, "GetSendSizeFreeAndUsed"},
-        {IPC::MakeHeader(0x0017, 0, 0), nullptr, "GetConnectionRole"},
-        {IPC::MakeHeader(0x0018, 6, 2), &IR_USER::InitializeIrNopShared, "InitializeIrNopShared"},
-        {IPC::MakeHeader(0x0019, 1, 0), &IR_USER::ReleaseReceivedData, "ReleaseReceivedData"},
-        {IPC::MakeHeader(0x001A, 1, 0), nullptr, "SetOwnMachineId"},
+        {0x0001, nullptr, "InitializeIrNop"},
+        {0x0002, &IR_USER::FinalizeIrNop, "FinalizeIrNop"},
+        {0x0003, nullptr, "ClearReceiveBuffer"},
+        {0x0004, nullptr, "ClearSendBuffer"},
+        {0x0005, nullptr, "WaitConnection"},
+        {0x0006, &IR_USER::RequireConnection, "RequireConnection"},
+        {0x0007, nullptr, "AutoConnection"},
+        {0x0008, nullptr, "AnyConnection"},
+        {0x0009, &IR_USER::Disconnect, "Disconnect"},
+        {0x000A, &IR_USER::GetReceiveEvent, "GetReceiveEvent"},
+        {0x000B, &IR_USER::GetSendEvent, "GetSendEvent"},
+        {0x000C, &IR_USER::GetConnectionStatusEvent, "GetConnectionStatusEvent"},
+        {0x000D, &IR_USER::SendIrNop, "SendIrNop"},
+        {0x000E, nullptr, "SendIrNopLarge"},
+        {0x000F, nullptr, "ReceiveIrnop"},
+        {0x0010, nullptr, "ReceiveIrnopLarge"},
+        {0x0011, nullptr, "GetLatestReceiveErrorResult"},
+        {0x0012, nullptr, "GetLatestSendErrorResult"},
+        {0x0013, nullptr, "GetConnectionStatus"},
+        {0x0014, nullptr, "GetTryingToConnectStatus"},
+        {0x0015, nullptr, "GetReceiveSizeFreeAndUsed"},
+        {0x0016, nullptr, "GetSendSizeFreeAndUsed"},
+        {0x0017, nullptr, "GetConnectionRole"},
+        {0x0018, &IR_USER::InitializeIrNopShared, "InitializeIrNopShared"},
+        {0x0019, &IR_USER::ReleaseReceivedData, "ReleaseReceivedData"},
+        {0x001A, nullptr, "SetOwnMachineId"},
         // clang-format on
     };
     RegisterHandlers(functions);
@@ -463,8 +466,8 @@ IR_USER::IR_USER(Core::System& system) : ServiceFramework("ir:USER", 1) {
     send_event = system.Kernel().CreateEvent(ResetType::OneShot, "IR:SendEvent");
     receive_event = system.Kernel().CreateEvent(ResetType::OneShot, "IR:ReceiveEvent");
 
-    extra_hid = std::make_unique<ExtraHID>(
-        [this](const std::vector<u8>& data) { PutToReceive(data); }, system.CoreTiming());
+    extra_hid = std::make_unique<ExtraHID>([this](std::span<const u8> data) { PutToReceive(data); },
+                                           system.CoreTiming(), system.Movie());
 }
 
 IR_USER::~IR_USER() {
@@ -477,10 +480,16 @@ void IR_USER::ReloadInputDevices() {
     extra_hid->RequestInputDevicesReload();
 }
 
+void IR_USER::UseArticController(const std::shared_ptr<Service::HID::ArticBaseController>& ac) {
+    if (extra_hid.get()) {
+        extra_hid->UseArticController(ac);
+    }
+}
+
 IRDevice::IRDevice(SendFunc send_func_) : send_func(send_func_) {}
 IRDevice::~IRDevice() = default;
 
-void IRDevice::Send(const std::vector<u8>& data) {
+void IRDevice::Send(std::span<const u8> data) {
     send_func(data);
 }
 
