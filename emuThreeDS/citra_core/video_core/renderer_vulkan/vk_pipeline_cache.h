@@ -4,6 +4,8 @@
 
 #pragma once
 
+#define USE_SPRIV_SHADER_CACHE 1
+
 #include <compare>
 #include <unordered_map>
 #include <bitset>
@@ -129,7 +131,11 @@ private:
     std::unordered_map<PicaVSConfig, Shader*> programmable_vertex_map;
     std::unordered_map<std::string, Shader> programmable_vertex_cache;
     std::unordered_map<PicaFixedGSConfig, Shader> fixed_geometry_shaders;
-    std::unordered_map<PicaFSConfig, Shader> fragment_shaders;
+#if USE_SPRIV_SHADER_CACHE
+    std::unordered_map<Vulkan::PicaFSConfig, Shader> fragment_shaders;
+#else
+    std::unordered_map<Pica::Shader::FSConfig, Shader> fragment_shaders;
+#endif
     Shader trivial_vertex_shader;
 };
 
