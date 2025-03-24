@@ -2,7 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
-// Local Changes: Check for isReloaded/isInitialized state
+// Local Changes: Check for isReloaded Setting / add Controller Refresh to Reload
 
 #include <algorithm>
 #include <cmath>
@@ -165,6 +165,11 @@ void Module::LoadInputDevices() {
     }
 }
 void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
+    // Avoid a crash on booting
+    if (Settings::values.isReloading || Settings::values.skip_buttons) {
+        return;
+    }
+    
     SharedMem* mem = reinterpret_cast<SharedMem*>(shared_mem->GetPointer());
 
     if (is_device_reload_pending.exchange(false))
@@ -732,6 +737,35 @@ void Module::UseArticClient(const std::shared_ptr<Network::ArticBase::Client>& c
 
 void Module::ReloadInputDevices() {
     is_device_reload_pending.store(true);
+    
+    
+    using namespace Kernel;
+
+    // Create event handles
+    event_pad_or_touch_1 = system.Kernel().CreateEvent(ResetType::OneShot, "HID:EventPadOrTouch1");
+    event_pad_or_touch_2 = system.Kernel().CreateEvent(ResetType::OneShot, "HID:EventPadOrTouch2");
+    event_accelerometer = system.Kernel().CreateEvent(ResetType::OneShot, "HID:EventAccelerometer");
+    event_gyroscope = system.Kernel().CreateEvent(ResetType::OneShot, "HID:EventGyroscope");
+    event_debug_pad = system.Kernel().CreateEvent(ResetType::OneShot, "HID:EventDebugPad");
+
+    // Register update callbacks
+    Core::Timing& timing = system.CoreTiming();
+    pad_update_event = timing.RegisterEvent("HID::UpdatePadCallback",
+                                            [this](std::uintptr_t user_data, s64 cycles_late) {
+                                                UpdatePadCallback(user_data, cycles_late);
+                                            });
+    accelerometer_update_event = timing.RegisterEvent(
+        "HID::UpdateAccelerometerCallback", [this](std::uintptr_t user_data, s64 cycles_late) {
+            UpdateAccelerometerCallback(user_data, cycles_late);
+        });
+    gyroscope_update_event = timing.RegisterEvent(
+        "HID::UpdateGyroscopeCallback", [this](std::uintptr_t user_data, s64 cycles_late) {
+            UpdateGyroscopeCallback(user_data, cycles_late);
+        });
+
+    timing.ScheduleEvent(pad_update_ticks, pad_update_event);
+    timing.ScheduleEvent(accelerometer_update_ticks, accelerometer_update_event);
+    timing.ScheduleEvent(gyroscope_update_ticks, gyroscope_update_event);
 }
 
 const PadState& Module::GetState() const {
