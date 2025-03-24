@@ -34,6 +34,7 @@ std::unique_ptr<Frontend::GraphicsContext> EmuWindow_VK::CreateSharedContext() c
 
 #include "video_core/renderer_base.h"
 #include "video_core/video_core.h"
+#include "video_core/gpu.h"
 #include "common/settings.h"
 void EmuWindow_VK::OrientationChanged(bool portrait, CA::MetalLayer* surface) {
     is_portrait = portrait;
@@ -56,7 +57,7 @@ void EmuWindow_VK::TryPresenting() {
         }
     }
 
-    if (VideoCore::g_renderer) {
-        VideoCore::g_renderer->TryPresent(0);
-    }
+//    if (Core::System::GetInstance().GPU().Renderer() != nullptr) {
+        Core::System::GetInstance().GPU().Renderer().TryPresent(0);
+//    }
 }
