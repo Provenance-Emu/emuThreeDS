@@ -11,6 +11,7 @@
 #include "common/common_types.h"
 
 #if defined(__ARM_NEON) || defined(__aarch64__)
+#define USE_NEON_FILTERS 0
 #include "audio_core/hle/filter_neon.h"
 #endif
 
@@ -59,7 +60,7 @@ void SourceFilters::ProcessFrame(StereoFrame16& frame) {
         return;
 
     if (simple_filter_enabled) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if USE_NEON_FILTERS
         // Use NEON-optimized implementation on ARM platforms
         SimpleFilter_ProcessFrame_NEON(frame, *this);
 #else
@@ -68,7 +69,7 @@ void SourceFilters::ProcessFrame(StereoFrame16& frame) {
     }
 
     if (biquad_filter_enabled) {
-#if defined(__ARM_NEON) || defined(__aarch64__)
+#if USE_NEON_FILTERS
         // Use NEON-optimized implementation on ARM platforms
         BiquadFilter_ProcessFrame_NEON(frame, *this);
 #else
