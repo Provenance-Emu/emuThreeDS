@@ -14,7 +14,7 @@
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
 #include "video_core/renderer_vulkan/vk_instance.h"
 #include "video_core/renderer_vulkan/vk_shader_gen.h"
-#include "video_core/shader/shader_uniforms.h"
+#include "video_core/shader/generator/shader_uniforms.h"
 #include "video_core/video_core.h"
 
 using Pica::FramebufferRegs;
@@ -26,7 +26,7 @@ using VSOutputAttributes = RasterizerRegs::VSOutputAttributes;
 
 namespace Vulkan {
 
-const std::string UniformBlockDef = Pica::Shader::BuildShaderUniformDefinitions("binding = 1,");
+const std::string UniformBlockDef = Pica::Shader::Generator::BuildShaderUniformDefinitions("binding = 1,");
 
 static std::string GetVertexInterfaceDeclaration(bool is_output, bool use_clip_planes = false) {
     std::string out;
