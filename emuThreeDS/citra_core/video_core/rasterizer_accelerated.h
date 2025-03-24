@@ -6,11 +6,12 @@
 
 #include <array>
 #include <vector>
-#include "common/vector_math.h"
+#include "common/vector_math_neon.h"
 #include "video_core/rasterizer_interface.h"
 #include "video_core/geometry_culling.h"
 #include "video_core/shader/generator/pica_fs_config.h"
 #include "video_core/shader/generator/shader_uniforms.h"
+#include "video_core/regs.h"
 
 // SIMD includes
 #if defined(ARCHITECTURE_ARM64) && defined(__ARM_NEON) || defined(__ARM_NEON__)

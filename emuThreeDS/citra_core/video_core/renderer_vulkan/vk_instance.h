@@ -136,6 +136,16 @@ public:
     bool IsExtendedDynamicStateSupported() const {
         return extended_dynamic_state;
     }
+    
+    /// Returns true when VK_KHR_dynamic_rendering is supported
+    bool IsDynamicRenderingSupported() const {
+        return dynamic_rendering;
+    }
+
+    /// Returns true when VK_KHR_push_descriptors is supported
+    bool IsPushDescriptorsSupported() const {
+        return push_descriptors;
+    }
 
     /// Returns true when VK_EXT_custom_border_color is supported
     bool IsCustomBorderColorSupported() const {
@@ -160,6 +170,11 @@ public:
     /// Returns true when VK_EXT_pipeline_creation_cache_control is supported
     bool IsPipelineCreationCacheControlSupported() const {
         return pipeline_creation_cache_control;
+    }
+    
+    /// Returns true when VK_EXT_pipeline_creation_feedback is supported
+    bool IsPipelineCreationFeedbackSupported() const {
+        return pipeline_creation_feedback;
     }
 
     /// Returns true when VK_EXT_shader_stencil_export is supported
@@ -319,10 +334,13 @@ private:
     bool timeline_semaphores{};
     bool extended_dynamic_state{};
     bool custom_border_color{};
+    bool push_descriptors{};
+    bool dynamic_rendering{};
     bool index_type_uint8{};
     bool fragment_shader_interlock{};
     bool image_format_list{};
     bool pipeline_creation_cache_control{};
+    bool pipeline_creation_feedback{};
     bool fragment_shader_barycentric{};
     bool shader_stencil_export{};
     bool external_memory_host{};

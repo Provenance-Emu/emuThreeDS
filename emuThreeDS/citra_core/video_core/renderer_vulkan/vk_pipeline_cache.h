@@ -4,14 +4,19 @@
 
 #pragma once
 
+#include <compare>
+#include <unordered_map>
 #include <bitset>
 #include <tsl/robin_map.h>
 
+#include "video_core/regs.h"
 #include "video_core/renderer_vulkan/vk_graphics_pipeline.h"
 #include "video_core/renderer_vulkan/vk_resource_pool.h"
+#include "video_core/renderer_vulkan/vk_shader_gen.h"
 #include "video_core/shader/generator/pica_fs_config.h"
 #include "video_core/shader/generator/profile.h"
 #include "video_core/shader/generator/shader_gen.h"
+#include "video_core/pica/regs_internal.h"
 
 namespace Pica {
 struct RegsInternal;
@@ -83,6 +88,9 @@ public:
     void UseFragmentShader(const Pica::RegsInternal& regs, const Pica::Shader::UserConfig& user);
 
 private:
+    
+    bool ShouldTryCompile();
+
     /// Builds the rasterizer pipeline layout
     void BuildLayout();
 
@@ -105,6 +113,7 @@ private:
     vk::UniquePipelineCache pipeline_cache;
     vk::UniquePipelineLayout pipeline_layout;
     std::size_t num_worker_threads;
+    Common::ThreadWorker shader_workers;
     Common::ThreadWorker workers;
     PipelineInfo current_info{};
     GraphicsPipeline* current_pipeline{};
@@ -117,10 +126,10 @@ private:
 
     std::array<u64, MAX_SHADER_STAGES> shader_hashes;
     std::array<Shader*, MAX_SHADER_STAGES> current_shaders;
-    std::unordered_map<Pica::Shader::Generator::PicaVSConfig, Shader*> programmable_vertex_map;
+    std::unordered_map<PicaVSConfig, Shader*> programmable_vertex_map;
     std::unordered_map<std::string, Shader> programmable_vertex_cache;
-    std::unordered_map<Pica::Shader::Generator::PicaFixedGSConfig, Shader> fixed_geometry_shaders;
-    std::unordered_map<Pica::Shader::FSConfig, Shader> fragment_shaders;
+    std::unordered_map<PicaFixedGSConfig, Shader> fixed_geometry_shaders;
+    std::unordered_map<PicaFSConfig, Shader> fragment_shaders;
     Shader trivial_vertex_shader;
 };
 

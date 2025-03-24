@@ -83,6 +83,7 @@ public:
     void Sync() override;
 
 private:
+    void ReportDriver() const;
     void ReloadPipeline();
     void CompileShaders();
     void BuildLayouts();

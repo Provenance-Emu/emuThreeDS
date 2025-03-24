@@ -17,6 +17,7 @@
 #include "video_core/rasterizer_cache/sampler_params.h"
 #include "video_core/rasterizer_cache/surface_params.h"
 #include "video_core/rasterizer_cache/texture_cube.h"
+#include "video_core/regs.h"
 
 namespace Memory {
 class MemorySystem;

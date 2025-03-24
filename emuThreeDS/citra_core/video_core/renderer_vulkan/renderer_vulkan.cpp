@@ -15,10 +15,19 @@
 #include "video_core/renderer_vulkan/vk_memory_util.h"
 #include "video_core/renderer_vulkan/vk_shader_util.h"
 
+#define USE_SPRIV_SHADERS 1
+
+#if USE_SPRIV_SHADERS
+#include "video_core/host_shaders/vulkan_present_anaglyph_frag_spv.h"
+#include "video_core/host_shaders/vulkan_present_frag_spv.h"
+#include "video_core/host_shaders/vulkan_present_interlaced_frag_spv.h"
+#include "video_core/host_shaders/vulkan_present_vert_spv.h"
+#else
 #include "video_core/host_shaders/vulkan_present_anaglyph_frag.h"
 #include "video_core/host_shaders/vulkan_present_frag.h"
 #include "video_core/host_shaders/vulkan_present_interlaced_frag.h"
 #include "video_core/host_shaders/vulkan_present_vert.h"
+#endif
 
 #include <vk_mem_alloc.h>
 
@@ -62,6 +71,7 @@ RendererVulkan::RendererVulkan(Core::System& system, Pica::PicaCore& pica_,
           memory,   pica,      system.CustomTexManager(), *this,        render_window,
           instance, scheduler, renderpass_cache,          update_queue, main_window.ImageCount()},
       present_heap{instance, scheduler.GetMasterSemaphore(), PRESENT_BINDINGS, 32} {
+    ReportDriver();
     CompileShaders();
     BuildLayouts();
     BuildPipelines();
@@ -295,10 +305,18 @@ void RendererVulkan::BuildPipelines() {
         .pVertexAttributeDescriptions = attributes.data(),
     };
 
+    // Metal doesn't support disabling primitive restart, so we enable it on Apple platforms
+#if defined(__APPLE__)
+    const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
+        .topology = vk::PrimitiveTopology::eTriangleStrip,
+        .primitiveRestartEnable = true,
+    };
+#else
     const vk::PipelineInputAssemblyStateCreateInfo input_assembly = {
         .topology = vk::PrimitiveTopology::eTriangleStrip,
         .primitiveRestartEnable = false,
     };
+#endif
 
     const vk::PipelineRasterizationStateCreateInfo raster_state = {
         .depthClampEnable = false,
@@ -1109,5 +1127,29 @@ bool RendererVulkan::TryRenderScreenshotWithHostMemory() {
 
     return true;
 }
+
+void RendererVulkan::ReportDriver() const {
+    const std::string vendor_name{instance.GetVendorName()};
+    const std::string model_name{instance.GetModelName()};
+    const std::string driver_version = GetDriverVersion(instance);
+    const std::string driver_name = fmt::format("{} {}", vendor_name, driver_version);
+
+    const std::string api_version = GetReadableVersion(instance.ApiVersion());
+
+    const std::string extensions =
+        fmt::format("{}", fmt::join(instance.GetAvailableExtensions(), ", "));
+
+    LOG_INFO(Render_Vulkan, "VK_DRIVER: {}", driver_name);
+    LOG_INFO(Render_Vulkan, "VK_DEVICE: {}", model_name);
+    LOG_INFO(Render_Vulkan, "VK_VERSION: {}", api_version);
+
+    static constexpr auto field = Common::Telemetry::FieldType::UserSystem;
+    telemetry_session.AddField(field, "GPU_Vendor", vendor_name);
+    telemetry_session.AddField(field, "GPU_Model", model_name);
+    telemetry_session.AddField(field, "GPU_Vulkan_Driver", driver_name);
+    telemetry_session.AddField(field, "GPU_Vulkan_Version", api_version);
+    telemetry_session.AddField(field, "GPU_Vulkan_Extensions", extensions);
+}
+
 
 } // namespace Vulkan

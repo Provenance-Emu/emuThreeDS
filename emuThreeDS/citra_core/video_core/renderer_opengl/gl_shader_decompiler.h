@@ -22,8 +22,8 @@ struct ProgramResult {
 
 std::string GetCommonDeclarations();
 
-std::optional<ProgramResult> DecompileProgram(const Pica::Shader::ProgramCode& program_code,
-                                              const Pica::Shader::SwizzleData& swizzle_data,
+std::optional<ProgramResult> DecompileProgram(const Pica::ProgramCode& program_code,
+                                              const Pica::SwizzleData& swizzle_data,
                                               u32 main_offset, const RegGetter& inputreg_getter,
                                               const RegGetter& outputreg_getter, bool sanitize_mul);
 

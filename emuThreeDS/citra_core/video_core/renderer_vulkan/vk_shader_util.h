@@ -10,6 +10,8 @@
 
 namespace Vulkan {
 
+enum class ShaderOptimization { Normal = 0, Debug = 1 };
+
 /**
  * @brief Creates a vulkan shader module from GLSL by converting it to SPIR-V using glslang.
  * @param code The string containing GLSL code.

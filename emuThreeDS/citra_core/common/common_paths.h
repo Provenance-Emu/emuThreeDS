@@ -13,23 +13,19 @@
 #endif
 
 // The user data dir
+#define ROOT_DIR "."
 #define USERDATA_DIR "user"
 #ifdef USER_DIR
 #define EMU_DATA_DIR USER_DIR
 #else
 #ifdef _WIN32
-#define EMU_DATA_DIR "Cytrus"
+#define EMU_DATA_DIR "Citra"
 #elif defined(__APPLE__)
-#include <TargetConditionals.h>
-#if TARGET_OS_IPHONE
-#define APPLE_EMU_DATA_DIR "Documents" DIR_SEP "Cytrus"
-#else
-#define APPLE_EMU_DATA_DIR "Library" DIR_SEP "Application Support" DIR_SEP "Cytrus"
-#endif
+#define MACOS_EMU_DATA_DIR "Library" DIR_SEP "Application Support" DIR_SEP "Citra"
 // For compatibility with XDG paths.
-#define EMU_DATA_DIR "cytrus-emu"
+#define EMU_DATA_DIR "citra-emu"
 #else
-#define EMU_DATA_DIR "cytrus-emu"
+#define EMU_DATA_DIR "citra-emu"
 #endif
 #endif
 

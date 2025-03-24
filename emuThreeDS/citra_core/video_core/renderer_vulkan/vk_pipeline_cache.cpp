@@ -594,7 +594,7 @@ void PipelineCache::UseTrivialGeometryShader() {
     shader_hashes[ProgramType::GS] = 0;
 }
 
-void PipelineCache::UseFragmentShader(const Pica::Regs& regs) {
+void PipelineCache::UseFragmentShader(const Pica::RegsInternal& regs) {
     const PicaFSConfig config{regs, instance};
 
     auto [it, new_shader] = fragment_shaders.try_emplace(config, instance);
