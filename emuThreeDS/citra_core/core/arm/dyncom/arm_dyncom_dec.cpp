@@ -450,19 +450,11 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 
 // Optimized instruction decoder using a hash-based approach for faster matching
 namespace {
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    // ARM-optimized bit extraction function to replace the BITS macro
-    inline u32 ExtractBits(u32 value, u32 start, u32 end) {
-        u32 num_bits = end - start + 1;
-        u32 mask = (1U << num_bits) - 1;
-        return (value >> start) & mask;
-    }
-#else
     // Standard bit extraction function to replace the BITS macro
     inline u32 ExtractBits(u32 value, u32 start, u32 end) {
         return ((value << ((sizeof(value) * 8 - 1) - end)) >> (sizeof(value) * 8 - end + start - 1));
     }
-#endif
+
     // Pre-computed hash table mapping instruction keys to potential instruction indices
     struct InstrLookupEntry {
         u8 num_candidates = 0; // Number of potential matches
@@ -474,18 +466,11 @@ namespace {
     bool lookup_table_initialized = false;
 
     // Extract key bits from instruction to use as a hash key
-#if defined(__ARM_NEON) || defined(__aarch64__)
-    inline u8 ExtractInstrKey(u32 instr) {
-        // Use bits 20-27 as they're the most discriminative for ARM instructions
-        // Optimized for ARM64 - simple shift and mask
-        return (instr >> 20) & 0xFF;
-    }
-#else
     inline u8 ExtractInstrKey(u32 instr) {
         // Use bits 20-27 as they're the most discriminative for ARM instructions
         return (instr >> 20) & 0xFF;
     }
-#endif
+
 
     // Initialize the lookup table at runtime
     void InitLookupTable() {
@@ -679,109 +664,3 @@ ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
 
     return ARMDecodeStatus::FAILURE;
 }
-
-#if USE_PARALLEL_DECODE
-#include <future>
-#include <thread>
-#include <vector>
-#include <functional>
-
-// Simple thread pool for parallel instruction decoding
-class ThreadPool {
-private:
-    std::vector<std::thread> workers;
-    std::vector<std::future<void>> tasks;
-    bool stop;
-    
-    // Number of hardware threads, capped at a reasonable maximum
-    const unsigned int num_threads = std::min(std::thread::hardware_concurrency(), 8u);
-    
-public:
-    ThreadPool() : stop(false) {}
-    
-    ~ThreadPool() {
-        for (auto& future : tasks) {
-            if (future.valid()) {
-                future.wait();
-            }
-        }
-        
-        stop = true;
-        
-        for (auto& worker : workers) {
-            if (worker.joinable()) {
-                worker.join();
-            }
-        }
-    }
-    
-    // Modern C++ version that doesn't use deprecated std::result_of
-    template<class F, class... Args>
-    auto enqueue(F&& f, Args&&... args) {
-        using return_type = std::invoke_result_t<std::decay_t<F>, std::decay_t<Args>...>;
-        
-        auto task = std::make_shared<std::packaged_task<return_type()>>(
-            std::bind(std::forward<F>(f), std::forward<Args>(args)...)
-        );
-        
-        std::future<return_type> res = task->get_future();
-        
-        // Add task to the queue
-        tasks.push_back(std::async(std::launch::async, [task](){ (*task)(); }));
-        
-        return res;
-    }
-};
-
-// Global thread pool for instruction decoding
-static ThreadPool decoder_thread_pool;
-
-// Modify the non-NEON implementation to use thread pool when parallel decoding is enabled
-#if !defined(__ARM_NEON) || !USE_NEON
-#undef BatchDecodeARMInstructions
-
-/**
- * Thread pool implementation for non-NEON platforms
- * This implementation distributes the decoding work across multiple threads.
- */
-int BatchDecodeARMInstructions(const u32* instrs, int* indices, int count) {
-    // For very small batches, just use sequential processing
-    if (count <= 2) {
-        int decoded_count = 0;
-        for (int i = 0; i < count; i++) {
-            int idx = -1;
-            if (DecodeARMInstruction(instrs[i], &idx) == ARMDecodeStatus::SUCCESS) {
-                indices[i] = idx;
-                decoded_count++;
-            } else {
-                indices[i] = -1;
-            }
-        }
-        return decoded_count;
-    }
-    
-    // Use thread pool for larger batches
-    std::vector<std::future<bool>> results(count);
-    
-    // Submit decoding tasks to thread pool
-    for (int i = 0; i < count; i++) {
-        results[i] = decoder_thread_pool.enqueue([&instrs, &indices, i]() {
-            int idx = -1;
-            bool success = (DecodeARMInstruction(instrs[i], &idx) == ARMDecodeStatus::SUCCESS);
-            indices[i] = success ? idx : -1;
-            return success;
-        });
-    }
-    
-    // Wait for all tasks to complete and count successful decodings
-    int decoded_count = 0;
-    for (int i = 0; i < count; i++) {
-        if (results[i].get()) {
-            decoded_count++;
-        }
-    }
-    
-    return decoded_count;
-}
-#endif // !defined(__ARM_NEON) || !USE_NEON
-#endif // USE_PARALLEL_DECODE
