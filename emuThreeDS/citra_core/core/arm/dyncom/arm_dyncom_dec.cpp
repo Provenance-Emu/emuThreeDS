@@ -5,15 +5,26 @@
 #include "core/arm/dyncom/arm_dyncom_dec.h"
 #include "core/arm/skyeye_common/armsupp.h"
 #include <array>
-#include <cstring>
-#include <unordered_map>
 #include "common/logging/log.h"
 
-#ifdef __ARM_NEON
-#include <arm_neon.h>
-#endif
-
 namespace {
+// Instruction cache - maps instruction values to decoded instruction indices
+// This significantly speeds up decoding of frequently executed instructions
+static constexpr size_t INSTR_CACHE_SIZE = 1024;
+static std::array<u32, INSTR_CACHE_SIZE> instr_cache_keys = {};
+static std::array<int, INSTR_CACHE_SIZE> instr_decode_cache = {};
+static bool cache_initialized = false;
+
+// Initialize the instruction cache
+inline void InitInstrCache() {
+    if (!cache_initialized) {
+        for (size_t i = 0; i < INSTR_CACHE_SIZE; i++) {
+            instr_cache_keys[i] = 0;
+            instr_decode_cache[i] = -1;  // -1 indicates no cached value
+        }
+        cache_initialized = true;
+    }
+}
 struct InstructionSetEncodingItem {
     const char* name;
     int attribute_value;
@@ -448,219 +459,84 @@ const InstructionSetEncodingItem arm_exclusion_code[] = {
 };
 // clang-format on
 
-// Optimized instruction decoder using a hash-based approach for faster matching
-namespace {
-    // Standard bit extraction function to replace the BITS macro
-    inline u32 ExtractBits(u32 value, u32 start, u32 end) {
-        return ((value << ((sizeof(value) * 8 - 1) - end)) >> (sizeof(value) * 8 - end + start - 1));
+ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
+    // Initialize the cache if needed
+    if (!cache_initialized) {
+        InitInstrCache();
     }
-
-    // Pre-computed hash table mapping instruction keys to potential instruction indices
-    struct InstrLookupEntry {
-        u8 num_candidates = 0; // Number of potential matches
-        u8 indices[8] = {};    // Indices into arm_instruction array (most instructions with same key < 8)
-    };
-
-    // Lookup table - initialized at first use
-    InstrLookupEntry instr_lookup_table[256] = {};
-    bool lookup_table_initialized = false;
-
-    // Extract key bits from instruction to use as a hash key
-    inline u8 ExtractInstrKey(u32 instr) {
-        // Use bits 20-27 as they're the most discriminative for ARM instructions
-        return (instr >> 20) & 0xFF;
+    
+    // Check instruction cache first - this is a major optimization for loops
+    // Use the instruction itself as the key for the cache
+    u32 cache_idx = instr % INSTR_CACHE_SIZE;
+    if (instr_cache_keys[cache_idx] == instr && instr_decode_cache[cache_idx] != -1) {
+        // Cache hit!
+        *idx = instr_decode_cache[cache_idx];
+        return ARMDecodeStatus::SUCCESS;
     }
+    
+    // Cache miss - proceed with normal decoding
+    int n = 0;
+    int base = 0;
+    int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
+    ARMDecodeStatus ret = ARMDecodeStatus::FAILURE;
 
+    for (int i = 0; i < instr_slots; i++) {
+        n = arm_instruction[i].attribute_value;
+        base = 0;
 
-    // Initialize the lookup table at runtime
-    void InitLookupTable() {
-        if (lookup_table_initialized)
-            return;
-
-        // Populate the table
-        int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
-        for (int i = 0; i < instr_slots; i++) {
-            // Skip VFP3 instructions as 3DS doesn't support them
-            if (arm_instruction[i].version == ARMVFP3)
-                continue;
-
-            // Only process instructions with at least one pattern
-            if (arm_instruction[i].attribute_value == 0)
-                continue;
-
-            // Calculate the key from the instruction pattern
-            u8 key = 0;
-            bool key_found = false;
-
-            // Extract key bits from the pattern
-            for (int j = 0; j < arm_instruction[i].attribute_value && !key_found; j++) {
-                int bit_start = arm_instruction[i].content[j*3];
-                int bit_end = arm_instruction[i].content[j*3 + 1];
-                u32 pattern_value = arm_instruction[i].content[j*3 + 2];
-
-                // Check if this pattern covers our key range (bits 20-27)
-                if (bit_start <= 27 && bit_end >= 20) {
-                    // Calculate how many bits from our key range this pattern covers
-                    int start_bit = std::max(20, bit_start);
-                    int end_bit = std::min(27, bit_end);
-                    int num_bits = end_bit - start_bit + 1;
-
-                    // Extract the relevant bits from the pattern value
-                    int shift = start_bit - bit_start;
-                    u32 mask = ((1U << num_bits) - 1) << shift;
-                    u32 extracted = (pattern_value & mask) >> shift;
-
-                    // Place these bits in the correct position in our key
-                    key |= (extracted << (start_bit - 20));
-
-                    // Mark that we've found at least some key bits
-                    key_found = true;
-                }
-            }
-
-            // If we couldn't extract a key from the patterns, use a default hash
-            if (!key_found) {
-                // Use a simple hash based on the instruction name
-                const char* name = arm_instruction[i].name;
-                key = 0;
-                while (*name) {
-                    key = (key * 31 + *name) & 0xFF;
-                    name++;
-                }
-            }
-
-            // Add to lookup table if there's room
-            if (instr_lookup_table[key].num_candidates < 8) {
-                instr_lookup_table[key].indices[instr_lookup_table[key].num_candidates++] = i;
-            }
-        }
-
-        lookup_table_initialized = true;
-    }
-
-    // Fast check for instruction match
-    inline bool CheckInstructionMatch(u32 instr, const InstructionSetEncodingItem& pattern) {
-        int n = pattern.attribute_value;
-        if (n == 0) return true;  // Empty pattern always matches
-
-        int base = 0;
+        // 3DS has no VFP3 support
+        if (arm_instruction[i].version == ARMVFP3)
+            continue;
 
         while (n) {
-            if (pattern.content[base + 1] == 31 && pattern.content[base] == 0) {
-                // Special case for clrex and other full-word matches
-                if (instr != pattern.content[base + 2]) {
-                    return false;
+            if (arm_instruction[i].content[base + 1] == 31 &&
+                arm_instruction[i].content[base] == 0) {
+                // clrex
+                if (instr != arm_instruction[i].content[base + 2]) {
+                    break;
                 }
-            } else {
-                // Normal case - check if bits match expected pattern
-                u32 start_bit = pattern.content[base];
-                u32 end_bit = pattern.content[base + 1];
-                u32 expected_value = pattern.content[base + 2];
-
-                // Extract bits using our optimized function
-                u32 extracted_bits = ExtractBits(instr, start_bit, end_bit);
-
-                if (extracted_bits != expected_value) {
-                    return false;
-                }
+            } else if (BITS(instr, arm_instruction[i].content[base],
+                            arm_instruction[i].content[base + 1]) !=
+                       arm_instruction[i].content[base + 2]) {
+                break;
             }
             base += 3;
             n--;
         }
 
-        return true;
-    }
+        // All conditions are satisfied.
+        if (n == 0)
+            ret = ARMDecodeStatus::SUCCESS;
 
-    // Fast check for exclusion match
-    inline bool CheckExclusionMatch(u32 instr, const InstructionSetEncodingItem& pattern) {
-        int n = pattern.attribute_value;
-        if (n == 0) return false;
+        if (ret == ARMDecodeStatus::SUCCESS) {
+            n = arm_exclusion_code[i].attribute_value;
+            if (n != 0) {
+                base = 0;
+                while (n) {
+                    if (BITS(instr, arm_exclusion_code[i].content[base],
+                             arm_exclusion_code[i].content[base + 1]) !=
+                        arm_exclusion_code[i].content[base + 2]) {
+                        break;
+                    }
+                    base += 3;
+                    n--;
+                }
 
-        int base = 0;
-        while (n) {
-            u32 start_bit = pattern.content[base];
-            u32 end_bit = pattern.content[base + 1];
-            u32 expected_value = pattern.content[base + 2];
-
-            // Extract bits using our optimized function
-            u32 extracted_bits = ExtractBits(instr, start_bit, end_bit);
-
-            if (extracted_bits != expected_value) {
-                return false;
-            }
-        base += 3;
-        n--;
-    }
-    
-    return true;
-}
-} // namespace
-
-ARMDecodeStatus DecodeARMInstruction(u32 instr, int* idx) {
-    // Initialize lookup table if needed
-    if (!lookup_table_initialized) {
-        InitLookupTable();
-    }
-
-    // Get the key bits from the instruction
-    u8 key = ExtractInstrKey(instr);
-
-    // Look up potential matches
-    const InstrLookupEntry& entry = instr_lookup_table[key];
-
-    // Check each candidate
-    for (int i = 0; i < entry.num_candidates; i++) {
-        int candidate_idx = entry.indices[i];
-
-        // Skip VFP3 instructions (shouldn't be in table, but double-check)
-        if (arm_instruction[candidate_idx].version == ARMVFP3)
-            continue;
-
-        // Check if instruction matches the pattern
-        if (CheckInstructionMatch(instr, arm_instruction[candidate_idx])) {
-            // Check exclusions
-            if (CheckExclusionMatch(instr, arm_exclusion_code[candidate_idx])) {
-                continue; // Exclusion matched, so this isn't the right instruction
-            }
-
-            // Found a match!
-            *idx = candidate_idx;
-            return ARMDecodeStatus::SUCCESS;
-        }
-    }
-
-    // If we got here, we need to do a full search as fallback
-    // This handles cases where our hash table might have missed something
-    int instr_slots = sizeof(arm_instruction) / sizeof(InstructionSetEncodingItem);
-
-    for (int i = 0; i < instr_slots; i++) {
-        // Skip VFP3 instructions
-        if (arm_instruction[i].version == ARMVFP3)
-            continue;
-
-        // Skip instructions we already checked via the lookup table
-        bool already_checked = false;
-        for (int j = 0; j < entry.num_candidates; j++) {
-            if (entry.indices[j] == i) {
-                already_checked = true;
-                break;
+                // All conditions are satisfied.
+                if (n == 0)
+                    ret = ARMDecodeStatus::FAILURE;
             }
         }
-        if (already_checked)
-            continue;
 
-        // Check if instruction matches the pattern
-        if (CheckInstructionMatch(instr, arm_instruction[i])) {
-            // Check exclusions
-            if (CheckExclusionMatch(instr, arm_exclusion_code[i])) {
-                continue; // Exclusion matched, so this isn't the right instruction
-            }
-
-            // Found a match!
+        if (ret == ARMDecodeStatus::SUCCESS) {
+            // Found a match! Update the cache for future lookups
+            u32 cache_idx = instr % INSTR_CACHE_SIZE;
+            instr_cache_keys[cache_idx] = instr;
+            instr_decode_cache[cache_idx] = i;
+            
             *idx = i;
-            return ARMDecodeStatus::SUCCESS;
+            return ret;
         }
     }
-
-    return ARMDecodeStatus::FAILURE;
+    return ret;
 }
