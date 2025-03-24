@@ -105,7 +105,7 @@ void AutoCpuClockAdjuster::Update() {
     
     // Try to get FPS from renderer
     try {
-//        renderer_fps = static_cast<double>(system_.Renderer().GetCurrentFPS());
+        renderer_fps = static_cast<double>(system_.GPU().Renderer().GetCurrentFPS());
     } catch (const std::exception& e) {
         renderer_fps = 0.0; // Renderer not available
     }
@@ -357,6 +357,11 @@ System::ResultStatus System::RunLoop(bool tight_loop) {
 
     Reschedule();
 
+    // Update auto CPU clock adjustment if enabled
+    if (auto_cpu_clock && auto_cpu_clock->IsEnabled()) {
+        auto_cpu_clock->Update();
+    }
+
     return status;
 }
 
@@ -538,8 +543,18 @@ System::ResultStatus System::Init(Frontend::EmuWindow& emu_window,
 
     memory = std::make_unique<Memory::MemorySystem>(*this);
 
-    timing = std::make_unique<Timing>(num_cores, Settings::values.cpu_clock_percentage.GetValue(),
-                                      movie.GetOverrideBaseTicks());
+    // Initialize timing with appropriate CPU clock percentage
+    // If cpu_clock_percentage is 0, use auto_mode_max_percentage_ as default and enable auto mode
+    s32 initial_percentage = Settings::values.cpu_clock_percentage.GetValue();
+    bool auto_mode = (initial_percentage == 0);
+    if (auto_mode) {
+        initial_percentage = AutoCpuClockAdjuster::auto_mode_max_percentage_; // Start with default and let auto adjuster handle it
+    }
+    timing = std::make_unique<Timing>(num_cores, initial_percentage, movie.GetOverrideInitTime());
+
+    // Initialize auto CPU clock adjuster
+    auto_cpu_clock = std::make_unique<AutoCpuClockAdjuster>(*this);
+    auto_cpu_clock->SetEnabled(auto_mode);
 
     kernel = std::make_unique<Kernel::KernelSystem>(
         *memory, *timing, [this] { PrepareReschedule(); }, memory_mode, num_cores, n3ds_hw_caps,

@@ -362,6 +362,7 @@ public:
     }
 
     std::unique_ptr<PerfStats> perf_stats;
+    std::unique_ptr<AutoCpuClockAdjuster> auto_cpu_clock;
     FrameLimiter frame_limiter;
 
     void SetStatus(ResultStatus new_status, const char* details = nullptr) {

@@ -12,6 +12,10 @@
 #include "core/3ds.h"
 #include "core/frontend/framebuffer_layout.h"
 
+namespace Common {
+class DynamicLibrary;
+}
+
 namespace Frontend {
 
 /// Information for the Graphics Backends signifying what type of screen pointer is in
@@ -73,14 +77,24 @@ class GraphicsContext {
 public:
     virtual ~GraphicsContext();
 
+    /// Checks whether this context uses OpenGL ES.
+    virtual bool IsGLES() {
+        return false;
+    }
+
     /// Inform the driver to swap the front/back buffers and present the current image
-    virtual void SwapBuffers(){};
+    virtual void SwapBuffers() {};
 
     /// Makes the graphics context current for the caller thread
-    virtual void MakeCurrent(){};
+    virtual void MakeCurrent() {};
 
     /// Releases (dunno if this is the "right" word) the context from the caller thread
-    virtual void DoneCurrent(){};
+    virtual void DoneCurrent() {};
+
+    /// Gets the GPU driver library (used by Android only)
+    virtual std::shared_ptr<Common::DynamicLibrary> GetDriverLibrary() {
+        return {};
+    }
 
     class Scoped {
     public:
@@ -169,12 +183,12 @@ public:
     /**
      * Save current GraphicsContext.
      */
-    virtual void SaveContext(){};
+    virtual void SaveContext() {};
 
     /**
      * Restore saved GraphicsContext.
      */
-    virtual void RestoreContext(){};
+    virtual void RestoreContext() {};
 
     /**
      * Signal that a touch pressed event has occurred (e.g. mouse click pressed)
@@ -287,6 +301,17 @@ private:
     }
 
     void CreateTouchState();
+
+    /**
+     * Check if the given x/y coordinates are within the touchpad specified by the framebuffer
+     * layout
+     * @param layout FramebufferLayout object describing the framebuffer size and screen positions
+     * @param framebuffer_x Framebuffer x-coordinate to check
+     * @param framebuffer_y Framebuffer y-coordinate to check
+     * @return True if the coordinates are within the touchpad, otherwise false
+     */
+    bool IsWithinTouchscreen(const Layout::FramebufferLayout& layout, unsigned framebuffer_x,
+                             unsigned framebuffer_y);
 
     Layout::FramebufferLayout framebuffer_layout; ///< Current framebuffer layout
 

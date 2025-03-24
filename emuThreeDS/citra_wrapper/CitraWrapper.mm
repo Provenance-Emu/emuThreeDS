@@ -127,6 +127,9 @@ static void InitializeLogging() {
     Settings::values.preload_textures.SetValue([[NSUserDefaults standardUserDefaults] boolForKey:@"preload_textures"]);
     Settings::values.async_custom_loading.SetValue([[NSUserDefaults standardUserDefaults] boolForKey:@"async_custom_loading"]);
     
+    // TODO: If we ever add opengl need to update this.
+    Settings::values.graphics_api = Settings::GraphicsAPI::Vulkan;
+    
     for (const auto& service_module : Service::service_module_map) {
         Settings::values.lle_modules.emplace(service_module.name, ![[NSUserDefaults standardUserDefaults] boolForKey:@"use_hle"]);
     }

@@ -475,6 +475,7 @@ bool Instance::CreateDevice() {
         add_extension(VK_KHR_FRAGMENT_SHADER_BARYCENTRIC_EXTENSION_NAME, is_moltenvk,
                       "the PerVertexKHR attribute is not supported by MoltenVK");
 
+    // Search queue families for graphics and present queues
     const auto family_properties = physical_device.getQueueFamilyProperties();
     if (family_properties.empty()) {
         LOG_CRITICAL(Render_Vulkan, "Physical device reported no queues.");
@@ -483,6 +484,8 @@ bool Instance::CreateDevice() {
 
     bool graphics_queue_found = false;
     for (std::size_t i = 0; i < family_properties.size(); i++) {
+        // Check if queue supports graphics
+
         const u32 index = static_cast<u32>(i);
         if (family_properties[i].queueFlags & vk::QueueFlagBits::eGraphics) {
             queue_family_index = index;
@@ -503,6 +506,39 @@ bool Instance::CreateDevice() {
         .pQueuePriorities = queue_priorities.data(),
     };
 
+    // TODO: @JoeMatt test me
+#if defined(__APPLE__) && defined(__aarch64__)
+    // For iOS ARM64, we create a more streamlined device chain with only the features
+    // that are well-supported by MoltenVK
+    vk::StructureChain device_chain = {
+        vk::DeviceCreateInfo{
+            .queueCreateInfoCount = 1u,
+            .pQueueCreateInfos = &queue_info,
+            .enabledExtensionCount = static_cast<u32>(enabled_extensions.size()),
+            .ppEnabledExtensionNames = enabled_extensions.data(),
+        },
+        vk::PhysicalDeviceFeatures2{
+            .features{
+                .robustBufferAccess = features.robustBufferAccess,
+                // Geometry shaders may not be well supported on all iOS devices
+                .geometryShader = features.geometryShader,
+                // These features are generally well-supported on Metal
+                .depthClamp = features.depthClamp,
+                .largePoints = features.largePoints,
+                .samplerAnisotropy = features.samplerAnisotropy,
+                // Carefully select features that work well on iOS
+                .shaderClipDistance = features.shaderClipDistance,
+            },
+        },
+        vk::PhysicalDevicePortabilitySubsetFeaturesKHR{},
+        vk::PhysicalDeviceTimelineSemaphoreFeaturesKHR{},
+        vk::PhysicalDeviceDynamicRenderingFeaturesKHR{},
+        vk::PhysicalDeviceCustomBorderColorFeaturesEXT{},
+        vk::PhysicalDeviceIndexTypeUint8FeaturesEXT{},
+        vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT{},
+        vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR{},
+    };
+#else
     vk::StructureChain device_chain = {
         vk::DeviceCreateInfo{
             .queueCreateInfoCount = 1u,
@@ -531,6 +567,7 @@ bool Instance::CreateDevice() {
         vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT{},
         vk::PhysicalDeviceFragmentShaderBarycentricFeaturesKHR{},
     };
+#endif
 
 #define PROP_GET(structName, prop, property) property = properties_chain.get<structName>().prop;
 
@@ -574,12 +611,19 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceFragmentShaderInterlockFeaturesEXT>();
     }
 
+    // TODO: @JoeMatt test me
+#if defined(__APPLE__) && defined(__aarch64__)
+    // On iOS ARM64, we don't use extended dynamic state features as they may not be well-supported
+    extended_dynamic_state = false;
+#else
     if (has_extended_dynamic_state) {
         FEAT_SET(vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT, extendedDynamicState,
                  extended_dynamic_state)
     } else {
         device_chain.unlink<vk::PhysicalDeviceExtendedDynamicStateFeaturesEXT>();
     }
+#endif
+
 
     if (has_custom_border_color) {
         FEAT_SET(vk::PhysicalDeviceCustomBorderColorFeaturesEXT, customBorderColors,
@@ -590,12 +634,18 @@ bool Instance::CreateDevice() {
         device_chain.unlink<vk::PhysicalDeviceCustomBorderColorFeaturesEXT>();
     }
 
+    // TODO: @JoeMatt test me
+#if defined(__APPLE__) && defined(__aarch64__)
+    // On iOS ARM64, we don't use pipeline creation cache control as it's not part of our streamlined feature set
+    pipeline_creation_cache_control = false;
+#else
     if (has_pipeline_creation_cache_control) {
         FEAT_SET(vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT,
                  pipelineCreationCacheControl, pipeline_creation_cache_control)
     } else {
         device_chain.unlink<vk::PhysicalDevicePipelineCreationCacheControlFeaturesEXT>();
     }
+#endif
 
     if (external_memory_host) {
         PROP_GET(vk::PhysicalDeviceExternalMemoryHostPropertiesEXT, minImportedHostPointerAlignment,
@@ -634,13 +684,23 @@ void Instance::CreateAllocator() {
         .vkGetDeviceProcAddr = VULKAN_HPP_DEFAULT_DISPATCHER.vkGetDeviceProcAddr,
     };
 
-    const VmaAllocatorCreateInfo allocator_info = {
+    VmaAllocatorCreateInfo allocator_info = {
         .physicalDevice = physical_device,
         .device = *device,
         .pVulkanFunctions = &functions,
         .instance = *instance,
         .vulkanApiVersion = TargetVulkanApiVersion,
     };
+    
+    // TODO: @JoeMatt test me
+#if defined(__APPLE__) && defined(__aarch64__)
+    // iOS ARM64 optimization: Use dedicated allocations for better performance on mobile GPUs
+    // and reduce memory fragmentation which is critical on memory-constrained devices
+    allocator_info.flags |= VMA_ALLOCATOR_CREATE_KHR_DEDICATED_ALLOCATION_BIT;
+    
+    // Prefer smaller memory block sizes on iOS to reduce memory pressure
+    allocator_info.preferredLargeHeapBlockSize = 128 * 1024 * 1024; // 128MB instead of default 256MB
+#endif
 
     const VkResult result = vmaCreateAllocator(&allocator_info, &allocator);
     if (result != VK_SUCCESS) {
