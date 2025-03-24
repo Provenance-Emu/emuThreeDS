@@ -13,6 +13,7 @@
 #include "common/assert.h"
 #include "common/common_types.h"
 #include "video_core/renderer_opengl/gl_shader_decompiler.h"
+#include "video_core/pica/shader_setup.h"
 
 namespace OpenGL::ShaderDecompiler {
 
@@ -22,7 +23,7 @@ using nihstro::RegisterType;
 using nihstro::SourceRegister;
 using nihstro::SwizzlePattern;
 
-constexpr u32 PROGRAM_END = Pica::Shader::MAX_PROGRAM_CODE_LENGTH;
+constexpr u32 PROGRAM_END = Pica::MAX_PROGRAM_CODE_LENGTH;
 
 class DecompileFail : public std::runtime_error {
 public:
@@ -57,7 +58,7 @@ struct Subroutine {
 /// Analyzes shader code and produces a set of subroutines.
 class ControlFlowAnalyzer {
 public:
-    ControlFlowAnalyzer(const Pica::Shader::ProgramCode& program_code, u32 main_offset)
+    ControlFlowAnalyzer(const Pica::ProgramCode& program_code, u32 main_offset)
         : program_code(program_code) {
 
         // Recursively finds all subroutines.
@@ -71,7 +72,7 @@ public:
     }
 
 private:
-    const Pica::Shader::ProgramCode& program_code;
+    const Pica::ProgramCode& program_code;
     std::set<Subroutine> subroutines;
     std::map<std::pair<u32, u32>, ExitMethod> exit_method_map;
 
@@ -265,8 +266,8 @@ constexpr auto GetSelectorSrc3 = GetSelectorSrc<&SwizzlePattern::GetSelectorSrc3
 class GLSLGenerator {
 public:
     GLSLGenerator(const std::set<Subroutine>& subroutines,
-                  const Pica::Shader::ProgramCode& program_code,
-                  const Pica::Shader::SwizzleData& swizzle_data, u32 main_offset,
+                  const Pica::ProgramCode& program_code,
+                  const Pica::SwizzleData& swizzle_data, u32 main_offset,
                   const RegGetter& inputreg_getter, const RegGetter& outputreg_getter,
                   bool sanitize_mul)
         : subroutines(subroutines), program_code(program_code), swizzle_data(swizzle_data),
@@ -344,7 +345,7 @@ private:
     }
 
     /// Generates code representing a destination register.
-    std::string GetDestRegister(const DestRegister& dest_reg) const {
+    std::string GetDestRegister(const nihstro::DestRegister& dest_reg) const {
         const u32 index = static_cast<u32>(dest_reg.GetIndex());
 
         switch (dest_reg.GetRegisterType()) {
@@ -910,8 +911,8 @@ private:
 
 private:
     const std::set<Subroutine>& subroutines;
-    const Pica::Shader::ProgramCode& program_code;
-    const Pica::Shader::SwizzleData& swizzle_data;
+    const Pica::ProgramCode& program_code;
+    const Pica::SwizzleData& swizzle_data;
     const u32 main_offset;
     const RegGetter& inputreg_getter;
     const RegGetter& outputreg_getter;
@@ -933,8 +934,8 @@ bool exec_shader();
 )";
 }
 
-std::optional<ProgramResult> DecompileProgram(const Pica::Shader::ProgramCode& program_code,
-                                              const Pica::Shader::SwizzleData& swizzle_data,
+std::optional<ProgramResult> DecompileProgram(const Pica::ProgramCode& program_code,
+                                              const Pica::SwizzleData& swizzle_data,
                                               u32 main_offset, const RegGetter& inputreg_getter,
                                               const RegGetter& outputreg_getter,
                                               bool sanitize_mul) {

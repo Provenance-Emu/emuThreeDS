@@ -11,6 +11,7 @@
 #include <string>
 #include "common/common_types.h"
 #include "video_core/shader/shader.h"
+#include "video_core/pica/shader_setup.h"
 
 namespace OpenGL::ShaderDecompiler {
 
