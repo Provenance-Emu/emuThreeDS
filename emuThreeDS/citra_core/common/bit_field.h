@@ -107,6 +107,16 @@
  * TODO(neobrain): Confirm that this is a proper fix and not just masking
  * symptoms.
  */
+// C++20 forbids specializing std::make_unsigned for non-integer/enum types (e.g. nihstro
+// wrapper structs like SourceRegister/DestRegister/OpCode). Use a lazy helper that falls
+// back to uint32_t for those struct-wrapped types so BitField still compiles under C++20.
+template<typename T, typename = void>
+struct bit_field_unsigned_storage { using type = uint32_t; };
+template<typename T>
+struct bit_field_unsigned_storage<T, std::enable_if_t<std::is_integral_v<T> || std::is_enum_v<T>>> {
+    using type = std::make_unsigned_t<T>;
+};
+
 #pragma pack(1)
 template <std::size_t Position, std::size_t Bits, typename T, typename EndianTag = LETag>
 struct BitField {
@@ -118,8 +128,9 @@ private:
     using UnderlyingType = typename std::conditional_t<std::is_enum_v<T>, std::underlying_type<T>,
                                                        std::enable_if<true, T>>::type;
 
-    // We store the value as the unsigned type to avoid undefined behaviour on value shifting
-    using StorageType = std::make_unsigned_t<UnderlyingType>;
+    // We store the value as the unsigned type to avoid undefined behaviour on value shifting.
+    // Uses bit_field_unsigned_storage to handle struct-wrapped types (C++20 compatibility).
+    using StorageType = typename bit_field_unsigned_storage<UnderlyingType>::type;
 
     using StorageTypeWithEndian = typename AddEndian<StorageType, EndianTag>::type;
 

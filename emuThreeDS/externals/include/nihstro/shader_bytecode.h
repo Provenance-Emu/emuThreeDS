@@ -477,6 +477,7 @@ private:
 
 } // namespace nihstro
 
+#if __cplusplus < 202002L
 namespace std {
     template<>
     struct make_unsigned<nihstro::SourceRegister> {
@@ -493,6 +494,7 @@ namespace std {
         using type = nihstro::OpCode;
     };
 }
+#endif
 
 namespace nihstro {
 
