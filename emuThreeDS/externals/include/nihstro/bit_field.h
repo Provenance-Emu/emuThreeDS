@@ -28,6 +28,8 @@
 
 #pragma once
 
+#include <cstddef>
+#include <cstdint>
 #include <limits>
 #include <type_traits>
 
@@ -36,6 +38,33 @@
 #define __forceinline inline __attribute__((always_inline))
 #endif
 #endif
+
+// C++20 restricts std::make_unsigned to integral and enum types only.
+// BitField is sometimes instantiated with struct types (e.g. nihstro::OpCode,
+// SourceRegister, DestRegister) whose StorageType is the struct itself.
+// This helper returns the unsigned integer of matching size for non-integral,
+// non-enum types, and delegates to std::make_unsigned for integral/enum types.
+namespace nihstro_detail {
+
+template<std::size_t N> struct uint_for_size { typedef uint32_t type; };
+template<> struct uint_for_size<1> { typedef uint8_t  type; };
+template<> struct uint_for_size<2> { typedef uint16_t type; };
+template<> struct uint_for_size<4> { typedef uint32_t type; };
+template<> struct uint_for_size<8> { typedef uint64_t type; };
+
+template<typename T, typename = void>
+struct make_unsigned_storage {
+    // Struct/class fallback: use an unsigned integer of the same size.
+    typedef typename uint_for_size<sizeof(T)>::type type;
+};
+
+template<typename T>
+struct make_unsigned_storage<T,
+    typename std::enable_if<std::is_integral<T>::value || std::is_enum<T>::value>::type> {
+    typedef typename std::make_unsigned<T>::type type;
+};
+
+} // namespace nihstro_detail
 
 namespace nihstro {
 
@@ -186,8 +215,10 @@ private:
         std::underlying_type<T>,
         std::enable_if < true, T >> ::type::type StorageType;
 
-    // Unsigned version of StorageType
-    typedef typename std::make_unsigned<StorageType>::type StorageTypeU;
+    // Unsigned version of StorageType — uses nihstro_detail::make_unsigned_storage
+    // so that struct-typed StorageType (e.g. OpCode) maps to a same-sized uint
+    // instead of triggering the C++20 std::make_unsigned restriction.
+    typedef typename nihstro_detail::make_unsigned_storage<StorageType>::type StorageTypeU;
 
     __forceinline StorageType GetMask() const
     {
